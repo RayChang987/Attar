@@ -21,13 +21,14 @@ import numpy as np
 
 from .bookshelf import _lines, read_blocks
 from .distill import (FIXED, MACRO, PLACED, TERMINAL, M_BLOCK, SCHEMA, IO_DIR, source_ref, save_arrays,
-                      save_names_manifest)
+                      save_names_manifest, D_IN, D_OUT, D_INOUT, D_UNKNOWN, pin_dir_counts)
 
 
 def _write(out_dir, design, fmt, sources, dbu, units, names, size, flags, xy, p_cell, p_off, nets, io_dir,
-           die=None, facts=None, extra_arrays=None, extra=None):
+           die=None, facts=None, extra_arrays=None, extra=None, p_dir=None):
     """Write the IR. Cells are lower-left based; IO pins are the zero-size cells flagged TERMINAL (pins with p_off
-    None). nets: [(name, [pin index, ...])]. Every non-IO cell is its own master with its own master pins."""
+    None). nets: [(name, [pin index, ...])]. Every non-IO cell is its own master with its own master pins.
+    p_dir: per pin (as p_cell) a direction seen from the net (distill.D_*); none, or all both-ways: not stated."""
     N = len(names)
     size = np.asarray(size, np.int64).reshape(-1, 2); flags = np.asarray(flags, np.uint8); xy = np.asarray(xy, np.int64).reshape(-1, 2)
     term = (flags & TERMINAL) != 0
@@ -48,11 +49,16 @@ def _write(out_dir, design, fmt, sources, dbu, units, names, size, flags, xy, p_
     m_pin_box = np.concatenate([off, off], 1).astype(np.int32)
     p_mpin = np.full(len(pc), -1, np.int64); p_mpin[mp] = np.arange(len(mp))
     io_idx = np.nonzero(term)[0]
+    pd = np.full(len(pc), D_UNKNOWN, np.uint8)
+    has_dir = p_dir is not None and any(v in (D_IN, D_OUT) for v in p_dir)
+    if has_dir:
+        pd = np.array([p_dir[k] for k in order], np.uint8)
+        facts = dict(facts or {}, pin_direction=fmt)
     core = {
         'm_size': size[cells].astype(np.int32), 'm_class': np.full(M, M_BLOCK, np.uint8),
         'm_pin_ptr': m_pin_ptr.astype(np.int32), 'm_pin_box': m_pin_box, 'm_pin_use': np.zeros(len(mp), np.uint8),
         'c_master': c_master, 'c_xy': xy.astype(np.int32), 'c_orient': np.zeros(N, np.uint8), 'c_flags': flags,
-        'p_cell': pc.astype(np.int32), 'p_mpin': p_mpin.astype(np.int32),
+        'p_cell': pc.astype(np.int32), 'p_mpin': p_mpin.astype(np.int32), 'p_dir': pd, 'm_pin_dir': pd[mp],
         'n_ptr': n_ptr, 'n_flags': np.zeros(len(nets), np.uint8), 'n_weight': np.ones(len(nets), np.float32),
         'c_die': np.zeros(N, np.uint8), 'io_cell': io_idx.astype(np.int32), 'io_dir': np.asarray(io_dir, np.uint8),
     }
@@ -71,6 +77,7 @@ def _write(out_dir, design, fmt, sources, dbu, units, names, size, flags, xy, p_
         'counts': {'cells': int(len(cells)), 'movable': int(movable.sum()), 'macros': int(((flags & MACRO) != 0).sum()),
                    'physical_only': 0, 'terminals': int(len(io_idx)), 'nets': len(nets), 'nets_2plus': int((deg >= 2).sum()),
                    'pins': int(len(pc)), 'rows': 0, 'masters': int(M)},
+        'pin_direction': pin_dir_counts(pd, n_ptr),
     }
     manifest.update(extra or {})
     save_names_manifest(out_dir, {'design': design, 'cells': list(names), 'nets': [n for n, _ in nets],
@@ -124,7 +131,7 @@ def distill_yal(path, out_dir, extra=None):
     if len(parents) != 1:
         raise ValueError('%s: expected one PARENT module, found %d' % (path, len(parents)))
     top = mods[parents[0]]
-    names, size, flags, xy, p_cell, p_off, io_dir = [], [], [], [], [], [], []
+    names, size, flags, xy, p_cell, p_off, io_dir, p_dir = [], [], [], [], [], [], [], []
     net_pins, net_order = {}, []
     rectilinear = 0
 
@@ -144,6 +151,7 @@ def distill_yal(path, out_dir, extra=None):
             if kind == 'PWR' or sig in power:
                 continue
             p_cell.append(i); p_off.append((px - lo[0], py - lo[1])); connect(sig, len(p_cell) - 1)
+            p_dir.append({'I': D_IN, 'O': D_OUT}.get(kind, D_INOUT))
     for pname, kind, px, py in top['pins']:                  # pads: the parent's IO list, named by their signal
         if kind == 'PWR':
             continue
@@ -151,6 +159,7 @@ def distill_yal(path, out_dir, extra=None):
         names.append(pname); size.append((0, 0)); flags.append(TERMINAL | FIXED | PLACED); xy.append((px, py))
         io_dir.append({'PI': IO_DIR['INPUT'], 'PO': IO_DIR['OUTPUT']}.get(kind, IO_DIR['INOUT']))
         p_cell.append(i); p_off.append(None); connect(pname, len(p_cell) - 1)
+        p_dir.append({'PI': D_OUT, 'PO': D_IN}.get(kind, D_INOUT))         # a primary input drives its net
     lo, hi = top['poly'].min(0), top['poly'].max(0)
     nets = [(n, net_pins[n]) for n in net_order]
     sizes = np.round(np.array(size)).astype(np.int64)
@@ -161,7 +170,7 @@ def distill_yal(path, out_dir, extra=None):
                facts={'netlist': 'yal', 'cell_geometry': 'yal' if not rectilinear else 'yal (rectilinear modules as bounding boxes)',
                       'pin_offsets': 'yal', 'floorplan.die': 'yal(parent outline)', 'floorplan.io': 'yal(parent iolist)'},
                extra=dict({'macros_unplaced': len(top['network']), 'rectilinear_modules': rectilinear,
-                           'distill_seconds': round(time.time() - t0, 2)}, **(extra or {})))
+                           'distill_seconds': round(time.time() - t0, 2)}, **(extra or {})), p_dir=p_dir)
     return m
 
 

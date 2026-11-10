@@ -16,7 +16,8 @@ import time
 import numpy as np
 
 from .deffile import ORIENT_ID
-from .distill import FIXED, MACRO, PLACED, TERMINAL, PHYSICAL, M_CORE, M_BLOCK, SCHEMA, save_arrays, save_names_manifest, source_ref
+from .distill import FIXED, MACRO, PLACED, TERMINAL, PHYSICAL, M_CORE, M_BLOCK, SCHEMA, save_arrays, save_names_manifest, source_ref, \
+    D_IN, D_OUT, D_INOUT, D_UNKNOWN, IO_DIR, pin_dir_counts
 
 DBU = 2  # half Bookshelf units (the default; see _pick_dbu)
 DBUS = (2, 10, 100, 1000)
@@ -229,11 +230,23 @@ def distill_bookshelf(aux, out_dir, snapshots=None, extra=None):
            max(bx[2].max(initial=0), (c_xy[fx, 0] + fw).max(initial=0)), max(bx[3].max(initial=0), (c_xy[fx, 1] + fh).max(initial=0))]
 
     io_idx = np.nonzero(io)[0]
-    io_dir = np.full(len(io_idx), 2, np.uint8)
+    # pin directions (I sink, O driver, B both, from the node's side; a terminal stands for the outside world)
+    p_dir = np.array([{'I': D_IN, 'O': D_OUT}.get(v, D_INOUT) for v in pdir], np.uint8)
+    has_dir = bool(len(p_dir)) and bool((p_dir != D_INOUT).any())        # all 'B': the file states no directions
+    if not has_dir:
+        p_dir[:] = D_UNKNOWN
+    io_dir = np.full(len(io_idx), IO_DIR['INOUT'], np.uint8)          # a port: INPUT when it only drives its nets
+    if has_dir and len(io_idx):
+        tp = np.nonzero(io[pnode])[0]
+        pos = {c: k for k, c in enumerate(io_idx.tolist())}
+        drives = np.zeros(len(io_idx), np.int64); sinks = np.zeros(len(io_idx), np.int64)
+        np.add.at(drives, [pos[c] for c in pnode[tp].tolist()], (p_dir[tp] == D_OUT).astype(np.int64))
+        np.add.at(sinks, [pos[c] for c in pnode[tp].tolist()], (p_dir[tp] == D_IN).astype(np.int64))
+        io_dir[(drives > 0) & (sinks == 0)] = IO_DIR['INPUT']; io_dir[(sinks > 0) & (drives == 0)] = IO_DIR['OUTPUT']
     core = {
         'm_size': np.stack([q(w), q(h)], 1).astype(np.int32), 'm_class': np.where(macro, M_BLOCK, M_CORE).astype(np.uint8),
         'm_pin_ptr': m_pin_ptr.astype(np.int32), 'm_pin_box': m_pin_box,
-        'm_pin_use': np.zeros(len(pnode), np.uint8),
+        'm_pin_use': np.zeros(len(pnode), np.uint8), 'm_pin_dir': p_dir[order], 'p_dir': p_dir,
         'c_master': np.arange(N, dtype=np.int32), 'c_xy': c_xy, 'c_orient': o, 'c_flags': flags,
         'p_cell': pnode.astype(np.int32), 'p_mpin': p_mpin.astype(np.int32),
         'n_ptr': ptr, 'n_flags': np.zeros(len(net_names), np.uint8), 'n_weight': wts,
@@ -261,7 +274,8 @@ def distill_bookshelf(aux, out_dir, snapshots=None, extra=None):
         'facts': dict([('netlist', 'bookshelf'),
                        ('cell_geometry', 'bookshelf' if not soft else 'bookshelf (soft blocks at their .nodes shape)'),
                        ('pin_offsets', 'bookshelf'), ('floorplan.die', 'bookshelf(rows+fixed)'), ('floorplan.io', 'bookshelf'),
-                       ('rows', 'bookshelf')] + ([('floorplan.macros', 'bookshelf')] if not movable_macros else [])),
+                       ('rows', 'bookshelf')] + ([('floorplan.macros', 'bookshelf')] if not movable_macros else [])
+                      + ([('pin_direction', 'bookshelf')] if has_dir else [])),
         'macros_unplaced': movable_macros,
         'not_stored': {'soft_blocks': soft} if soft else {},
         'fidelity': 'F3', 'reference_placement': None,
@@ -271,6 +285,7 @@ def distill_bookshelf(aux, out_dir, snapshots=None, extra=None):
                    'physical_only': int(((flags & PHYSICAL) > 0).sum()), 'terminals': int(len(io_idx)),
                    'fixed': int(fixed.sum()), 'nets': len(net_names), 'nets_2plus': int((deg >= 2).sum()),
                    'pins': int(len(pnode)), 'rows': len(rows), 'masters': int(N)},
+        'pin_direction': pin_dir_counts(p_dir, ptr),
         'distill_seconds': round(time.time() - t0, 2),
     }
     if extra:

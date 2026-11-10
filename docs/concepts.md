@@ -12,6 +12,7 @@ A design is a set of *facts*. Each fact has a *provenance*: the source it came f
 | `netlist` | cells, nets, pins, net weights |
 | `cell_geometry` | cell sizes and flags (movable, fixed, macro) |
 | `pin_offsets` | pin locations relative to their cell |
+| `pin_direction` | which pins drive their net and which are driven (LEF `DIRECTION`, Bookshelf `I`/`O`) |
 | `floorplan.die` | the die outline (an array: 3D designs have several dies) |
 | `floorplan.io` | IO pin locations on the die boundary |
 | `floorplan.macros` | macro and fixed-cell locations |
@@ -91,6 +92,7 @@ A mismatch is refused with what differs; `force=True` writes anyway, with a warn
 | `flags` | (N,) | FIXED, MACRO, PLACED, TERMINAL, PHYSICAL, ASIDE bits |
 | `movable`, `placed` | (N,) | masks |
 | `p_cell`, `p_net`, `pin_off` | (P,), (P,), (P, 2) | pins: owner cell, net, offset from the cell center |
+| `pin_dir` | (P,) | seen from the net: 0 sink, 1 driver, 2 both, 3 not stated (an INPUT port drives its net) |
 | `n_ptr`, `n_weight` | (E+1,), (E,) | nets as CSR over pins |
 | `die_box`, `core_box` | (D, 4) | per die |
 | `row_xy`, `row_h`, `row_site_w`, `row_sites`, `row_orient` | (R, ...) | rows |

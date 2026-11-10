@@ -123,6 +123,7 @@ v0.1 的成功不是「環節都有」，而是「wirelength 的快迴圈結論�
 | `stack` | 3D：各 die 的製程、HBT 參數 | 題目 |
 | `cell_library` | cell 是真實 cell library（LEF master）的實例，結果可印回 DEF | 題目 |
 | `tracks` | 各層 routing track 與每個 macro pin 的 layer（macro pin 對齊 track） | 題目 |
+| `pin_direction` | 每個 pin 是 net 的 driver 還是 sink（LEF `DIRECTION`、Bookshelf `I`/`O`）；timing 的前提 | 題目 |
 | `placement` | 所有可移動 cell 的位置與方向 | 解答狀態 |
 
 **能力（capabilities）**：每個演算法宣告它需要哪些事實，Design 由此推出 `capabilities()`。缺事實時，`d.missing("global_route")` 會列出缺哪幾項，不只是報錯。
@@ -135,7 +136,7 @@ v0.1 的成功不是「環節都有」，而是「wirelength 的快迴圈結論�
 | global placement | `netlist`、`cell_geometry`、`pin_offsets`、`floorplan.die`、`floorplan.io`、`floorplan.macros` |
 | legalization、detailed placement | 再加 `rows`、`placement` |
 | global routing | 再加 `routing`、`placement` |
-| STA、sizing | `netlist`、`timing`（有 `placement` 時才估線的 RC） |
+| STA、sizing | `netlist`、`pin_direction`、`timing`（有 `placement` 時才估線的 RC） |
 | export（印回 DEF） | `netlist`、`cell_library` |
 
 **題目與解答狀態分開**：題目（netlist、幾何、floorplan、tech）基本不變；解答狀態（位置、方向、die 分配，之後還有 route 與 sizing 結果）由演算法改寫。解答狀態可以存成具名 snapshot，例如蒸餾時保留的來源 placement 就是一個叫 `reference` 的 snapshot。會改 netlist 的操作（buffering、sizing）同時動到題目，需要另外的交易機制，列為後續工作。

@@ -17,8 +17,13 @@ from . import st
 from .deffile import ORIENT_ID, netlist_fingerprint, read_def
 from .lef import read_lef
 
-SCHEMA = 'attar-ir/0.5'
+SCHEMA = 'attar-ir/0.6'
 IO_DIR = {'INPUT': 0, 'OUTPUT': 1, 'INOUT': 2, 'FEEDTHRU': 3}
+# pin direction as seen from the net (p_dir, m_pin_dir): a sink, a driver, both, or not stated by the source. An IO
+# terminal stands for the outside world, so an INPUT port drives its net (D_OUT), as Bookshelf terminals do.
+D_IN, D_OUT, D_INOUT, D_UNKNOWN = 0, 1, 2, 3
+LEF_DIR = {'INPUT': D_IN, 'OUTPUT': D_OUT, 'INOUT': D_INOUT, 'FEEDTHRU': D_INOUT}
+PORT_DIR = {'INPUT': D_OUT, 'OUTPUT': D_IN, 'INOUT': D_INOUT, 'FEEDTHRU': D_INOUT}
 
 # c_flags bits
 FIXED, MACRO, PLACED, TERMINAL, PHYSICAL, ASIDE = 1, 2, 4, 8, 16, 32
@@ -37,6 +42,21 @@ def _sha256(path):
         for b in iter(lambda: f.read(1 << 20), b''):
             h.update(b)
     return h.hexdigest()
+
+
+def pin_dir_counts(p_dir, n_ptr):
+    """Manifest counts for a pin direction array: pins per direction, and nets by their number of drivers."""
+    p_dir = np.asarray(p_dir, np.uint8); n_ptr = np.asarray(n_ptr, np.int64)
+    if not (p_dir != D_UNKNOWN).any():                # the source states no directions: nothing to count per net
+        return {'unknown': int(len(p_dir))}
+    drv = np.zeros(len(n_ptr) - 1, np.int64)
+    if len(p_dir):
+        np.add.at(drv, np.repeat(np.arange(len(n_ptr) - 1), np.diff(n_ptr)), (p_dir == D_OUT).astype(np.int64))
+    deg = np.diff(n_ptr)
+    return {'sinks': int((p_dir == D_IN).sum()), 'drivers': int((p_dir == D_OUT).sum()),
+            'inout': int((p_dir == D_INOUT).sum()), 'unknown': int((p_dir == D_UNKNOWN).sum()),
+            'nets_one_driver': int(((drv == 1) & (deg >= 2)).sum()), 'nets_no_driver': int(((drv == 0) & (deg >= 2)).sum()),
+            'nets_multi_driver': int(((drv > 1) & (deg >= 2)).sum())}
 
 
 def save_arrays(out_dir, core, tp=None):
@@ -80,7 +100,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     # routing layers (the tech profile's order); each master pin's layer is an index into them (-1: not a routing layer)
     layers = [l for l in tech['layers'] if 'pitch' in l]
     lid = {l['name']: i for i, l in enumerate(layers)}
-    m_pin_ptr = [0]; m_pin_box = []; m_pin_use = []; m_pin_layer = []; mpin_names = []; mpin_id = {}
+    m_pin_ptr = [0]; m_pin_box = []; m_pin_use = []; m_pin_layer = []; m_pin_dir = []; mpin_names = []; mpin_id = {}
     for m in used:
         names = sorted(macros[m].pins)
         for p in names:
@@ -88,6 +108,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
             mpin_id[(m, p)] = len(m_pin_box)
             m_pin_box.append([q(v) for v in box]); m_pin_use.append(_USE.get(use, U_SIGNAL))
             m_pin_layer.append(lid.get(macros[m].pin_layer.get(p), -1))
+            m_pin_dir.append(LEF_DIR.get(macros[m].pin_dir.get(p), D_UNKNOWN))
         m_pin_ptr.append(len(m_pin_box)); mpin_names.append(names)
 
     # cells: components, then IO pins as zero-size fixed terminals
@@ -118,7 +139,8 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
         c_flags[i] = TERMINAL | FIXED | (PLACED if status != 'UNPLACED' else 0)
 
     # nets (CSR over pins, ordered by net)
-    p_cell = []; p_mpin = []; n_ptr = [0]; n_flags = []; net_names = []
+    p_cell = []; p_mpin = []; p_dir = []; n_ptr = [0]; n_flags = []; net_names = []
+    port_dir = {p[0]: PORT_DIR.get(p[5], D_INOUT) for p in pins}
     skipped = 0; has_conn = np.zeros(N, bool)
     for name, conns, use in d['nets']:
         if use in ('POWER', 'GROUND'):
@@ -127,12 +149,12 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
             if comp == 'PIN':
                 i = tid.get(pin)
                 if i is None: skipped += 1; continue
-                p_cell.append(i); p_mpin.append(-1)
+                p_cell.append(i); p_mpin.append(-1); p_dir.append(port_dir[pin])
             else:
                 i = cid.get(comp)
                 k = mpin_id.get((comps[i][1], pin)) if i is not None else None
                 if k is None: skipped += 1; continue
-                p_cell.append(i); p_mpin.append(k)
+                p_cell.append(i); p_mpin.append(k); p_dir.append(m_pin_dir[k])
             has_conn[i] = True
         n_ptr.append(len(p_cell)); net_names.append(name)
         n_flags.append(N_CLOCK if use == 'CLOCK' else 0)
@@ -169,7 +191,8 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     }
     # routing tracks of the DEF (pin access: macro pins must sit on them), one row per (axis, layer)
     trk = [t for t in d['tracks'] if t[4] in lid]
-    core.update({'m_pin_layer': np.array(m_pin_layer, np.int16),
+    core.update({'m_pin_layer': np.array(m_pin_layer, np.int16), 'm_pin_dir': np.array(m_pin_dir, np.uint8),
+                 'p_dir': np.array(p_dir, np.uint8),
                  'tr_axis': np.array([0 if t[0] == 'X' else 1 for t in trk], np.uint8),
                  'tr_start': np.array([t[1] for t in trk], np.int32), 'tr_num': np.array([t[2] for t in trk], np.int32),
                  'tr_step': np.array([t[3] for t in trk], np.int32), 'tr_layer': np.array([lid[t[4]] for t in trk], np.int16),
@@ -200,6 +223,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
         'facts': dict([('netlist', 'def'), ('cell_geometry', 'lef'), ('pin_offsets', 'lef'), ('floorplan.die', 'def'),
                        ('cell_library', 'lef')] + ([('rows', 'def')] if rows else [])
                       + ([('tracks', 'def+lef')] if trk else [])
+                      + ([('pin_direction', 'lef+def')] if any(v != D_UNKNOWN for v in m_pin_dir) else [])
                       + ([('floorplan.io', 'def')] if io_unplaced == 0 else [])
                       + ([('floorplan.macros', 'def')] if macros_unplaced == 0 else [])),
         'io_unplaced': io_unplaced,
@@ -214,6 +238,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
                    'physical_only': int(((c_flags & PHYSICAL) > 0).sum()), 'terminals': int(len(pins)), 'pg_pins_skipped': int(d['pg_pins']),
                    'nets': int(len(net_names)), 'nets_2plus': int((deg >= 2).sum()), 'pins': int(len(p_cell)),
                    'rows': int(len(rows)), 'masters': int(len(used)), 'skipped_pin_refs': int(skipped)},
+        'pin_direction': pin_dir_counts(p_dir, n_ptr),
         'distill_seconds': round(time.time() - t0, 2),
     }
     # data-quality warnings, e.g. generated macro LEFs with pins outside the SIZE outline

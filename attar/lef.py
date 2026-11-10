@@ -2,12 +2,13 @@
 
 
 class Macro:
-    __slots__ = ('name', 'cls', 'w', 'h', 'pins', 'pin_layer')
+    __slots__ = ('name', 'cls', 'w', 'h', 'pins', 'pin_layer', 'pin_dir')
 
     def __init__(self, name):
         self.name, self.cls, self.w, self.h = name, '', 0.0, 0.0
         self.pins = {}  # pin name -> (x0, y0, x1, y1) in microns: bbox of all port shapes; use
         self.pin_layer = {}  # pin name -> layer of its first port shape
+        self.pin_dir = {}  # pin name -> DIRECTION (INPUT, OUTPUT, INOUT, FEEDTHRU) when the LEF states it
 
 
 def read_lef(paths, macros=None, tech=None):
@@ -36,6 +37,8 @@ def read_lef(paths, macros=None, tech=None):
                             box = [x0, y0, x1, y1] if box is None else [min(box[0], x0), min(box[1], y0), max(box[2], x1), max(box[3], y1)]
                         elif k == 'USE':
                             use = t[1].rstrip(';')
+                        elif k == 'DIRECTION' and len(t) > 1:
+                            mac.pin_dir[pin] = t[1].rstrip(';')
                         elif k == 'LAYER' and len(t) > 1 and pin not in mac.pin_layer:
                             mac.pin_layer[pin] = t[1].rstrip(';')
                         elif k == 'END' and len(t) > 1 and t[1] == pin:
@@ -43,6 +46,14 @@ def read_lef(paths, macros=None, tech=None):
                             pin = None
                     elif k == 'PIN':
                         pin, box, use = t[1], None, 'SIGNAL'
+                        # attributes may follow on the PIN line (ISPD 2015: 'PIN o DIRECTION OUTPUT ;')
+                        for kw in ('DIRECTION', 'USE'):
+                            if kw in t[2:] and t.index(kw, 2) + 1 < len(t):
+                                v = t[t.index(kw, 2) + 1].rstrip(';')
+                                if kw == 'USE':
+                                    use = v
+                                else:
+                                    mac.pin_dir[pin] = v
                     elif k == 'CLASS':
                         mac.cls = t[1].rstrip(';')
                     elif k == 'SIZE':

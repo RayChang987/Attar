@@ -40,6 +40,11 @@ def _detail(d, fact):
     if fact == 'cell_library':
         lef = d.manifest.get('source', {}).get('lef', [])
         return '%d LEF file(s): %s' % (len(lef), ', '.join(l.get('name', '?') for l in lef[:3]))
+    if fact == 'pin_direction':
+        c = d.manifest.get('pin_direction', {})
+        return '%d drivers, %d sinks; %d nets with one driver, %d with none, %d with several' % (
+            c.get('drivers', 0), c.get('sinks', 0), c.get('nets_one_driver', 0), c.get('nets_no_driver', 0),
+            c.get('nets_multi_driver', 0))
     if fact == 'tracks':
         t = d.tracks()
         return '%d track grids over %d layers' % (len(t), len({k[1] for k in t}))

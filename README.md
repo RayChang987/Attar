@@ -264,7 +264,7 @@ Also on the list:
 attar/            the package: Design, Evaluator, readers, kernels, attar.naive engines
 examples/         quickstart.py, floorplan_flow.py
 tools/            distillation, ORFS round trip and hand-off, validation, benchmarks, README figures
-tests/            66 tests (python -m unittest discover -s tests); designs missing from the zoo are skipped
+tests/            69 tests (python -m unittest discover -s tests); designs missing from the zoo are skipped
 docs/             concepts, benchmarks, slow loop, API, the project spec (zh-TW), validation results, images
 ```
 

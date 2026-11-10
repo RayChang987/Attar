@@ -42,6 +42,45 @@ class LefDefTest(unittest.TestCase):
         self.assertTrue(attar.Evaluator(need('iccad2025/des')).legality()['legal'])
 
 
+class PinDirectionTest(unittest.TestCase):
+    def test_lef_def_every_net_has_one_driver(self):
+        import torch
+        from attar.distill import D_IN, D_OUT
+        d = need('orfs_asap7/gcd')
+        self.assertEqual(d.facts['pin_direction'], 'lef+def')
+        drv = torch.zeros(len(d.n_weight), dtype=torch.int64, device=d.device)
+        drv.index_add_(0, d.p_net, (d.pin_dir == D_OUT).long())
+        deg = torch.bincount(d.p_net, minlength=len(d.n_weight))
+        self.assertTrue(bool((drv[deg >= 2] == 1).all()))                 # gcd: one driver per net
+        io = torch.isin(d.p_cell, d.io)
+        port = d.io_dir[torch.searchsorted(d.io, d.p_cell[io])]
+        self.assertTrue(bool((d.pin_dir[io][port == 0] == D_OUT).all()))   # an INPUT port drives its net
+        self.assertTrue(bool((d.pin_dir[io][port == 1] == D_IN).all()))
+
+    def test_lef_attributes_on_the_pin_line(self):
+        import os
+        import tempfile
+        from attar.lef import read_lef
+        lef = ('MACRO X\n  CLASS CORE ;\n  SIZE 1 BY 1 ;\n  PIN o DIRECTION OUTPUT ;\n    PORT\n      LAYER M1 ;\n'
+               '      RECT 0 0 0.1 0.1 ;\n    END\n  END o\n  PIN a\n    DIRECTION INPUT ;\n    USE SIGNAL ;\n'
+               '  END a\n  PIN VDD DIRECTION INOUT ; USE POWER ;\n  END VDD\nEND X\n')
+        with tempfile.TemporaryDirectory() as t:
+            with open(os.path.join(t, 'x.lef'), 'w') as f:
+                f.write(lef)
+            m = read_lef([os.path.join(t, 'x.lef')])[0]['X']
+        self.assertEqual(m.pin_dir, {'o': 'OUTPUT', 'a': 'INPUT', 'VDD': 'INOUT'})   # ISPD 2015 writes them inline
+        self.assertEqual(m.pins['VDD'][1], 'POWER')
+
+    def test_bookshelf_states_directions_and_blocks_do_not(self):
+        b = need('ispd2005/adaptec1')
+        self.assertEqual(b.facts['pin_direction'], 'bookshelf')
+        self.assertGreater(b.manifest['pin_direction']['drivers'], 0)
+        for name in ('mcnc/ami33', 'gsrc_hard/n10'):                     # every pin 'B': no direction stated
+            m = need(name)
+            self.assertNotIn('pin_direction', m.facts)
+            self.assertIn('pin_direction', m.missing('sta'))
+
+
 class BookshelfTest(unittest.TestCase):
     def test_old_scl_and_irrational_block_sizes(self):
         d = need('ispd2006_hb/ibm01')                                     # Siteorient : N; sqrt(area) soft blocks

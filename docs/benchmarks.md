@@ -35,8 +35,8 @@ hf upload-large-folder RayChang987/attar-zoo zoo/ --repo-type dataset
 
 | reader | formats | facts |
 | --- | --- | --- |
-| `attar.distill` | LEF/DEF | netlist, geometry, pin offsets, die, IO pins and macros (when placed), rows, cell library, tracks; Liberty files recorded (fidelity F1) |
-| `attar.bookshelf` | Bookshelf (.aux) | netlist, geometry, pin offsets, die (rows + fixed nodes), IO, macros, rows; no cell library |
+| `attar.distill` | LEF/DEF | netlist, geometry, pin offsets, die, IO pins and macros (when placed), rows, cell library, tracks, pin directions; Liberty files recorded (fidelity F1) |
+| `attar.bookshelf` | Bookshelf (.aux) | netlist, geometry, pin offsets, pin directions (`I`/`O` in .nets), die (rows + fixed nodes), IO, macros, rows; no cell library |
 | `attar.fpformats.distill_yal` | YAL (MCNC) | netlist, block geometry, pin offsets, die (parent outline), pads; blocks unplaced |
 | `attar.fpformats.distill_blocks` | GSRC/UCSC .blocks | netlist; hard blocks: geometry, pins at block centers; soft blocks: area and aspect range only (no geometry) |
 
@@ -74,6 +74,9 @@ Rules every reader follows:
 - ISPD 2019 test7-10 run at about 96% utilization; GP raises its target density to the utilization.
 - ORFS 3_3 DEFs have rows cut around macros; the gaps are obstacles (OpenROAD DPL-0004 otherwise).
 - mcnc/xerox has no signal pads; IBM-HB+ blocks are often smaller than a row.
+- Pin directions as the sources state them: superblue (ISPD 2015) has nets with two OUTPUT pins and nets with
+  none; ISPD 2018/2019 have a few hundred nets driven by two flops; GSRC ibm05's I/O marks are inconsistent. The
+  ORFS, NS3K and other ISPD 2015 designs have exactly one driver per net. MCNC and GSRC blocks state no directions.
 
 ## Adding a reader
 

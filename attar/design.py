@@ -74,6 +74,8 @@ class Design:
             ok = np.zeros(len(p_cell), bool) | (p_mpin >= 0)
             ctr[ok] = size[p_cell[ok]] / 2
         self.p_cell = T(p_cell)
+        # pin directions seen from the net (distill.D_IN sink, D_OUT driver, D_INOUT, D_UNKNOWN): 'pin_direction'
+        self.pin_dir = T(a['p_dir'].astype(np.int64)) if 'p_dir' in a else torch.full((len(p_cell),), 3, dtype=torch.int64, device=self.device)
         self._p_ctr_n = T(ctr, torch.float32); self._p_term = T(~ok)
         self.n_ptr = T(a['n_ptr'].astype(np.int64))
         deg = self.n_ptr[1:] - self.n_ptr[:-1]

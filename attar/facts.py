@@ -10,6 +10,7 @@ FACTS = {
     'netlist': 'cells, nets and pins (connectivity), net weights',
     'cell_geometry': 'cell width/height and flags (movable, fixed, macro)',
     'pin_offsets': 'pin locations relative to their cell (master offsets + orientation)',
+    'pin_direction': 'which pins drive their net and which are driven (LEF pin DIRECTION, Bookshelf I/O)',
     'floorplan.die': 'the die array (outline of each die)',
     'floorplan.io': 'IO pin locations (on the die boundary)',
     'floorplan.macros': 'macro and fixed-cell (e.g. tap cell) locations',
@@ -34,7 +35,7 @@ CAPABILITIES = {
     'legalize': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'rows', 'placement'},
     'detailed_place': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'rows', 'placement'},
     'global_route': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'routing', 'placement'},
-    'sta': {'netlist', 'timing'},
+    'sta': {'netlist', 'pin_direction', 'timing'},
     'export': {'netlist', 'cell_library'},                 # stamped onto a DEF of the design the caller hands over
     'orfs_handoff': {'cell_library', 'slow_loop', 'floorplan.io', 'floorplan.macros', 'placement'},
     'orfs_floorplan_handoff': {'cell_library', 'slow_loop', 'floorplan.io', 'floorplan.macros'},   # from ORFS 2_1
@@ -46,6 +47,7 @@ HINTS = {
     'cell_library': 'this source has no cell library (Bookshelf, YAL, GSRC): a DEF of it would not mean anything; '
                     'Design.export(..., force=True) writes one anyway',
     'tracks': 'distill from LEF/DEF (attar-ir >= 0.5): macros then go on the routing tracks, else on the row grid',
+    'pin_direction': 'the source states no pin directions (or the IR is older than attar-ir 0.6: distill it again)',
     'slow_loop': 'distill from an ORFS run (tools/distill_orfs.py); designs without a real cell library end in Attar',
     'floorplan.io': 'place the IO pins: attar.naive.place_io (or a source with placed pins; ORFS: GPL_PLACE_IOS=0)',
     'floorplan.macros': 'place the macros: attar.naive.place_macros (or a source with placed macros)',
