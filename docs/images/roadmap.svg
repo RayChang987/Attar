@@ -1,33 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 400" width="1240" height="400">
-<defs><marker id="ah_ink" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="15" markerHeight="15" markerUnits="userSpaceOnUse" orient="auto"><path d="M 0 0 L 12 6 L 0 12 z" fill="#6b5d52"/></marker><marker id="ah_terra" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="15" markerHeight="15" markerUnits="userSpaceOnUse" orient="auto"><path d="M 0 0 L 12 6 L 0 12 z" fill="#d9622b"/></marker><marker id="ah_amber" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="15" markerHeight="15" markerUnits="userSpaceOnUse" orient="auto"><path d="M 0 0 L 12 6 L 0 12 z" fill="#d99a1e"/></marker><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="7"/></filter></defs>
-<rect width="1240" height="400" rx="22" fill="#fbf8f3"/>
-<text x="48" y="58" font-size="19" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Where Attar stands</text>
-<text x="48" y="86" font-size="15" fill="#a39486" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Each proxy is lit once it is fast in Attar and shown to agree with the slow loop</text>
-<line x1="210" y1="160" x2="1030" y2="160" stroke="#ecdfc8" stroke-width="10" stroke-linecap="round"/>
-<line x1="210" y1="160" x2="620" y2="160" stroke="#d9622b" stroke-width="10" stroke-linecap="round"/>
-<circle cx="210" cy="160" r="44" fill="#d9622b" opacity="0.55" filter="url(#glow)"/>
-<circle cx="210" cy="160" r="38" fill="#d9622b" stroke="#b44a1c" stroke-width="3"/>
-<path d="M 193 161 l 12 13 l 23 -27" fill="none" stroke="#fffaf4" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-<clipPath id="half"><rect x="582" y="122" width="38" height="76"/></clipPath>
-<circle cx="620" cy="160" r="38" fill="#fffdf9" stroke="#d9622b" stroke-width="3"/>
-<circle cx="620" cy="160" r="36" fill="#d9622b" clip-path="url(#half)"/>
-<circle cx="1030" cy="160" r="38" fill="#fffdf9" stroke="#b9a993" stroke-width="3" stroke-dasharray="7 6"/>
-<text x="210" y="246" font-size="21" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">HPWL evaluation</text>
-<rect x="173" y="262" width="74" height="28" rx="14" fill="#d9622b"/>
-<text x="210" y="282" font-size="15" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Done</text>
-<text x="210" y="320" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Exact, on the GPU: 3 ms for 8.9M pins</text>
-<text x="210" y="344" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Equals OpenROAD to 7 digits</text>
-<text x="210" y="368" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Legality = check_placement, 9/9</text>
-<text x="620" y="246" font-size="21" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Routed wirelength evaluation</text>
-<rect x="563" y="262" width="114" height="28" rx="14" fill="#d99a1e"/>
-<text x="620" y="282" font-size="15" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Half way</text>
-<text x="620" y="320" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ORFS hand-off routes, 0 DRC</text>
-<text x="620" y="344" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">HPWL vs routed WL: 951 runs</text>
-<text x="620" y="368" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Next: a global-routing proxy</text>
-<text x="1030" y="246" font-size="21" fill="#6b5d52" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Timing evaluation</text>
-<rect x="978" y="262" width="104" height="28" rx="14" fill="#fffdf9" stroke="#b9a993" stroke-width="1.5"/>
-<text x="1030" y="282" font-size="15" fill="#a39486" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Not yet</text>
-<text x="1030" y="320" font-size="15" fill="#a39486" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Liberty + SDC recorded, not read</text>
-<text x="1030" y="344" font-size="15" fill="#a39486" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">HPWL does not predict WNS / TNS</text>
-<text x="1030" y="368" font-size="15" fill="#a39486" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Next: a GPU timing proxy vs ORFS STA</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 420" width="1240" height="420">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfbf7"/><stop offset="1" stop-color="#f8f2e9"/></linearGradient><linearGradient id="track" gradientUnits="userSpaceOnUse" x1="210" y1="0" x2="620" y2="0"><stop offset="0" stop-color="#d9622b"/><stop offset="1" stop-color="#d99a1e"/></linearGradient><radialGradient id="lit" cx="0.38" cy="0.32" r="0.75"><stop offset="0" stop-color="#ec8a57"/><stop offset="1" stop-color="#d9622b"/></radialGradient><radialGradient id="halo" r="0.5"><stop offset="0.55" stop-color="#d9622b" stop-opacity="0.28"/><stop offset="1" stop-color="#d9622b" stop-opacity="0"/></radialGradient><radialGradient id="halo_a" r="0.5"><stop offset="0.55" stop-color="#d99a1e" stop-opacity="0.22"/><stop offset="1" stop-color="#d99a1e" stop-opacity="0"/></radialGradient><radialGradient id="dim" cx="0.38" cy="0.32" r="0.75"><stop offset="0" stop-color="#fbf6ee"/><stop offset="1" stop-color="#efe5d6"/></radialGradient><clipPath id="half"><rect x="0" y="0" width="0" height="0"/></clipPath></defs>
+<rect width="1240" height="420" rx="26" fill="url(#bg)"/>
+<text x="56" y="62" font-size="20" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Where Attar stands</text>
+<text x="56" y="90" font-size="15.5" fill="#a39486" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Each proxy is lit once it is fast in Attar and shown to agree with the slow loop</text>
+<line x1="210" y1="172" x2="1030" y2="172" stroke="#ede3d4" stroke-width="6" stroke-linecap="round"/>
+<line x1="210" y1="172" x2="620" y2="172" stroke="url(#track)" stroke-width="6" stroke-linecap="round"/>
+<circle cx="210" cy="172" r="63" fill="url(#halo)"/>
+<circle cx="210" cy="172" r="30" fill="url(#lit)"/>
+<path d="M 197 173 l 9 10 l 18 -21" fill="none" stroke="#fffaf4" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="620" cy="172" r="57" fill="url(#halo_a)"/>
+<circle cx="620" cy="172" r="30" fill="url(#dim)"/>
+<path d="M 620 142 A 30 30 0 0 0 620 202 Z" fill="#d99a1e" opacity="0.9"/>
+<circle cx="620" cy="172" r="30" fill="none" stroke="#d99a1e" stroke-opacity="0.35" stroke-width="2"/>
+<circle cx="1030" cy="172" r="30" fill="url(#dim)"/>
+<circle cx="1030" cy="172" r="30" fill="none" stroke="#e3d6c3" stroke-width="2"/>
+<text x="210" y="254" font-size="21" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">HPWL evaluation</text>
+<rect x="173" y="270" width="74" height="28" rx="14" fill="#f9e2d3"/>
+<text x="210" y="289" font-size="14.5" fill="#b44a1c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Done</text>
+<text x="210" y="330" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Exact, on the GPU: 3 ms for 8.9M pins</text>
+<text x="210" y="355" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Equals OpenROAD to 7 digits</text>
+<text x="210" y="380" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Legality = check_placement, 9/9</text>
+<text x="620" y="254" font-size="21" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Routed wirelength evaluation</text>
+<rect x="564" y="270" width="112" height="28" rx="14" fill="#f8ebcf"/>
+<text x="620" y="289" font-size="14.5" fill="#a0700f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Half way</text>
+<text x="620" y="330" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ORFS hand-off routes, 0 DRC</text>
+<text x="620" y="355" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">HPWL vs routed WL: 951 runs</text>
+<text x="620" y="380" font-size="15" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Next: a global-routing proxy</text>
+<text x="1030" y="254" font-size="21" fill="#6b5d52" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Timing evaluation</text>
+<rect x="978.75" y="270" width="102.5" height="28" rx="14" fill="#f0e8dc"/>
+<text x="1030" y="289" font-size="14.5" fill="#a39486" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Not yet</text>
+<text x="1030" y="330" font-size="15" fill="#a39486" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Liberty + SDC recorded, not read</text>
+<text x="1030" y="355" font-size="15" fill="#a39486" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">HPWL does not predict WNS / TNS</text>
+<text x="1030" y="380" font-size="15" fill="#a39486" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Next: a GPU timing proxy vs ORFS STA</text>
 </svg>

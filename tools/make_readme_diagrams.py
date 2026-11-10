@@ -116,44 +116,62 @@ def flow():
 
 
 def roadmap():
-    W, H = 1240, 400
-    s = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">' % (W, H, W, H), defs(),
-         '<rect width="%d" height="%d" rx="22" fill="%s"/>' % (W, H, C['paper'])]
-    s.append(text(48, 58, 'Where Attar stands', 19, C['ink2'], 'bold', 'start'))
-    s.append(text(48, 86, 'Each proxy is lit once it is fast in Attar and shown to agree with the slow loop', 15,
+    """Soft: a thin gradient track, nodes with soft gradients and halos (no hard outlines), tinted status chips."""
+    W, H = 1240, 420
+    s = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">' % (W, H, W, H),
+         '<defs>'
+         '<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfbf7"/>'
+         '<stop offset="1" stop-color="#f8f2e9"/></linearGradient>'
+         '<linearGradient id="track" gradientUnits="userSpaceOnUse" x1="210" y1="0" x2="620" y2="0"><stop offset="0" stop-color="%s"/>'
+         '<stop offset="1" stop-color="%s"/></linearGradient>'
+         '<radialGradient id="lit" cx="0.38" cy="0.32" r="0.75"><stop offset="0" stop-color="#ec8a57"/>'
+         '<stop offset="1" stop-color="%s"/></radialGradient>'
+         '<radialGradient id="halo" r="0.5"><stop offset="0.55" stop-color="%s" stop-opacity="0.28"/>'
+         '<stop offset="1" stop-color="%s" stop-opacity="0"/></radialGradient>'
+         '<radialGradient id="halo_a" r="0.5"><stop offset="0.55" stop-color="%s" stop-opacity="0.22"/>'
+         '<stop offset="1" stop-color="%s" stop-opacity="0"/></radialGradient>'
+         '<radialGradient id="dim" cx="0.38" cy="0.32" r="0.75"><stop offset="0" stop-color="#fbf6ee"/>'
+         '<stop offset="1" stop-color="#efe5d6"/></radialGradient>'
+         '<clipPath id="half"><rect x="0" y="0" width="0" height="0"/></clipPath>'
+         '</defs>' % (C['terra'], C['amber'], C['terra'], C['terra'], C['terra'], C['amber'], C['amber']),
+         '<rect width="%d" height="%d" rx="26" fill="url(#bg)"/>' % (W, H)]
+    s.append(text(56, 62, 'Where Attar stands', 20, C['ink2'], 'bold', 'start'))
+    s.append(text(56, 90, 'Each proxy is lit once it is fast in Attar and shown to agree with the slow loop', 15.5,
                   C['muted'], anchor='start'))
-    xs, y = (210, 620, 1030), 160
-    s.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="10" stroke-linecap="round"/>' % (xs[0], y, xs[2], y, C['sand']))
-    s.append('<line x1="%d" y1="%d" x2="%g" y2="%d" stroke="%s" stroke-width="10" stroke-linecap="round"/>' % (xs[0], y, xs[1], y, C['terra']))
-    R = 38
+    xs, y, R = (210, 620, 1030), 172, 30
+    # track: soft sand underneath, a terracotta-to-amber stroke up to the half-lit node
+    s.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#ede3d4" stroke-width="6" stroke-linecap="round"/>' % (xs[0], y, xs[2], y))
+    s.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="url(#track)" stroke-width="6" stroke-linecap="round"/>' % (xs[0], y, xs[1], y))
     # 1: HPWL, lit
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="%s" opacity="0.55" filter="url(#glow)"/>' % (xs[0], y, R + 6, C['terra']))
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="%s" stroke="%s" stroke-width="3"/>' % (xs[0], y, R, C['terra'], C['terra_d']))
-    s.append('<path d="M %g %g l 12 13 l 23 -27" fill="none" stroke="%s" stroke-width="6" stroke-linecap="round" '
-             'stroke-linejoin="round"/>' % (xs[0] - 17, y + 1, C['white']))
-    # 2: routed WL, half lit
-    s.append('<clipPath id="half"><rect x="%d" y="%d" width="%d" height="%d"/></clipPath>' % (xs[1] - R, y - R, R, 2 * R))
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="%s" stroke="%s" stroke-width="3"/>' % (xs[1], y, R, C['card'], C['terra']))
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="%s" clip-path="url(#half)"/>' % (xs[1], y, R - 1.5, C['terra']))
-    # 3: timing, not lit
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="%s" stroke="%s" stroke-width="3" stroke-dasharray="7 6"/>' % (xs[2], y, R, C['card'], C['line']))
-    items = [('HPWL evaluation', 'Done', C['terra'], ['Exact, on the GPU: 3 ms for 8.9M pins',
-                                                     'Equals OpenROAD to 7 digits',
-                                                     'Legality = check_placement, 9/9']),
-             ('Routed wirelength evaluation', 'Half way', C['amber'], ['ORFS hand-off routes, 0 DRC',
-                                                                       'HPWL vs routed WL: 951 runs',
-                                                                       'Next: a global-routing proxy']),
-             ('Timing evaluation', 'Not yet', None, ['Liberty + SDC recorded, not read',
-                                                    'HPWL does not predict WNS / TNS',
-                                                    'Next: a GPU timing proxy vs ORFS STA'])]
-    for x, (t, st, col, lines) in zip(xs, items):
-        s.append(text(x, y + 86, t, 21, C['ink'] if col else C['ink2'], 'bold'))
-        w = len(st) * 10 + 34
-        s.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="%s"%s/>'
-                 % (x - w / 2, y + 102, w, col or C['card'], '' if col else ' stroke="%s" stroke-width="1.5"' % C['line']))
-        s.append(text(x, y + 122, st, 15, C['white'] if col else C['muted'], 'bold'))
+    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#halo)"/>' % (xs[0], y, R * 2.1))
+    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#lit)"/>' % (xs[0], y, R))
+    s.append('<path d="M %g %g l 9 10 l 18 -21" fill="none" stroke="%s" stroke-width="4.5" stroke-linecap="round" '
+             'stroke-linejoin="round"/>' % (xs[0] - 13, y + 1, C['white']))
+    # 2: routed WL, half lit: a soft amber left half over a pale disc
+    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#halo_a)"/>' % (xs[1], y, R * 1.9))
+    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#dim)"/>' % (xs[1], y, R))
+    s.append('<path d="M %g %g A %d %d 0 0 0 %g %g Z" fill="%s" opacity="0.9"/>' % (xs[1], y - R, R, R, xs[1], y + R, C['amber']))
+    s.append('<circle cx="%d" cy="%d" r="%d" fill="none" stroke="%s" stroke-opacity="0.35" stroke-width="2"/>' % (xs[1], y, R, C['amber']))
+    # 3: timing, not lit: a pale disc
+    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#dim)"/>' % (xs[2], y, R))
+    s.append('<circle cx="%d" cy="%d" r="%d" fill="none" stroke="#e3d6c3" stroke-width="2"/>' % (xs[2], y, R))
+    items = [('HPWL evaluation', 'Done', ('#f9e2d3', C['terra_d']), ['Exact, on the GPU: 3 ms for 8.9M pins',
+                                                                     'Equals OpenROAD to 7 digits',
+                                                                     'Legality = check_placement, 9/9']),
+             ('Routed wirelength evaluation', 'Half way', ('#f8ebcf', '#a0700f'), ['ORFS hand-off routes, 0 DRC',
+                                                                                   'HPWL vs routed WL: 951 runs',
+                                                                                   'Next: a global-routing proxy']),
+             ('Timing evaluation', 'Not yet', ('#f0e8dc', C['muted']), ['Liberty + SDC recorded, not read',
+                                                                        'HPWL does not predict WNS / TNS',
+                                                                        'Next: a GPU timing proxy vs ORFS STA'])]
+    for k, (x, (t, st, (chip, chip_ink), lines)) in enumerate(zip(xs, items)):
+        on = k < 2
+        s.append(text(x, y + 82, t, 21, C['ink'] if on else C['ink2'], 'bold'))
+        w = len(st) * 9.5 + 36
+        s.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="%s"/>' % (x - w / 2, y + 98, w, chip))
+        s.append(text(x, y + 117, st, 14.5, chip_ink, 'bold'))
         for i, l in enumerate(lines):
-            s.append(text(x, y + 160 + i * 24, l, 15, C['ink2'] if col else C['muted']))
+            s.append(text(x, y + 158 + i * 25, l, 15, C['ink2'] if on else C['muted']))
     s.append('</svg>')
     open(os.path.join(IMG, 'roadmap.svg'), 'w').write('\n'.join(s))
 

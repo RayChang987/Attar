@@ -181,26 +181,6 @@ HPWL does *not* predict timing: WNS and TNS move independently of it. That is th
 The legality check covers rows, sites, overlaps, row segments cut around macros, and power-rail parity.
 </details>
 
-### Handing floorplans to ORFS
-
-Designs distilled at the ORFS floorplan stage (2_1) get their IO pins, macros and optionally a new die from
-`attar.naive`. `tools/orfs_handoff.py` applies them to the ORFS run, and ORFS does the rest (tapcells, PDN,
-placement, CTS, routing). ORFS keeps every macro and pin where Attar put it, and all of these route with **0 DRC**.
-
-| design | Attar decided | routed WL (Attar / ORFS) | WNS, ps (Attar / ORFS) | TNS, ps (Attar / ORFS) |
-| --- | --- | ---: | ---: | ---: |
-| aes | IO pins | 52,588 / 50,810 (+3.5%) | -5.5 / -21.0 | -33 / -200 |
-| aes | new die (60%), IO pins | 54,490 / 50,810 (+7.2%) | -2.3 / -21.0 | -11 / -200 |
-| riscv32i | IO pins, 4 SRAMs | 55,583 / 55,422 (+0.3%) | -15.1 / -16.1 | -1,027 / -1,068 |
-| riscv32i | new die (50%), IO pins, 4 SRAMs | 56,456 / 55,422 (+1.9%) | -12.8 / -16.1 | -2,024 / -1,068 |
-| tinyRocket | IO pins, 2 SRAMs | 166,234 / 157,727 (+5.4%) | -82.4 / -90.1 | -20,567 / -21,869 |
-| cva6 | IO pins, 8 SRAMs | 640,107 / 642,595 (-0.4%) | -32.4 / -57.1 | -1,461 / -5,659 |
-| swerv_wrapper | IO pins, 28 SRAMs | 1,005,969 / 916,214 (+9.8%) | -319.8 / -57.3 | -33,878 / -1,176 |
-
-These are single runs of a deliberately basic floorplanner (wirelength-driven, no timing or channel awareness), shown
-to demonstrate the loop, not to claim quality. ORFS timing varies by 5-100% between near-identical inputs
-([noise floor](docs/slow_loop.md#noise-floor)), so single-run WNS/TNS differences are not significant.
-
 ## Benchmarks
 
 The zoo is built locally from public benchmarks by `tools/distill_benchmarks.py` and the ORFS tools. Each reader hands
