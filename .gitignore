@@ -6,7 +6,7 @@ orfs_runs/
 figs/
 examples/out_*.def
 *.png
-!docs/images/*.png
+!docs/images/**/*.png
 # python
 __pycache__/
 *.pyc

@@ -19,7 +19,7 @@ in a few lines of Python. Then hand the result to OpenROAD and route it.
 
 <br>
 
-<img src="docs/images/attar_demo.gif" alt="Eight lines of Python: load cva6, floorplan, place, plot, export; the run takes about four seconds" width="920">
+<img src="docs/images/demo.gif" alt="Eight lines of Python: load cva6, floorplan, place, plot, export; the run takes about four seconds" width="920">
 
 <sub>A real run on an RTX 3080 Ti: cva6 from the ORFS floorplan stage, 108k cells and 8 SRAM macros.
 IO pins, macros and a legal placement in about 4 seconds; handed to ORFS, this flow's floorplan routes with 0 DRC.</sub>
@@ -112,8 +112,8 @@ More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [slow 
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/gallery_bigblue4.png" alt="ISPD 2005 bigblue4 placed by attar.naive"></td>
-<td width="50%"><img src="docs/images/gallery_bp_quad.png" alt="bp_quad floorplanned and placed from scratch"></td>
+<td width="50%"><img src="docs/images/gallery/bigblue4.png" alt="ISPD 2005 bigblue4 placed by attar.naive"></td>
+<td width="50%"><img src="docs/images/gallery/bp_quad.png" alt="bp_quad floorplanned and placed from scratch"></td>
 </tr>
 <tr>
 <td><sub><b>ISPD 2005 bigblue4</b>: 2.18M cells, 8170 fixed macros. Global placement and legalization in 48 s.</sub></td>
@@ -121,8 +121,8 @@ More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [slow 
 from scratch in 46 s, legal including power rails.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/hero_cva6.png" alt="cva6 floorplanned and placed"></td>
-<td><img src="docs/images/gallery_ami49.png" alt="MCNC ami49 floorplan"></td>
+<td><img src="docs/images/gallery/cva6.png" alt="cva6 floorplanned and placed"></td>
+<td><img src="docs/images/gallery/ami49.png" alt="MCNC ami49 floorplan"></td>
 </tr>
 <tr>
 <td><sub><b>cva6</b> (ASAP7, ORFS floorplan stage): IO pins, 8 SRAMs and 108k cells in 4 s. ORFS routes it with 0 DRC.</sub></td>

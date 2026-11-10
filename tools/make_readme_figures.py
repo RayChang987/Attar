@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Figures for README.md (docs/images):
   proxy_agreement.png               how often routed WL moves the same way as HPWL, by HPWL gap (pa_pdn, spec 7.1)
-  gallery_*.png                     designs placed by attar.naive (run with --gallery; needs the zoo and a GPU)"""
+  gallery/*.png                     designs placed by attar.naive (run with --gallery; needs the zoo and a GPU)"""
 import io
 import contextlib
 import os
@@ -55,8 +55,8 @@ def gallery():
     sys.path.insert(0, ROOT)
     import time
     import attar
-    jobs = [('stress/bp_quad', 'gallery_bp_quad.png', 'scratch'), ('mcnc/ami49', 'gallery_ami49.png', 'floorplan'),
-            ('ispd2005/bigblue4', 'gallery_bigblue4.png', 'place')]
+    jobs = [('stress/bp_quad', 'bp_quad.png', 'scratch'), ('mcnc/ami49', 'ami49.png', 'floorplan'),
+            ('ispd2005/bigblue4', 'bigblue4.png', 'place')]
     for name, fn, how in jobs:
         d = attar.load(name, 'cuda'); t = time.time()
         with contextlib.redirect_stdout(io.StringIO()):
@@ -69,7 +69,8 @@ def gallery():
         sec = time.time() - t
         title = '%s    %s in %.0f s' % (name, {'scratch': 'die, IO, macros, cells from scratch', 'floorplan': 'floorplan',
                                                'place': 'global placement + legalization'}[how], sec)
-        d.plot(os.path.join(IMG, fn), title=title, dpi=160)
+        os.makedirs(os.path.join(IMG, 'gallery'), exist_ok=True)
+        d.plot(os.path.join(IMG, 'gallery', fn), title=title, dpi=160)
         print('wrote', fn, title)
         del d
 

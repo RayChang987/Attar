@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render docs/images/attar_demo.gif: the README code typed into an editor, the output of a real run of it
+"""Render docs/images/demo.gif: the README code typed into an editor, the output of a real run of it
 (recorded by tools/make_demo_gif.py --record, timings included) appearing in a terminal, then the resulting plot.
 usage: make_demo_gif.py --record   (runs the code on the GPU, writes docs/images/demo_run.json and hero_aes.png)
        make_demo_gif.py            (renders the GIF from that recording)"""
@@ -44,7 +44,7 @@ def record():
     step('status', lambda: d.status())
     step('floorplan', lambda: d.floorplan())
     step('place', lambda: d.place())
-    step('plot', lambda: d.plot(os.path.join(IMG, 'hero_cva6.png'), dpi=220))    # sharp enough for the GIF pane
+    step('plot', lambda: d.plot(os.path.join(IMG, 'gallery', 'cva6.png'), dpi=220))    # sharp enough for the GIF pane
     step('export', lambda: print(d.export(os.path.join('/tmp', 'attar_demo_cva6.def'))))
     json.dump(steps, open(REC, 'w'), indent=1)
 
@@ -111,7 +111,7 @@ def render():
     term_y0 = code_y0 + lh * (CODE.count('\n') + 1) + 20
     # the output pane: the plot, fitted inside it
     ox0, oy0, ox1, oy1 = LW + 14, 70, Wd - 14, Ht - 14
-    plot = Image.open(os.path.join(IMG, 'hero_cva6.png')).convert('RGB')
+    plot = Image.open(os.path.join(IMG, 'gallery', 'cva6.png')).convert('RGB')
     sc = min((ox1 - ox0) / plot.width, (oy1 - oy0) / plot.height)
     plot = plot.resize((int(plot.width * sc), int(plot.height * sc)), Image.LANCZOS)
     px, py = ox0 + ((ox1 - ox0) - plot.width) // 2, oy0 + ((oy1 - oy0) - plot.height) // 2
@@ -163,7 +163,7 @@ def render():
     ref = Image.new('RGB', (Wd, Ht * 2)); ref.paste(frames[-1], (0, 0)); ref.paste(frames[len(chars) // 4], (0, Ht))
     pal = ref.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
     q = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
-    out = os.path.join(IMG, 'attar_demo.gif')
+    out = os.path.join(IMG, 'demo.gif')
     q[0].save(out, save_all=True, append_images=q[1:], duration=durs, loop=0, optimize=False)
     print('wrote %s: %dx%d, %d frames, %.0f KB, %.1f s' % (out, Wd, Ht, len(frames), os.path.getsize(out) / 1e3, sum(durs) / 1e3))
 
