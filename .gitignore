@@ -1,0 +1,14 @@
+# data and runs: distilled zoo, raw benchmark downloads, ORFS runs (tens of GB)
+zoo/
+benchmarks/
+orfs_runs/
+# generated outputs (README images in docs/images are kept)
+figs/
+examples/out_*.def
+*.png
+!docs/images/*.png
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+build/

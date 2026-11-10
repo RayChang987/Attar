@@ -1,0 +1,268 @@
+"""Design, facts and capabilities, dies, macros, write-back, status, plots."""
+import filecmp  # noqa: F401
+import os  # noqa: F401
+import tempfile  # noqa: F401
+import unittest
+
+import numpy as np  # noqa: F401
+import torch  # noqa: F401
+
+from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, need, gpl_final_hpwl, attar
+from attar import st  # noqa: F401
+from attar.deffile import read_def  # noqa: F401
+from attar.design import _orient_offset  # noqa: F401
+from attar.distill import FIXED, MACRO, TERMINAL  # noqa: F401
+from attar.facts import MissingFacts  # noqa: F401
+from attar.lef import read_lef  # noqa: F401
+
+
+class SafetensorsTest(unittest.TestCase):
+    def test_roundtrip(self):
+        t = {'i32': np.arange(12, dtype=np.int32).reshape(3, 4), 'u8': np.array([1, 2, 255], np.uint8),
+             'f32': np.linspace(0, 1, 5, dtype=np.float32), 'i64': np.array([-1, 2 ** 40], np.int64),
+             'empty': np.zeros((0, 4), np.int32)}
+        with tempfile.TemporaryDirectory() as d:
+            st.save(d + '/x.safetensors', t, {'k': 'v'})
+            back, meta = st.load(d + '/x.safetensors')
+        self.assertEqual(meta, {'k': 'v'})
+        for k in t:
+            self.assertEqual(back[k].dtype, t[k].dtype)
+            np.testing.assert_array_equal(back[k], t[k])
+
+class OrientationTest(unittest.TestCase):
+    def test_offsets_stay_inside_the_placed_box(self):
+        # a pin at (px, py) of a w x h master must land inside the oriented box for every orientation
+        w, h, px, py = 3.0, 1.0, 0.5, 0.25
+        n = 8
+        o = torch.arange(n)
+        off = _orient_offset(o, torch.full((n,), px), torch.full((n,), py), torch.full((n,), w), torch.full((n,), h))
+        for i in range(n):
+            rot = i in (2, 3, 6, 7)
+            bw, bh = (h, w) if rot else (w, h)
+            self.assertTrue(0 <= off[i, 0] <= bw and 0 <= off[i, 1] <= bh, (i, off[i]))
+        self.assertEqual(off[0].tolist(), [px, py])            # N
+        self.assertEqual(off[1].tolist(), [w - px, h - py])    # S
+        self.assertEqual(off[4].tolist(), [w - px, py])        # FN
+
+class DesignTest(unittest.TestCase):
+    def test_zoo_listing_and_load(self):
+        names = attar.zoo('orfs_asap7')
+        self.assertIn(SMALL, names)
+        d = need(SMALL)
+        self.assertTrue(d.has('netlist') and d.has('rows') and d.has('writeback'))
+        self.assertFalse(d.has('timing'))
+        self.assertEqual(d.facts['pin_offsets'], 'lef')
+        self.assertEqual(d.manifest['fidelity'], 'F1')
+
+    def test_cells_start_unplaced_with_a_reference(self):
+        d = need(SMALL)
+        self.assertEqual(int((d.pos[d.movable] != 0).sum()), 0)    # engines start without coordinates
+        d.restore('reference')
+        self.assertGreater(int((d.pos[d.movable] != 0).sum()), 0)
+
+    def test_hpwl_matches_an_independent_numpy_computation(self):
+        d = need(MEDIUM).restore('reference')
+        src = read_def(d.manifest['source']['def']['path'])
+        macros, _ = read_lef([l['path'] for l in d.manifest['source']['lef']])
+        dbu = src['dbu']
+        comp = {c[0]: c for c in src['comps']}
+        io = {p[0]: (p[3], p[4]) for p in src['pins']}
+        total = 0
+        for name, conns, use in src['nets']:
+            if use in ('POWER', 'GROUND'):
+                continue
+            xs, ys = [], []
+            for c, p in conns:
+                if c == 'PIN':
+                    x, y = io[p]
+                else:
+                    _, m, _, cx, cy, o = comp[c]
+                    mac = macros[m]
+                    b = mac.pins[p][0]
+                    px, py = (b[0] + b[2]) / 2 * dbu, (b[1] + b[3]) / 2 * dbu
+                    w, h = mac.w * dbu, mac.h * dbu
+                    ox, oy = {'N': (px, py), 'S': (w - px, h - py), 'FN': (w - px, py), 'FS': (px, h - py)}[o]
+                    x, y = cx + ox, cy + oy
+                xs.append(x); ys.append(y)
+            if len(xs) > 1:
+                total += max(xs) - min(xs) + max(ys) - min(ys)
+        self.assertAlmostEqual(d.hpwl().item(), total / dbu, delta=1e-4 * total / dbu)
+
+    def test_hpwl_accepts_explicit_positions(self):
+        d = need(SMALL).restore('reference')
+        p = d.pos.clone()
+        self.assertAlmostEqual(d.hpwl(p).item(), d.hpwl().item(), places=3)
+        p[d.movable] += 1.0  # moving every movable cell by the same amount changes only nets with fixed pins
+        self.assertNotAlmostEqual(d.hpwl(p).item(), d.hpwl().item(), places=3)
+
+class CapabilityTest(unittest.TestCase):
+    def test_what_a_design_can_do_follows_from_its_facts(self):
+        d = need(MEDIUM)                               # unplaced: the ORFS GP is kept as the 'reference' snapshot
+        self.assertIn('global_place', d.capabilities())
+        self.assertNotIn('hpwl', d.capabilities())
+        self.assertEqual(d.missing('hpwl'), ['placement'])
+        self.assertEqual(d.missing('global_route'), ['placement', 'routing'])
+        self.assertEqual(d.missing('sta'), ['timing'])
+        with self.assertRaises(MissingFacts) as e:
+            d.hpwl()
+        self.assertIn("restore('reference')", str(e.exception))
+        d.restore('reference')
+        for c in ('hpwl', 'legalize', 'detailed_place', 'export'):
+            self.assertIn(c, d.capabilities())
+
+    def test_explicit_positions_need_no_placement_state(self):
+        d = need(MEDIUM)
+        ref = attar.load(MEDIUM, DEV).restore('reference')
+        self.assertAlmostEqual(d.hpwl(ref.pos).item(), ref.hpwl().item(), delta=1e-3)
+        with tempfile.TemporaryDirectory() as t:       # unplaced: export writes the floorplan only (unchanged here)
+            d.export(t + '/fp.def')
+            self.assertTrue(filecmp.cmp(t + '/fp.def', d.manifest['source']['def']['path'], shallow=False))
+
+    def test_missing_facts_are_not_filled_in(self):
+        d = need(SMALL)
+        d.facts.pop('rows')                            # as if the source had no rows
+        self.assertEqual(d.missing('legalize'), ['placement', 'rows'])
+        self.assertIn('global_place', d.capabilities())
+
+    def test_snapshots_save_and_restore_solution_state(self):
+        d = need(SMALL).restore('reference')
+        h0 = d.hpwl().item()
+        d.snapshot('mine')
+        d.pos[d.movable] += 0.5
+        self.assertNotAlmostEqual(d.hpwl().item(), h0, places=3)
+        d.restore('mine')
+        self.assertAlmostEqual(d.hpwl().item(), h0, places=4)
+
+class DieTest(unittest.TestCase):
+    def test_2d_design_is_one_die_matching_the_def(self):
+        d = need(MEDIUM)
+        src = read_def(d.manifest['source']['def']['path'])
+        self.assertEqual(d.num_dies, 1)
+        np.testing.assert_allclose(d.die_box[0].cpu().numpy(), [v / src['dbu'] for v in src['die']], atol=1e-4)
+        self.assertEqual(int(d.cell_die.max()), 0)
+        self.assertEqual(int(d.row_die.max()), 0)
+        self.assertEqual(len(d.manifest['dies']), d.num_dies)
+
+    def test_core_and_rows_inside_the_die(self):
+        d = need(MEDIUM)
+        die, core = d.die_box[0], d.core_box[0]
+        self.assertTrue(bool((core[:2] >= die[:2]).all() and (core[2:] <= die[2:]).all()))
+        self.assertTrue(bool((d.row_box[:, :2] >= core[:2] - 1e-4).all() and (d.row_box[:, 2:] <= core[2:] + 1e-4).all()))
+        u = d.utilization()[0].item()
+        self.assertTrue(0.05 < u < 1.0, u)
+
+    def test_io_pins_are_signal_pins_on_the_die_edge(self):
+        d = need(MEDIUM)
+        self.assertEqual(len(d.io), d.manifest['counts']['terminals'])
+        self.assertTrue(bool(((d.flags[d.io] & TERMINAL) != 0).all()))
+        self.assertEqual(int((d.io_dir == 2).sum()), 0)        # no INOUT: VDD/VSS are not IO
+        b, p = d.die_box[0], d.io_pos
+        edge = torch.stack([p[:, 0] - b[0], b[2] - p[:, 0], p[:, 1] - b[1], b[3] - p[:, 1]], 1).min(1).values
+        self.assertLess(float(edge.max()), 0.1)
+
+class MacroTest(unittest.TestCase):
+    def test_macros_are_fixed_blocks_with_their_pins_inside(self):
+        for name in MACRO_DESIGNS:
+            d = need(name).restore('reference')
+            mac = torch.nonzero((d.flags & MACRO) != 0).flatten()
+            self.assertGreater(len(mac), 0, name)
+            self.assertTrue(bool(((d.flags[mac] & FIXED) != 0).all()), name)
+            on = torch.isin(d.p_cell, mac)
+            p = d.pin_pos()[on]; c = d.p_cell[on]
+            lo, hi = d.pos[c] - 1e-3, d.pos[c] + d.size[c] + 1e-3
+            inside = ((p >= lo) & (p <= hi)).all(1)
+            # pins may only stick out where the LEF itself puts them outside the outline (reported at distillation)
+            warned = any('outside' in w for w in d.manifest.get('warnings', []))
+            if warned:
+                self.assertLess(int((~inside).sum()), 0.1 * len(inside), name)
+            else:
+                self.assertTrue(bool(inside.all()), name)
+
+    def test_hpwl_matches_openroad_global_placement(self):
+        for name in MACRO_DESIGNS + [MEDIUM]:
+            ref = gpl_final_hpwl(name)
+            if ref is None:
+                continue
+            h = need(name).restore('reference').hpwl().item()
+            self.assertLess(abs(h - ref) / ref, 0.01, (name, h, ref))
+
+class VizTest(unittest.TestCase):
+    def test_plot_writes_a_png(self):
+        from attar.viz import plot
+        for name in (SMALL, MACRO_DESIGNS[0]):
+            d = need(name).restore('reference')
+            with tempfile.TemporaryDirectory() as t:
+                plot(d, t + '/x.png')
+                self.assertGreater(os.path.getsize(t + '/x.png'), 10000)
+
+    def test_unplaced_design_plots_without_cells_at_the_origin(self):
+        from attar.viz import plot
+        d = need(SMALL)                      # cells unplaced: drawn as a note, not as rectangles at (0, 0)
+        fig = plot(d)
+        self.assertTrue(any('unplaced' in x.get_text() for x in fig.axes[0].texts))
+
+class WritebackTest(unittest.TestCase):
+    def test_unchanged_reference_writes_back_the_source_byte_for_byte(self):
+        d = need(SMALL).restore('reference')
+        with tempfile.TemporaryDirectory() as t:
+            d.export(t + '/out.def')
+            self.assertTrue(filecmp.cmp(t + '/out.def', d.manifest['source']['def']['path'], shallow=False))
+
+    def test_moved_and_flipped_cells_survive_a_redistill(self):
+        d = need(SMALL).restore('reference')
+        g = torch.Generator().manual_seed(1)
+        mv = torch.nonzero(d.movable).flatten().cpu()
+        pick = mv[torch.randperm(len(mv), generator=g)[:40]].to(d.device)
+        site = float(d.raw['r_site_w'][0]) / d.dbu
+        d.pos[pick, 0] += 2 * site
+        d.orient[pick] = torch.tensor([0, 1, 4, 5], device=d.device)[torch.randint(0, 4, (len(pick),), generator=g).to(d.device)]
+        d.update_orient()
+        lefs = [l['path'] for l in d.manifest['source']['lef']]
+        with tempfile.TemporaryDirectory() as t:
+            d.export(t + '/moved.def')
+            attar.distill(t + '/moved.def', lefs, t + '/ir')
+            e = attar.load(t + '/ir', DEV)
+            self.assertAlmostEqual(e.hpwl().item(), d.hpwl().item(), delta=1e-3)
+            np.testing.assert_array_equal(e.orient.cpu().numpy(), d.orient.cpu().numpy())
+
+    def test_fixed_cells_and_terminals_are_not_written(self):
+        d = need(SMALL).restore('reference')
+        fixed = ((d.flags & (FIXED | TERMINAL)) != 0)
+        d.pos[fixed] += 5.0  # must be ignored by export
+        with tempfile.TemporaryDirectory() as t:
+            d.export(t + '/out.def')
+            self.assertTrue(filecmp.cmp(t + '/out.def', d.manifest['source']['def']['path'], shallow=False))
+
+class StatusTest(unittest.TestCase):
+    def test_status_checklist_and_tiers(self):
+        d = need(MEDIUM)
+        s = d.status(show=False)
+        self.assertIn('\u2705 netlist', s)                       # ✅
+        self.assertIn('\u274c timing', s)                        # ❌
+        self.assertIn('\u274c placement', s)
+        self.assertEqual(d.tier(), 'A')
+        self.assertIn('only a placement is missing', s)
+        d.restore('reference')
+        s = d.status(show=False)
+        self.assertIn('\u2705 placement', s)
+        self.assertIn('orfs_roundtrip.py', d.handoff_command('x.def'))
+
+    def test_tier_b_and_the_gap_to_a(self):
+        try:
+            n = attar.load('ns3k/aes', DEV)            # NS3K: DEF write-back, no slow loop here
+        except FileNotFoundError:
+            raise unittest.SkipTest('no ns3k zoo')
+        self.assertEqual(n.tier(), 'B')
+        self.assertIn('slow_loop', n.missing('orfs_handoff'))
+        with self.assertRaises(MissingFacts):
+            n.handoff_command('x.def')
+
+    def test_plot_method(self):
+        d = need(SMALL).restore('reference')
+        with tempfile.TemporaryDirectory() as t:
+            d.plot(t + '/p.png')
+            self.assertGreater(os.path.getsize(t + '/p.png'), 10000)
+
+
+if __name__ == '__main__':
+    unittest.main()

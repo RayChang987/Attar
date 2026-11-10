@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 870" width="1280" height="870">
+<defs><marker id="ah_ink" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="15" markerHeight="15" markerUnits="userSpaceOnUse" orient="auto"><path d="M 0 0 L 12 6 L 0 12 z" fill="#6b5d52"/></marker><marker id="ah_terra" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="15" markerHeight="15" markerUnits="userSpaceOnUse" orient="auto"><path d="M 0 0 L 12 6 L 0 12 z" fill="#d9622b"/></marker><marker id="ah_amber" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="15" markerHeight="15" markerUnits="userSpaceOnUse" orient="auto"><path d="M 0 0 L 12 6 L 0 12 z" fill="#d99a1e"/></marker><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="7"/></filter></defs>
+<rect width="1280" height="870" rx="22" fill="#fbf8f3"/>
+<rect x="770" y="28" width="482" height="814" rx="22" fill="#f9e6d8"/>
+<text x="796" y="66" font-size="19" fill="#b44a1c" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Fast loop</text>
+<text x="918.02" y="66" font-size="17" fill="#b44a1c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Seconds, on the GPU</text>
+<rect x="28" y="494" width="712" height="348" rx="22" fill="#f1e9dd"/>
+<text x="54" y="532" font-size="19" fill="#a8946f" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Slow loop</text>
+<text x="176.02" y="532" font-size="17" fill="#a8946f" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Minutes to hours, ORFS + ASAP7</text>
+<text x="54" y="66" font-size="19" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Any source</text>
+<rect x="42" y="96" width="286" height="96" rx="14" fill="#000" opacity="0.045"/>
+<rect x="40" y="92" width="286" height="96" rx="14" fill="#fffdf9" stroke="#a8946f" stroke-width="1.6"/>
+<text x="183" y="136.45" font-size="22" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">LEF / DEF</text>
+<text x="183" y="167.95" font-size="15.5" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ORFS, ISPD 15/18/19/24, ICCAD 25</text>
+<path d="M 326 140 L 350 140" stroke="#6b5d52" stroke-width="2.4"/>
+<rect x="42" y="212" width="286" height="96" rx="14" fill="#000" opacity="0.045"/>
+<rect x="40" y="208" width="286" height="96" rx="14" fill="#fffdf9" stroke="#a8946f" stroke-width="1.6"/>
+<text x="183" y="252.45" font-size="22" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Bookshelf</text>
+<text x="183" y="283.95" font-size="15.5" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ISPD 05, IBM-HB+, GSRC</text>
+<path d="M 326 256 L 350 256" stroke="#6b5d52" stroke-width="2.4"/>
+<rect x="42" y="328" width="286" height="96" rx="14" fill="#000" opacity="0.045"/>
+<rect x="40" y="324" width="286" height="96" rx="14" fill="#fffdf9" stroke="#a8946f" stroke-width="1.6"/>
+<text x="183" y="368.45" font-size="22" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">YAL, GSRC blocks</text>
+<text x="183" y="399.95" font-size="15.5" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">MCNC, GSRC</text>
+<path d="M 326 372 L 350 372" stroke="#6b5d52" stroke-width="2.4"/>
+<path d="M 350 140 L 350 372" stroke="#6b5d52" stroke-width="2.4"/>
+<rect x="492" y="174" width="210" height="172" rx="14" fill="#000" opacity="0.045"/>
+<rect x="490" y="170" width="210" height="172" rx="14" fill="#ecdfc8" stroke="#a8946f" stroke-width="1.6"/>
+<text x="595" y="216.4" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Attar IR</text>
+<text x="595" y="249.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Safetensors</text>
+<text x="595" y="272.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">+ manifest</text>
+<text x="595" y="295.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Facts +</text>
+<text x="595" y="318.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">provenance</text>
+<path d="M 350 256 L 486 256" fill="none" stroke="#6b5d52" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_ink)"/>
+<rect x="367.4" y="241" width="93.2" height="30" rx="15" fill="#6b5d52"/><text x="414" y="261.76" font-size="16" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Distill</text>
+<rect x="812" y="108" width="410" height="140" rx="14" fill="#000" opacity="0.045"/>
+<rect x="810" y="104" width="410" height="140" rx="14" fill="#d9622b" stroke="#b44a1c" stroke-width="1.6"/>
+<text x="1015" y="160" font-size="30" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Design</text>
+<text x="1015" y="193.5" font-size="17.5" fill="#fde7d6" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">GPU tensors: cells, pins, nets, rows</text>
+<text x="1015" y="217" font-size="17.5" fill="#fde7d6" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Facts → what it can do</text>
+<path d="M 700 198 L 806 198" fill="none" stroke="#6b5d52" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_ink)"/>
+<rect x="711.8" y="183" width="64.4" height="30" rx="15" fill="#6b5d52"/><text x="744" y="203.76" font-size="16" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Load</text>
+<rect x="794" y="364" width="222" height="206" rx="14" fill="#000" opacity="0.045"/>
+<rect x="792" y="360" width="222" height="206" rx="14" fill="#fffdf9" stroke="#d9622b" stroke-width="1.6"/>
+<text x="903" y="413.2" font-size="22" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace">attar.naive</text>
+<text x="903" y="445.2" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace">make_die</text>
+<text x="903" y="467.2" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace">place_io</text>
+<text x="903" y="489.2" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace">place_macros</text>
+<text x="903" y="511.2" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace">global_place</text>
+<text x="903" y="533.2" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace">legalize</text>
+<rect x="1032" y="364" width="210" height="206" rx="14" fill="#000" opacity="0.045"/>
+<rect x="1030" y="360" width="210" height="206" rx="14" fill="#fffdf9" stroke="#d9622b" stroke-width="1.6"/>
+<text x="1135" y="413.9" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Evaluator</text>
+<text x="1135" y="445.9" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">HPWL</text>
+<text x="1135" y="467.9" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Steiner</text>
+<text x="1135" y="489.9" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">RUDY</text>
+<text x="1135" y="511.9" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Overflow</text>
+<text x="1135" y="533.9" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Legality</text>
+<rect x="792" y="620" width="222" height="104" rx="14" fill="#fffdf9" stroke="#d9622b" stroke-width="1.6" stroke-dasharray="7 6"/>
+<text x="903" y="656.35" font-size="21" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Your algorithm</text>
+<text x="903" y="688.35" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">A function of</text>
+<text x="903" y="710.35" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">the tensors</text>
+<path d="M 903 620 L 903 566" stroke="#d9622b" stroke-width="2" stroke-dasharray="6 5"/>
+<path d="M 850 244 L 850 354" fill="none" stroke="#d9622b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_terra)"/>
+<rect x="817.8" y="285" width="64.4" height="30" rx="15" fill="#d9622b"/><text x="850" y="305.76" font-size="16" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Move</text>
+<path d="M 966 360 L 966 250" fill="none" stroke="#d9622b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_terra)"/>
+<rect x="909.8" y="285" width="112.4" height="30" rx="15" fill="#d9622b"/><text x="966" y="305.76" font-size="16" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">New facts</text>
+<path d="M 1135 244 L 1135 354" fill="none" stroke="#d9622b" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_terra)"/>
+<rect x="1088.4" y="285" width="93.2" height="30" rx="15" fill="#d9622b"/><text x="1135" y="305.76" font-size="16" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Measure</text>
+<path d="M 810 232 L 748 232 L 748 452 L 130 452 L 130 600" fill="none" stroke="#6b5d52" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_ink)"/>
+<rect x="398.2" y="437" width="83.6" height="30" rx="15" fill="#6b5d52"/><text x="440" y="457.76" font-size="16" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Export</text>
+<rect x="46" y="610" width="172" height="136" rx="14" fill="#000" opacity="0.045"/>
+<rect x="44" y="606" width="172" height="136" rx="14" fill="#fffdf9" stroke="#b9a993" stroke-width="1.6"/>
+<text x="130" y="658.4" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">DEF</text>
+<text x="130" y="691.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Placement</text>
+<text x="130" y="714.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Floorplan</text>
+<rect x="284" y="580" width="204" height="196" rx="14" fill="#000" opacity="0.045"/>
+<rect x="282" y="576" width="204" height="196" rx="14" fill="#fffdf9" stroke="#a8946f" stroke-width="1.6"/>
+<text x="384" y="646.75" font-size="25" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ORFS</text>
+<text x="384" y="679.75" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Tapcell, PDN</text>
+<text x="384" y="702.75" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">CTS, routing</text>
+<text x="384" y="725.75" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">STA</text>
+<rect x="554" y="580" width="168" height="196" rx="14" fill="#000" opacity="0.045"/>
+<rect x="552" y="576" width="168" height="196" rx="14" fill="#ecdfc8" stroke="#a8946f" stroke-width="1.6"/>
+<text x="636" y="646.4" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Truth</text>
+<text x="636" y="679.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Routed WL</text>
+<text x="636" y="702.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">DRC</text>
+<text x="636" y="725.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">WNS, TNS</text>
+<path d="M 216 674 L 276 674" fill="none" stroke="#6b5d52" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_ink)"/>
+<path d="M 486 674 L 546 674" fill="none" stroke="#6b5d52" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_ink)"/>
+<path d="M 1135 566 L 1135 808 L 636 808 L 636 778" fill="none" stroke="#d99a1e" stroke-width="2.4" stroke-dasharray="9 7" stroke-linejoin="round" marker-end="url(#ah_amber)"/>
+<rect x="819.8" y="793" width="160.4" height="30" rx="15" fill="#d99a1e"/><text x="900" y="813.76" font-size="16" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Do they agree?</text>
+</svg>

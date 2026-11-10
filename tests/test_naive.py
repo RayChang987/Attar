@@ -1,0 +1,223 @@
+"""Naive engines: global placement, legalization, rail parity."""
+import tempfile  # noqa: F401
+import unittest
+
+import torch  # noqa: F401
+
+from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, BOOKSHELF, need, attar
+
+
+class NaiveTest(unittest.TestCase):
+    def test_pava_pack_matches_sequential_abacus(self):
+        from attar.naive.lg import _pack
+        import random
+        random.seed(3)
+        for util in (0.3, 0.7, 0.98):
+            for _ in range(20):
+                cap = random.randint(50, 300); ws = []
+                while sum(ws) < util * cap:
+                    ws.append(random.randint(1, 8))
+                ws = ws[:-1] or [1]
+                xs = sorted(random.uniform(-5, cap + 5) for _ in ws)
+                pre = [sum(ws[:i]) for i in range(len(ws))]
+                st = []
+                for v in [xs[i] - pre[i] for i in range(len(xs))]:
+                    st.append([v, 1])
+                    while len(st) > 1 and st[-2][0] / st[-2][1] > st[-1][0] / st[-1][1]:
+                        a = st.pop(); st[-1][0] += a[0]; st[-1][1] += a[1]
+                z = [s_ / c for s_, c in st for _ in range(c)]
+                ref = [min(max(round(v), 0), cap - sum(ws)) + pre[i] for i, v in enumerate(z)]
+                out = _pack(torch.zeros(len(ws), dtype=torch.long), torch.tensor(xs, dtype=torch.float64),
+                            torch.tensor(ws, dtype=torch.float64), torch.tensor([0.0], dtype=torch.float64),
+                            torch.tensor([float(cap)], dtype=torch.float64))
+                self.assertEqual(out.tolist(), [float(v) for v in ref])
+
+    def test_global_place_then_legalize_is_legal(self):
+        from attar import naive
+        for name in (SMALL, MACRO_DESIGNS[0]):
+            d = need(name)
+            self.assertNotIn('hpwl', d.capabilities())
+            r = naive.global_place(d, verbose=False)
+            self.assertIn('legalize', d.capabilities())                # placement is now a fact
+            self.assertLess(r['overflow'], 0.1)
+            naive.legalize(d, verbose=False)
+            self.assertTrue(attar.Evaluator(d).legality()['legal'], name)
+            self.assertIn('naive_lg', d.snapshots)
+
+    def test_multi_row_height_cells_are_legalized(self):
+        from attar import naive
+        try:
+            d = attar.load('ns3k/serv', DEV)               # NS3K: 2-row flip-flops among 1-row cells
+        except FileNotFoundError:
+            raise unittest.SkipTest('no ns3k zoo')
+        naive.global_place(d, verbose=False)
+        st = naive.legalize(d, verbose=False)
+        self.assertTrue(any(str(c).startswith('2') for c in st['classes']))
+        self.assertTrue(attar.Evaluator(d).legality()['legal'])
+
+class RailTest(unittest.TestCase):
+    def test_rails_follow_openroad_rules(self):
+        from attar import rails as RL
+        d = need(MEDIUM)                                          # ASAP7: VSS at the bottom of single-row cells
+        I = RL.info(d)
+        self.assertTrue(I['known'])
+        self.assertEqual(I['ref'], (RL.VSS, RL.VDD))
+        _, ys, _, _, _, orient = RL.base_rows(d)
+        n_rows = orient == 0
+        self.assertTrue(bool((I['row_bot'][n_rows] == RL.VSS).all()))      # R0 rows: reference rails
+        self.assertTrue(bool((I['row_bot'][~n_rows] == RL.VDD).all()))     # flipped rows: swapped
+        b = need(BOOKSHELF)
+        self.assertFalse(RL.info(b)['known'])                     # Bookshelf: no rails, no constraint
+
+    def test_even_height_cells_need_matching_rows(self):
+        from attar import rails as RL
+        rb = torch.tensor([RL.VDD, RL.VSS, RL.VDD, RL.VSS]); rt = torch.tensor([RL.VSS, RL.VDD, RL.VSS, RL.VDD])
+        keep, flip = RL.compatible(torch.tensor([RL.VDD]), torch.tensor([RL.VDD]), torch.tensor([2]), rb, rt)
+        self.assertEqual((keep | flip)[0].tolist(), [True, False, True, False])   # VDD/VDD 2-row cell: VDD rows only
+        keep, flip = RL.compatible(torch.tensor([RL.VSS]), torch.tensor([RL.VDD]), torch.tensor([1]), rb, rt)
+        self.assertEqual((keep | flip)[0].tolist(), [True, True, True, True])      # single-row: anywhere, flipped
+
+    def test_checker_catches_wrong_parity_and_lg_respects_it(self):
+        from attar import naive
+        try:
+            d = attar.load('ns3k/aes', DEV)
+        except FileNotFoundError:
+            raise unittest.SkipTest('no ns3k zoo')
+        naive.global_place(d, verbose=False)
+        naive.legalize(d, verbose=False)
+        lg = attar.Evaluator(d).legality()
+        self.assertTrue(lg['legal'], lg)
+        hb = d.row_h.min()
+        two = torch.nonzero(d.movable & ((d.size[:, 1] / hb).round() == 2)).flatten()[:20]
+        d.pos[two, 1] += hb                                        # one row up: wrong rails
+        self.assertEqual(attar.Evaluator(d).legality()['wrong_rail'], 20)
+
+    def test_rows_spanned_counts_partial_overlaps(self):
+        from attar.rails import rows_spanned
+        ys = torch.arange(10, dtype=torch.float32) * 0.27
+        lo, hi = rows_spanned(ys, 0.27, torch.tensor([0.27 * 2 + 0.2]), torch.tensor([0.27 * 5 + 0.01]))
+        self.assertEqual((lo.item(), hi.item()), (2, 6))           # bottom and top rows partly covered count
+        y0 = torch.tensor([0.27 * 3], dtype=torch.float32)
+        lo, hi = rows_spanned(ys, 0.27, y0, y0 + 0.54)            # an on-grid 2-row cell: exactly 2 rows
+        self.assertEqual((lo.item(), hi.item()), (3, 5))
+
+
+
+class FloorplanTest(unittest.TestCase):
+    def test_io_placement_unlocks_global_placement(self):
+        from attar import naive
+        try:
+            d = attar.load('orfs_asap7_3_2/aes', DEV)              # ORFS before its IO placement
+        except FileNotFoundError:
+            raise unittest.SkipTest('no 3_2 zoo')
+        self.assertEqual(d.missing('global_place'), ['floorplan.io'])
+        naive.place_io(d, verbose=False)
+        self.assertIn('global_place', d.capabilities())
+        self.assertIn('writeback', d.facts)                      # export writes the IO pins
+        self.assertNotIn('slow_loop', d.facts)                   # but ORFS 3_2 has built taps/PDN already
+        b = d.die_box[0]
+        p = d.io_pos
+        edge = torch.stack([p[:, 0] - b[0], b[2] - p[:, 0], p[:, 1] - b[1], b[3] - p[:, 1]], 1).min(1).values
+        self.assertLess(float(edge.abs().max()), 1e-3)             # every pin on the boundary
+        o = torch.argsort(p[:, 0] * 1e4 + p[:, 1])
+        q = p[o]
+        same = (q[1:] - q[:-1]).abs().sum(1) < 1e-6
+        self.assertFalse(bool(same.any()))                          # no two pins on one spot
+
+    def test_macro_placement_then_cells_is_legal(self):
+        from attar import naive
+        try:
+            d = attar.load('orfs_asap7_2_1/riscv32i', DEV)         # ORFS floorplan: IO pins and macros unplaced
+        except FileNotFoundError:
+            raise unittest.SkipTest('no 2_1 zoo')
+        self.assertEqual(d.capabilities(), ['die_size', 'export', 'io_place', 'plot', 'wirelength_model'])
+        naive.place_io(d, verbose=False)
+        self.assertIn('macro_place', d.capabilities())
+        self.assertNotIn('global_place', d.capabilities())          # macros still unplaced
+        r = naive.place_macros(d, verbose=False)
+        self.assertEqual(r['overlapping_pairs'], 0)
+        self.assertIn('global_place', d.capabilities())
+        naive.global_place(d, verbose=False)
+        naive.legalize(d, verbose=False)
+        self.assertTrue(attar.Evaluator(d).legality()['legal'])
+        m = d.macros
+        core = d.core_box[0]
+        self.assertTrue(bool((d.pos[m] >= core[:2] - 1e-3).all() and (d.pos[m] + d.size[m] <= core[2:] + 1e-3).all()))
+
+    def test_new_die_for_a_utilization_then_place_is_legal(self):
+        d = need(SMALL)                                  # gcd after ORFS GP: IO pins, tap cells placed in its die
+        d.floorplan(utilization=0.5, aspect_ratio=1.5, verbose=False)
+        self.assertAlmostEqual(float(d.utilization()[0]), 0.5, delta=0.02)
+        core = d.core_box[0]
+        self.assertAlmostEqual(float((core[3] - core[1]) / (core[2] - core[0])), 1.5, delta=0.1)
+        self.assertTrue(d.facts['floorplan.die'].startswith('naive:make_die'))
+        self.assertIn('floorplan.io', d.facts); self.assertIn('floorplan.macros', d.facts)
+        self.assertNotIn('placement', d.present)          # the floorplan leaves the cells to the placer
+        self.assertIn('writeback', d.facts)               # export rewrites DIEAREA, ROWs, TRACKS
+        self.assertNotIn('slow_loop', d.facts)            # gcd comes from ORFS 3_3: no floorplan hand-off
+        self.assertEqual(d.snapshots, {})
+        r = d.place(verbose=False)
+        self.assertTrue(r['legal'])                       # legality includes rail parity on the new rows
+        b = d.die_box[0]; p = d.io_pos
+        edge = torch.stack([p[:, 0] - b[0], b[2] - p[:, 0], p[:, 1] - b[1], b[3] - p[:, 1]], 1).min(1).values
+        self.assertLess(float(edge.abs().max()), 1e-3)
+
+    def test_naive_floorplan_writes_back_and_redistills(self):
+        try:
+            d = attar.load('orfs_asap7_2_1/riscv32i', DEV)
+        except FileNotFoundError:
+            raise unittest.SkipTest('no 2_1 zoo')
+        d.floorplan(utilization=0.5, verbose=False)
+        d.place(verbose=False)
+        self.assertIn('slow_loop', d.facts)                     # ORFS 2_1: the floorplan can be handed off
+        self.assertIn('orfs_floorplan_handoff', d.capabilities())
+        lefs = [l['path'] for l in d.manifest['source']['lef']]
+        with tempfile.TemporaryDirectory() as t:
+            r = d.export(t + '/fp.def')
+            self.assertEqual((r['pins'], r['die']), (len(d.io), 1))
+            attar.distill(t + '/fp.def', lefs, t + '/ir')
+            e = attar.load(t + '/ir', DEV)
+        self.assertEqual(e.manifest['io_unplaced'], 0); self.assertEqual(e.manifest['macros_unplaced'], 0)
+        self.assertTrue(torch.allclose(e.die_box, d.die_box, atol=1e-3))
+        self.assertEqual(len(e.row_h), len(d.row_h))
+        self.assertAlmostEqual(e.hpwl().item(), d.hpwl().item(), delta=1e-3 * d.hpwl().item())   # pins sit 1/2 shape inside
+        self.assertTrue(attar.Evaluator(e).legality()['legal'])
+
+    def test_macro_pins_land_on_their_tracks(self):
+        from attar import naive
+        from attar.lef import read_lef
+        try:
+            d = attar.load('orfs_asap7_2_1/riscv32i', DEV)
+        except FileNotFoundError:
+            raise unittest.SkipTest('no 2_1 zoo')
+        naive.place_io(d, verbose=False)
+        naive.place_macros(d, verbose=False)
+        lefs, _ = read_lef([l['path'] for l in d.manifest['source']['lef']])
+        tracks = d._source_tracks()
+        start, step = tracks[('Y', 'M4')]
+        for i in d.macros.tolist():
+            M = lefs[d.names['masters'][d.raw['c_master'][i]]]
+            y = round(float(d.pos[i, 1]) * d.dbu)
+            for pn, (b, use) in M.pins.items():
+                if use == 'SIGNAL' and M.pin_layer.get(pn) == 'M4':      # horizontal: on a Y track
+                    self.assertEqual((y + round((b[1] + b[3]) / 2 * d.dbu) - start) % step, 0, pn)
+
+    def test_sweep_line_macro_legalization(self):
+        from attar import naive
+        d = need('mcnc/ami49')
+        r = naive.place_macros(d, legalizer='sweep', verbose=False)
+        self.assertEqual(r['overlapping_pairs'], 0)
+        self.assertTrue(r['legalizer'].startswith('sweep'))
+        m = d.macros; b = d.core_box[0]
+        self.assertTrue(bool((d.pos[m] >= b[:2] - 1e-3).all() and (d.pos[m] + d.size[m] <= b[2:] + 1e-3).all()))
+
+    def test_floorplan_places_only_what_is_missing(self):
+        d = need(SMALL)                                  # IO pins and macros come placed with the source
+        io0 = d.io_pos.clone()
+        d.floorplan(verbose=False)
+        self.assertTrue(torch.equal(d.io_pos, io0))
+        self.assertIn('writeback', d.facts)
+
+
+if __name__ == '__main__':
+    unittest.main()

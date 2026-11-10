@@ -1,0 +1,110 @@
+[
+ {
+  "design": "aes",
+  "cells": 12420,
+  "hpwl_attar": 40690.796875,
+  "hpwl_openroad": 40690.7975,
+  "hpwl_rel_diff": -1.5359738259057565e-08,
+  "hpwl_gpl_log": 40677.94,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
+  "design": "cva6",
+  "cells": 124618,
+  "hpwl_attar": 475600.1875,
+  "hpwl_openroad": 475600.2145,
+  "hpwl_rel_diff": -5.677036973850136e-08,
+  "hpwl_gpl_log": 476566.93,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
+  "design": "ethmac",
+  "cells": 59653,
+  "hpwl_attar": 141021.0,
+  "hpwl_openroad": 141020.972,
+  "hpwl_rel_diff": 1.9855202815222128e-07,
+  "hpwl_gpl_log": 141962.86,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
+  "design": "gcd",
+  "cells": 412,
+  "hpwl_attar": 579.37646484375,
+  "hpwl_openroad": 579.3765,
+  "hpwl_rel_diff": -6.06794544610878e-08,
+  "hpwl_gpl_log": 580.83,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
+  "design": "ibex",
+  "cells": 21076,
+  "hpwl_attar": 66060.546875,
+  "hpwl_openroad": 66060.553,
+  "hpwl_rel_diff": -9.271796441723268e-08,
+  "hpwl_gpl_log": 66212.84,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
+  "design": "jpeg",
+  "cells": 57891,
+  "hpwl_attar": 126376.96875,
+  "hpwl_openroad": 126376.959,
+  "hpwl_rel_diff": 7.715013938813797e-08,
+  "hpwl_gpl_log": 126544.93,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
+  "design": "riscv32i",
+  "cells": 10106,
+  "hpwl_attar": 42491.9453125,
+  "hpwl_openroad": 42491.9445,
+  "hpwl_rel_diff": 1.912127145509146e-08,
+  "hpwl_gpl_log": 42556.16,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
+  "design": "swerv_wrapper",
+  "cells": 114086,
+  "hpwl_attar": 732124.625,
+  "hpwl_openroad": 732124.703,
+  "hpwl_rel_diff": -1.0653922710712749e-07,
+  "hpwl_gpl_log": 732321.98,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
+  "design": "tinyRocket",
+  "cells": 32292,
+  "hpwl_attar": 119581.8515625,
+  "hpwl_openroad": 119581.856,
+  "hpwl_rel_diff": -3.710847240601112e-08,
+  "hpwl_gpl_log": 119819.56,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ }
+]

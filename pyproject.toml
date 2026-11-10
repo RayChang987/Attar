@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "attar"
+version = "0.1.0"
+description = "The fast loop for physical design: any benchmark as GPU tensors, place and evaluate in seconds, validate in ORFS"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+dependencies = ["torch>=2.0", "numpy", "matplotlib"]
+
+[project.optional-dependencies]
+docs = ["pillow", "pygments"]
+
+[tool.setuptools.packages.find]
+include = ["attar*"]
