@@ -12,3 +12,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 build/
+
+# PLY parser tables (generated)
+parser.out
+parsetab.py
