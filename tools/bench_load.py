@@ -10,7 +10,7 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import attar  # noqa: E402
 from attar import st  # noqa: E402
-from attar.design import ZOO  # noqa: E402
+from attar.paths import zoo_dir  # noqa: E402
 
 dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -32,7 +32,7 @@ torch.zeros(1, device=dev); sync()  # CUDA context outside the timings
 print('%-22s %9s %8s %7s %7s %7s %7s %8s %9s %8s %8s' % ('design', 'cells', 'nets', 'macros', 'IR MB', 'read s', 'load s',
                                                         'names s', 'HPWL ms', 'WA f+b ms', 'GPU MB'))
 for name in sys.argv[1:]:
-    path = os.path.join(ZOO, name)
+    path = os.path.join(zoo_dir(), name)
     size = sum(os.path.getsize(os.path.join(path, f)) for f in os.listdir(path)) / 1e6
     _, t_read = timed(lambda: st.load(os.path.join(path, 'core.safetensors')))
     if dev == 'cuda':

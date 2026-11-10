@@ -9,7 +9,7 @@ description = "The fast loop for physical design: any benchmark as GPU tensors, 
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
-dependencies = ["torch>=2.0", "numpy", "matplotlib"]
+dependencies = ["torch>=2.0", "numpy", "matplotlib", "huggingface_hub>=0.20"]
 
 [project.optional-dependencies]
 docs = ["pillow", "pygments"]

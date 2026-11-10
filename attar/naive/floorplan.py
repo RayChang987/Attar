@@ -365,7 +365,7 @@ def place_macros(d, halo=None, target_density=0.9, legalizer='auto', verbose=Tru
     ov = _overlapping(p, size)
     res = {'macros': len(mac), 'legalizer': how, 'halo': res_halo, 'gp_iterations': gp['iterations'], 'legalize_iterations': it + it2,
            'displacement': float((p - mixed_pos).abs().sum(1).mean()),
-           'grid_placed': moved, 'no_spot': len(failed), 'overlapping_pairs': int(ov.sum()) // 2, 'seconds': time.time() - t0}
+           'grid': d.macro_grid_source, 'grid_placed': moved, 'no_spot': len(failed), 'overlapping_pairs': int(ov.sum()) // 2, 'seconds': time.time() - t0}
     if verbose:
         print('  macros: %d placed (mixed-size GP %d it, %s legalization, mean move %.3g%s), %d overlapping pairs, %.2fs'
               % (len(mac), gp['iterations'], how, res['displacement'], ', %d to free grid spots' % moved if moved else '',

@@ -10,13 +10,16 @@ on the ASAP7 PDK, run from the docker image `openroad/orfs:26Q4-368-g9ca2a9e76`.
 tools/orfs_run_to_gp.sh <design>             # ORFS up to 3_3_place_gp into orfs_runs/<design>_base
 tools/orfs_run_baseline.sh <design>          # the full flow (the baseline to compare against)
 python tools/distill_orfs.py <design>        # 3_3 -> zoo/orfs_asap7/<design>
-STAGE=2_1_floorplan python tools/distill_orfs.py <design>   # floorplan stage -> zoo/orfs_asap7_2_1/<design>
+python tools/distill_orfs.py <design> --stage 2_1_floorplan   # floorplan stage -> zoo/orfs_asap7_2_1/<design>
 ```
+
+Each stage's DEF stays in `orfs_runs/rt/<design>/<stage>.def`: it is the source of the distillation and the
+template `Design.export` stamps a result onto. `--reuse` distills an existing one again without docker.
 
 ## Two injection points
 
-**Placement (3_3).** `tools/orfs_roundtrip.py <design> <run> [identity|perturb|jitterN|def=<path>]` writes a
-placement back into the 3_3 DEF, applies its COMPONENTS to `3_3_place_gp.odb` (`read_def -incremental`) in a copy
+**Placement (3_3).** `tools/orfs_roundtrip.py <design> <run> [identity|perturb|jitterN|def=<path>]` stamps a
+placement onto the 3_3 DEF (`--stage 3_2_place_iop` injects before ORFS's global placement instead), applies its COMPONENTS to `3_3_place_gp.odb` (`read_def -incremental`) in a copy
 of the run, and lets ORFS finish: resize, detailed placement, CTS, global and detailed routing, reports.
 
 **Floorplan (2_1).** `tools/orfs_handoff.py <design> <run> <exported DEF> [tag]` applies the die, rows, tracks, IO
@@ -31,7 +34,8 @@ tapcells, PDN, global placement, CTS and routing. Its `place_pins` and `-place_i
 tool checks the final DEF to confirm that every macro and pin stayed put.
 
 Both tools write their summary to `orfs_runs/results/<design>/` and delete their run copy (full ORFS runs) unless
-`KEEP=1`.
+`--keep`. `--cores` sets make's NUM_CORES, `orfs_roundtrip.py --par` the runs at once, and `orfs_handoff.py
+--make-args` passes extra make variables (use the same as the baseline).
 
 ## Agreement checks
 

@@ -14,10 +14,10 @@ import time
 import numpy as np
 
 from . import st
-from .deffile import ORIENT_ID, read_def
+from .deffile import ORIENT_ID, netlist_fingerprint, read_def
 from .lef import read_lef
 
-SCHEMA = 'attar-ir/0.4'
+SCHEMA = 'attar-ir/0.5'
 IO_DIR = {'INPUT': 0, 'OUTPUT': 1, 'INOUT': 2, 'FEEDTHRU': 3}
 
 # c_flags bits
@@ -46,6 +46,12 @@ def save_arrays(out_dir, core, tp=None):
         st.save(os.path.join(out_dir, 'tech_profile.safetensors'), tp, {'schema': SCHEMA})
 
 
+def source_ref(path):
+    """How a manifest records a source file: its name and sha256, never a path (the IR is self-contained; a file
+    is handed over again only where it is used, e.g. the DEF Design.export stamps the design onto)."""
+    return {'name': os.path.basename(path), 'sha256': _sha256(path)}
+
+
 def save_names_manifest(out_dir, names, manifest):
     with gzip.open(os.path.join(out_dir, 'names.json.gz'), 'wt') as f:
         json.dump(names, f, separators=(',', ':'))
@@ -71,13 +77,17 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     m_size = np.array([[q(macros[m].w), q(macros[m].h)] for m in used], np.int32).reshape(-1, 2)
     cls = lambda c: M_CORE if c == 'CORE' else M_BLOCK if c == 'BLOCK' else M_PAD if c == 'PAD' else M_OTHER
     m_class = np.array([cls(macros[m].cls) for m in used], np.uint8)
-    m_pin_ptr = [0]; m_pin_box = []; m_pin_use = []; mpin_names = []; mpin_id = {}
+    # routing layers (the tech profile's order); each master pin's layer is an index into them (-1: not a routing layer)
+    layers = [l for l in tech['layers'] if 'pitch' in l]
+    lid = {l['name']: i for i, l in enumerate(layers)}
+    m_pin_ptr = [0]; m_pin_box = []; m_pin_use = []; m_pin_layer = []; mpin_names = []; mpin_id = {}
     for m in used:
         names = sorted(macros[m].pins)
         for p in names:
             box, use = macros[m].pins[p]
             mpin_id[(m, p)] = len(m_pin_box)
             m_pin_box.append([q(v) for v in box]); m_pin_use.append(_USE.get(use, U_SIGNAL))
+            m_pin_layer.append(lid.get(macros[m].pin_layer.get(p), -1))
         m_pin_ptr.append(len(m_pin_box)); mpin_names.append(names)
 
     # cells: components, then IO pins as zero-size fixed terminals
@@ -157,8 +167,14 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
         'io_cell': np.arange(len(comps), N, dtype=np.int32),
         'io_dir': io_dir,
     }
+    # routing tracks of the DEF (pin access: macro pins must sit on them), one row per (axis, layer)
+    trk = [t for t in d['tracks'] if t[4] in lid]
+    core.update({'m_pin_layer': np.array(m_pin_layer, np.int16),
+                 'tr_axis': np.array([0 if t[0] == 'X' else 1 for t in trk], np.uint8),
+                 'tr_start': np.array([t[1] for t in trk], np.int32), 'tr_num': np.array([t[2] for t in trk], np.int32),
+                 'tr_step': np.array([t[3] for t in trk], np.int32), 'tr_layer': np.array([lid[t[4]] for t in trk], np.int16),
+                 'tr_die': np.zeros(len(trk), np.uint8)})
     core.update(ref)
-    layers = [l for l in tech['layers'] if 'pitch' in l]
     tp = {'layer_dir': np.array([0 if l.get('direction') == 'HORIZONTAL' else 1 for l in layers], np.uint8),
           'layer_pitch': np.array([q(l['pitch']) for l in layers], np.int32),
           'layer_width': np.array([q(l.get('width', 0)) for l in layers], np.int32),
@@ -174,15 +190,16 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     manifest = {
         'schema': SCHEMA,
         'design': d['design'],
-        'source': {'format': 'lefdef', 'def': {'path': os.path.abspath(def_path), 'sha256': _sha256(def_path)},
-                   'lef': [{'path': os.path.abspath(p), 'sha256': _sha256(p)} for p in lef_paths],
-                   'lib': [{'path': os.path.abspath(p), 'sha256': _sha256(p)} for p in lib_paths]},
+        'source': {'format': 'lefdef', 'def': source_ref(def_path), 'lef': [source_ref(p) for p in lef_paths],
+                   'lib': [source_ref(p) for p in lib_paths]},
+        'netlist_sha256': netlist_fingerprint(d),
         'dbu': dbu,
         'dies': [{'name': 'die0', 'tech_profile': 'tech_profile.safetensors'}],
         # facts this source provides, with provenance (spec 5.1); missing facts are absent, never filled in.
         # Placement blockages are counted but not stored yet, so 'constraints' is not claimed.
         'facts': dict([('netlist', 'def'), ('cell_geometry', 'lef'), ('pin_offsets', 'lef'), ('floorplan.die', 'def'),
-                       ('writeback', 'def')] + ([('rows', 'def')] if rows else [])
+                       ('cell_library', 'lef')] + ([('rows', 'def')] if rows else [])
+                      + ([('tracks', 'def+lef')] if trk else [])
                       + ([('floorplan.io', 'def')] if io_unplaced == 0 else [])
                       + ([('floorplan.macros', 'def')] if macros_unplaced == 0 else [])),
         'io_unplaced': io_unplaced,
@@ -191,7 +208,6 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
         'not_stored': {k: int(v) for k, v in (('placement_blockages', d['blockages']), ('fence_regions', d['regions']),
                                               ('region_groups', d['groups'])) if v},
         'fidelity': 'F1' if lib_paths else 'F2',
-        'writeback': True,
         'reference_placement': reference,
         'placed': bool((c_flags[movable] & PLACED).all()) if movable.any() else True,
         'counts': {'cells': int(len(comps)), 'movable': int(movable.sum()), 'macros': int(((c_flags & MACRO) > 0).sum()),

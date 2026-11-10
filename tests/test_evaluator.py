@@ -4,7 +4,7 @@ import unittest
 import numpy as np  # noqa: F401
 import torch  # noqa: F401
 
-from common import DEV, SMALL, MEDIUM, BOOKSHELF, need, bookshelf_hpwl_numpy, attar
+from common import DEV, SMALL, MEDIUM, BOOKSHELF, need, bookshelf_hpwl_numpy, attar, _find
 
 
 class WATest(unittest.TestCase):
@@ -22,8 +22,8 @@ class WATest(unittest.TestCase):
 class BookshelfTest(unittest.TestCase):
     def test_hpwl_matches_an_independent_computation_on_the_raw_files(self):
         d = need(BOOKSHELF).restore('dreamplace_lg')
-        snap = d.manifest['snapshots']['dreamplace_lg']['path']
-        ref = bookshelf_hpwl_numpy(d.manifest['source']['aux'], snap)
+        snap = _find(d.manifest['snapshots']['dreamplace_lg'])
+        ref = bookshelf_hpwl_numpy(_find(d.manifest['source']['aux']), snap)
         self.assertAlmostEqual(d.hpwl().item() / ref, 1.0, delta=1e-5)
 
     def test_bookshelf_is_tier_c_and_starts_unplaced(self):

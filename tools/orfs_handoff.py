@@ -10,9 +10,10 @@ skips ORFS's macro placer. place_pin leaves the pins FIXED, so ORFS's place_pins
 placement, resizing, CTS and routing; Attar's cell placement, if any, is not used.
 
 usage: orfs_handoff.py <design> <run dir under orfs_runs/, e.g. riscv32i_base> <exported DEF> [tag]
-       CORES (default 5); ORFS_MAKE_ARGS: extra make variables, e.g. LEC_CHECK=0 (use the same as the baseline);
-       KEEP=1 keeps the ORFS run copy (orfs_runs/rt/<design>_fp/<tag>). The summary and the DEF go to
-       orfs_runs/results/<design>/handoff_<tag>.*"""
+                       [--cores 5] [--make-args "LEC_CHECK=0"] [--keep]
+       --make-args: extra make variables (use the same as the baseline); --keep keeps the ORFS run copy
+       (orfs_runs/rt/<design>_fp/<tag>). The summary and the DEF go to orfs_runs/results/<design>/handoff_<tag>.*"""
+import argparse
 import glob
 import json
 import os
@@ -113,11 +114,11 @@ def prepare(d, base, out_def, tag):
     return work, info
 
 
-def run(d, work, cores):
+def run(d, work, cores, make_args=''):
     t = time.time()
     try:
         orfs('make NUM_CORES=%d DESIGN_CONFIG=./designs/asap7/%s/config.mk WORK_HOME=%s %s > %s 2>&1'
-             % (cores, d, w(work), os.environ.get('ORFS_MAKE_ARGS', ''), w(os.path.join(work, 'make.log'))))
+             % (cores, d, w(work), make_args, w(os.path.join(work, 'make.log'))))
         ok = True
     except RuntimeError:
         ok = False
@@ -148,11 +149,18 @@ def gpl_hpwl(work, d):
 
 
 if __name__ == '__main__':
-    d, base, out_def = sys.argv[1], os.path.join(RUNS, sys.argv[2]), os.path.abspath(sys.argv[3])
-    tag = sys.argv[4] if len(sys.argv) > 4 else os.path.splitext(os.path.basename(out_def))[0]
+    ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    ap.add_argument('design'); ap.add_argument('run', help='ORFS run dir under orfs_runs/')
+    ap.add_argument('out_def', help='the DEF written by Design.export'); ap.add_argument('tag', nargs='?')
+    ap.add_argument('--cores', type=int, default=5)
+    ap.add_argument('--make-args', default='', help='extra make variables, e.g. LEC_CHECK=0')
+    ap.add_argument('--keep', action='store_true', help='keep the ORFS run copy (a full ORFS run, up to GBs)')
+    a = ap.parse_args()
+    d, base, out_def = a.design, os.path.join(RUNS, a.run), os.path.abspath(a.out_def)
+    tag = a.tag or os.path.splitext(os.path.basename(out_def))[0]
     work, info = prepare(d, base, out_def, tag)
     print('prepared %s: %s' % (work, info), flush=True)
-    ok, sec = run(d, work, int(os.environ.get('CORES', '5')))
+    ok, sec = run(d, work, a.cores, a.make_args)
     rows = [('orfs floorplan', dict(metrics(base, d), gp_hpwl=gpl_hpwl(base, d))),
             ('attar floorplan', dict(metrics(work, d), gp_hpwl=gpl_hpwl(work, d), ok=ok, flow_s=sec, kept=kept(d, work, out_def)))]
     keys = ['gp_hpwl', 'dp_hpwl_est', 'grt_wl', 'routed_wl', 'drc', 'wns', 'tns']
@@ -163,6 +171,6 @@ if __name__ == '__main__':
     res = os.path.join(RUNS, 'results', d); os.makedirs(res, exist_ok=True)
     json.dump(rows, open(os.path.join(res, 'handoff_%s.summary.json' % tag), 'w'), indent=1)
     shutil.copy(out_def, os.path.join(res, 'handoff_%s.def' % tag))
-    if not os.environ.get('KEEP'):                     # a run copy is a full ORFS run (up to GBs)
+    if not a.keep:                                    # a run copy is a full ORFS run (up to GBs)
         shutil.rmtree(work, ignore_errors=True)
     print('summary: %s' % os.path.join(res, 'handoff_%s.summary.json' % tag))

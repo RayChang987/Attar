@@ -6,10 +6,14 @@
 3. In the ORFS container: apply the DEF to 3_3_place_gp.odb (read_def -incremental) in a copy of the run,
    then let ORFS redo 3_4 resize .. 6 finish, and collect the metrics.
 
-usage: orfs_roundtrip.py <design> <finished WORK_HOME under orfs_runs/> [mode ...]
+usage: orfs_roundtrip.py <design> <finished WORK_HOME under orfs_runs/> [mode ...] [--stage 3_3_place_gp]
+                         [--cores 4] [--par 4] [--keep]
 modes: identity (write back the unchanged placement), perturb (shift 10% of the movable cells by +-3 sites),
 jitter<seed> (1% of the movable cells by +-1 site), def=<path> (a DEF written by attar's Design.export).
-Summary: orfs_runs/results/<design>/roundtrip.summary.json; KEEP=1 keeps the run copies under orfs_runs/rt."""
+--stage: where to distill from and inject into (3_3_place_gp, or 3_2_place_iop: before ORFS's global placement).
+The stage's DEF goes to orfs_runs/rt/<design>/<stage>.def (the template Design.export stamps onto).
+Summary: orfs_runs/results/<design>/roundtrip.summary.json; --keep keeps the run copies under orfs_runs/rt."""
+import argparse
 import glob
 import json
 import os
@@ -60,20 +64,29 @@ def inputs(base):
     return lefs, libs
 
 
-STAGE = os.environ.get('STAGE', '3_3_place_gp')   # where to distill from and inject into; or 3_2_place_iop
+STAGES = ('3_3_place_gp', '3_2_place_iop', '2_1_floorplan')
 
 
-def suite(stage=STAGE):
+def suite(stage):
     return 'orfs_asap7' if stage == '3_3_place_gp' else 'orfs_asap7_' + stage[:3]
 
 
-def export_and_distill(d, base, rt, stage=STAGE):
+def rt_dir(d):
+    """orfs_runs/rt/<design>: the stage DEFs (distillation sources and export templates) and the run copies."""
+    rt = os.path.join(RUNS, 'rt', d)
+    os.makedirs(rt, exist_ok=True)
+    return rt
+
+
+def export_and_distill(d, base, rt, stage, reuse=False):
     """<stage>.odb -> DEF -> zoo/<suite>/<d> (movable cells unplaced, the stage's own placement kept as 'reference').
     3_3_place_gp: after ORFS global placement (its netlist includes the buffers ORFS's GP inserted).
-    3_2_place_iop: before it (cells at the 3_1 skip-IO GP positions; IOs placed only if GPL_PLACE_IOS=0)."""
+    3_2_place_iop: before it (cells at the 3_1 skip-IO GP positions; IOs placed only if GPL_PLACE_IOS=0).
+    2_1_floorplan: the floorplan (IO pins and macros unplaced). reuse: distill an existing <stage>.def again."""
     res = os.path.join(base, 'results/asap7', d, 'base')
     src = os.path.join(rt, stage + '.def')
-    openroad('read_db %s\nwrite_def %s' % (w(res + '/%s.odb' % stage), w(src)), d + '_export')
+    if not (reuse and os.path.exists(src)):
+        openroad('read_db %s\nwrite_def %s' % (w(res + '/%s.odb' % stage), w(src)), d + '_export')
     lefs, libs = inputs(base)
     ir = os.path.join(ROOT, 'zoo', suite(stage), d)
     ref = {'3_3_place_gp': 'orfs 3_3_place_gp (global_place)',
@@ -81,8 +94,8 @@ def export_and_distill(d, base, rt, stage=STAGE):
     cfg = './designs/asap7/%s/config.mk' % d
     m = attar.distill(src, lefs, ir, lib_paths=libs, reference=ref, facts={'slow_loop': 'orfs:asap7'},
                       extra={'suite': 'orfs/asap7', 'orfs_image': IMAGE, 'orfs_stage': stage,
-                             'orfs': {'image': IMAGE, 'run': os.path.abspath(base), 'design': d, 'design_config': cfg,
-                                      'stage': stage, 'platform': 'asap7'}})
+                             'orfs': {'image': IMAGE, 'design': d, 'design_config': cfg, 'stage': stage,
+                                      'platform': 'asap7'}})
     return ir, m, lefs
 
 
@@ -156,7 +169,7 @@ def move(x, frac, sites, seed):
     x.pos[pick, 0] += step.to(x.device).float() * site
 
 
-def prepare(d, base, rt, ir, mode, dev):
+def prepare(d, base, rt, ir, mode, dev, stage):
     """Write the mode's placement back, copy the run and inject it into 3_3_place_gp.odb."""
     if mode.startswith('def='):  # a DEF written by attar's export (Design.export)
         out_def = os.path.abspath(mode[4:])
@@ -164,8 +177,8 @@ def prepare(d, base, rt, ir, mode, dev):
             shutil.copy(out_def, os.path.join(rt, os.path.basename(out_def))); out_def = os.path.join(rt, os.path.basename(out_def))
         attar.distill(out_def, inputs(base)[0], os.path.join(rt, 'ir_' + _tag(mode)))
         hp = attar.load(os.path.join(rt, 'ir_' + _tag(mode)), dev).hpwl().item()
-        return _inject(d, base, rt, _tag(mode), out_def, hp)
-    x = attar.load(ir, dev).load_reference()
+        return _inject(d, base, rt, _tag(mode), out_def, hp, stage)
+    x = attar.load(ir, dev).restore('reference')
     if mode == 'perturb':
         move(x, 0.10, 3, 0)
     elif mode.startswith('jitter'):
@@ -173,19 +186,19 @@ def prepare(d, base, rt, ir, mode, dev):
     elif mode != 'identity':
         raise ValueError(mode)
     hp = x.hpwl().item()
-    out_def = os.path.join(rt, 'attar_%s.def' % mode)
-    x.export(out_def)
-    return _inject(d, base, rt, mode, out_def, hp)
+    out_def = os.path.join(rt, 'attar_%s_%s.def' % (stage[:3], mode))
+    x.export(os.path.join(rt, stage + '.def'), out_def)
+    return _inject(d, base, rt, mode, out_def, hp, stage)
 
 
 def _tag(mode):
     return os.path.splitext(os.path.basename(mode[4:]))[0] if mode.startswith('def=') else mode
 
 
-def _inject(d, base, rt, mode, out_def, hp, stage=STAGE):
+def _inject(d, base, rt, mode, out_def, hp, stage):
     """Apply out_def's COMPONENTS to <stage>.odb of a copy of the run and save it as 3_3_place_gp.odb, so ORFS
     continues with resize (3_4). From 3_2 this replaces ORFS's whole global_place step, netlist edits included."""
-    work = os.path.join(rt, mode)
+    work = os.path.join(rt, mode if stage == '3_3_place_gp' else '%s_%s' % (stage[:3], mode))
     shutil.rmtree(work, ignore_errors=True)
     shutil.copytree(base, work, symlinks=True)
     r = os.path.join(work, 'results/asap7', d, 'base')
@@ -223,15 +236,20 @@ def finish(d, work, cores):
 
 if __name__ == '__main__':
     from concurrent.futures import ThreadPoolExecutor
-    d, base = sys.argv[1], os.path.join(RUNS, sys.argv[2])
-    modes = sys.argv[3:] or ['identity', 'perturb']
-    cores = int(os.environ.get('CORES', '4')); par = int(os.environ.get('PAR', '4'))
-    rt = os.path.join(RUNS, 'rt', d if STAGE == '3_3_place_gp' else '%s_%s' % (d, STAGE[:3]))
-    os.makedirs(rt, exist_ok=True)
+    ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    ap.add_argument('design'); ap.add_argument('run', help='finished WORK_HOME under orfs_runs/')
+    ap.add_argument('modes', nargs='*', default=['identity', 'perturb'])
+    ap.add_argument('--stage', default='3_3_place_gp', choices=STAGES[:2])
+    ap.add_argument('--cores', type=int, default=4, help='NUM_CORES per ORFS run')
+    ap.add_argument('--par', type=int, default=4, help='ORFS runs at once')
+    ap.add_argument('--keep', action='store_true', help='keep the run copies (each a full ORFS run, up to GBs)')
+    a = ap.parse_args()
+    d, base, modes, STAGE = a.design, os.path.join(RUNS, a.run), a.modes, a.stage
+    rt = rt_dir(d)
 
     # 1. distillation source
     t = time.time()
-    ir, m, LEFS = export_and_distill(d, base, rt)
+    ir, m, LEFS = export_and_distill(d, base, rt, STAGE)
     print('distilled %s: %d cells (%d movable, %d macros), %d nets in %.1fs' % (d, m['counts']['cells'], m['counts']['movable'],
           m['counts']['macros'], m['counts']['nets'], time.time() - t), flush=True)
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -243,9 +261,9 @@ if __name__ == '__main__':
         print('HPWL of the ORFS GP result: attar %.2f um, OpenROAD gpl %.2f um' % (base_m['hpwl_attar'], gpl_final_hpwl(base, d)), flush=True)
     rows = [('orfs (baseline)', base_m)]
 
-    prep = {mode: prepare(d, base, rt, ir, mode, dev) for mode in modes}
-    with ThreadPoolExecutor(par) as P:
-        done = dict(zip(modes, P.map(lambda mo: finish(d, prep[mo][0], cores), modes)))
+    prep = {mode: prepare(d, base, rt, ir, mode, dev, STAGE) for mode in modes}
+    with ThreadPoolExecutor(a.par) as P:
+        done = dict(zip(modes, P.map(lambda mo: finish(d, prep[mo][0], a.cores), modes)))
     for mode in modes:
         work, hp, now = prep[mode]; ok, sec = done[mode]; mode = _tag(mode)
         # make must not redo global placement: the injected 3_3_place_gp.odb has to be untouched
@@ -262,6 +280,6 @@ if __name__ == '__main__':
     res = os.path.join(RUNS, 'results', d); os.makedirs(res, exist_ok=True)
     with open(os.path.join(res, 'roundtrip.summary.json'), 'w') as f:
         json.dump(rows, f, indent=1)
-    if not os.environ.get('KEEP'):                     # each mode's run copy is a full ORFS run (up to GBs)
+    if not a.keep:                                     # each mode's run copy is a full ORFS run (up to GBs)
         for mode in modes:
             shutil.rmtree(prep[mode][0], ignore_errors=True)

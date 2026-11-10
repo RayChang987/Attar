@@ -9,8 +9,12 @@ from attar import naive
 
 | call | returns |
 | --- | --- |
-| `attar.zoo(suite=None)` | names of the distilled designs (`'ispd2005/adaptec1'`, ...) |
-| `attar.load(name_or_path, device='cpu')` | a `Design` |
+| `attar.zoo(suite=None, remote=False, root=None)` | names of the distilled designs (`'ispd2005/adaptec1'`, ...) in the local zoo, or on the Hugging Face Hub |
+| `attar.load(name_or_path, device='cpu', download=True, root=None)` | a `Design`; a zoo name missing locally is downloaded first |
+| `attar.fetch(*names, root=None)` | download designs or whole suites (`'ispd2015'`) into the local zoo; everything when no name is given |
+
+The zoo is `zoo/` in a source checkout, else `~/.cache/attar/zoo`; `root=` picks another folder. Attar reads no
+environment variables.
 | `attar.distill(def_path, lef_paths, out_dir, lib_paths=(), ...)` | distill a LEF/DEF design; returns the manifest |
 
 ## Design
@@ -22,14 +26,15 @@ from attar import naive
 | `floorplan(utilization=None, aspect_ratio=1.0, **kw)` | `naive.floorplan`: new die if a utilization is given, then IO pins and macros as needed |
 | `place(target_density=None, **kw)` | `naive.place`: global placement + legalization |
 | `plot(path=None, theme='light', dpi=150, **kw)` | die, core, rows, cells (an area-density image above 30k cells), macros, IO pins by direction; warm light theme by default |
-| `export(out_def)` | write the placement and engine-made floorplan back into a copy of the source DEF |
-| `handoff_command(out_def)` | the command that hands an exported DEF to ORFS |
+| `export(template_def, out_def, force=False)` | stamp the placement and engine-made floorplan onto a DEF of the design (checks cell library, units, netlist, die; `force` to override) |
+| `handoff_command(out_def, run_dir=None)` | the command that hands an exported DEF to ORFS |
 | `hpwl(pos=None, per_net=False)` | exact HPWL (0-d tensor) |
 | `wa_wirelength(pos=None, gamma=1.0)` | weighted-average wirelength, differentiable |
 | `pin_pos(pos=None)` | (P, 2) pin locations |
 | `utilization()` | per die: standard-cell area / (core - macro area inside the core) |
 | `snapshot(name)`, `restore(name)`, `unplace()` | solution state |
-| `macro_grid(mac)` | step and per-macro offset that put macro pins on their routing tracks |
+| `macro_grid(mac)` | step and per-macro offset that put macro pins on their routing tracks (from the IR) |
+| `tracks()` | `{(axis, layer): (start, step)}` routing tracks |
 | `set_io(xy, provenance)`, `fix_macros(provenance)`, `release_macros()`, `set_floorplan(die, rows, provenance)` | for engines: write an answer as a fact |
 
 ## Evaluator

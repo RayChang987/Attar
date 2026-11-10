@@ -18,8 +18,9 @@ FACTS = {
     'routing': 'routing layers, GCell grid and capacities, pin access',
     'timing': 'Liberty arcs and pin capacitances, clocks, I/O delays',
     'stack': '3D: per-die technology, hybrid bonding terminals',
-    'writeback': 'a source DEF (path + hash) the placement can be written back into',
-    'slow_loop': 'a slow-loop flow state to hand the placement to (an ORFS run and stage, on a platform ORFS knows)',
+    'cell_library': 'cells are instances of a real cell library (LEF masters): a DEF of the design means something',
+    'tracks': 'routing tracks and the routing layer of every master pin (pin access: macros go on-track)',
+    'slow_loop': 'the design comes from a slow-loop flow stage it can be handed back to (an ORFS stage on a platform ORFS knows)',
     'placement': 'locations and orientations of all movable cells (solution state)',
 }
 
@@ -34,15 +35,17 @@ CAPABILITIES = {
     'detailed_place': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'rows', 'placement'},
     'global_route': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'routing', 'placement'},
     'sta': {'netlist', 'timing'},
-    'export': {'writeback'},                               # the placement, when there is one, and the floorplan
-    'orfs_handoff': {'writeback', 'slow_loop', 'floorplan.io', 'floorplan.macros', 'placement'},
-    'orfs_floorplan_handoff': {'writeback', 'slow_loop', 'floorplan.io', 'floorplan.macros'},   # from ORFS 2_1
+    'export': {'netlist', 'cell_library'},                 # stamped onto a DEF of the design the caller hands over
+    'orfs_handoff': {'cell_library', 'slow_loop', 'floorplan.io', 'floorplan.macros', 'placement'},
+    'orfs_floorplan_handoff': {'cell_library', 'slow_loop', 'floorplan.io', 'floorplan.macros'},   # from ORFS 2_1
     'plot': {'cell_geometry', 'floorplan.die'},
 }
 
 HINTS = {
     'placement': "run a placer, assign d.pos, or d.restore('reference') if the design keeps a reference placement",
-    'writeback': 'distill from a DEF (Bookshelf and other formats without a DEF cannot be written back)',
+    'cell_library': 'this source has no cell library (Bookshelf, YAL, GSRC): a DEF of it would not mean anything; '
+                    'Design.export(..., force=True) writes one anyway',
+    'tracks': 'distill from LEF/DEF (attar-ir >= 0.5): macros then go on the routing tracks, else on the row grid',
     'slow_loop': 'distill from an ORFS run (tools/distill_orfs.py); designs without a real cell library end in Attar',
     'floorplan.io': 'place the IO pins: attar.naive.place_io (or a source with placed pins; ORFS: GPL_PLACE_IOS=0)',
     'floorplan.macros': 'place the macros: attar.naive.place_macros (or a source with placed macros)',
@@ -52,7 +55,7 @@ HINTS = {
 DESCRIBE = {
     'hpwl': 'evaluate HPWL', 'wirelength_model': 'WA wirelength on given positions',
     'die_size': 'size the die for a utilization', 'io_place': 'IO pin placement', 'macro_place': 'macro placement', 'global_place': 'global placement', 'legalize': 'legalization', 'detailed_place': 'detailed placement',
-    'global_route': 'global routing', 'sta': 'static timing analysis', 'export': 'write back to DEF',
+    'global_route': 'global routing', 'sta': 'static timing analysis', 'export': 'stamp onto a DEF of the design',
     'orfs_handoff': 'hand off to ORFS for validation', 'orfs_floorplan_handoff': 'hand the floorplan to ORFS (2_1)',
     'plot': 'plot the design',
 }
@@ -60,11 +63,11 @@ DEFAULT_HINT = 'load a source that provides it (deriving it, attar.derive, is no
 
 
 class MissingFacts(RuntimeError):
-    def __init__(self, design, capability, missing):
+    def __init__(self, design, capability, missing, reasons=None):
         self.capability, self.missing = capability, sorted(missing)
         lines = ['%s cannot do %r: missing %s' % (design, capability, ', '.join(self.missing))]
         for m in self.missing:
-            lines.append('  %s (%s): %s' % (m, FACTS.get(m, '?'), HINTS.get(m, DEFAULT_HINT)))
+            lines.append('  %s (%s): %s' % (m, FACTS.get(m, '?'), (reasons or {}).get(m) or HINTS.get(m, DEFAULT_HINT)))
         super().__init__('\n'.join(lines))
 
 
@@ -84,15 +87,19 @@ def infer_facts(manifest, raw):
         f['floorplan.macros'] = f['floorplan.die']
     if 'r_xy' in raw and len(raw['r_xy']):
         f['rows'] = 'def' if src == 'lefdef' else src
-    if manifest.get('writeback'):
-        f['writeback'] = 'def'
+    if src == 'lefdef':
+        f['cell_library'] = 'lef'
     return f
 
 
 def upgrade_facts(facts, manifest):
-    """Schema <= 0.3 had one 'floorplan.fixed' fact (IO pins and macros together): split it. Without it, the IO pins
-    were unplaced (io_unplaced > 0) while the macros came placed with the floorplan."""
+    """Older schemas: 'writeback' (<= 0.4) becomes 'cell_library'; one 'floorplan.fixed' fact (<= 0.3, IO pins and
+    macros together) is split. Without it, the IO pins were unplaced (io_unplaced > 0) while the macros came placed."""
     f = dict(facts)
+    if 'writeback' in f:                  # schema <= 0.4: 'writeback' meant a LEF/DEF source, i.e. a cell library
+        f.pop('writeback')
+        if manifest.get('source', {}).get('format') == 'lefdef':
+            f.setdefault('cell_library', 'lef')
     if 'floorplan.fixed' in f:
         v = f.pop('floorplan.fixed')
         f.setdefault('floorplan.io', v)

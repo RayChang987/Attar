@@ -20,7 +20,7 @@ import time
 import numpy as np
 
 from .bookshelf import _lines, read_blocks
-from .distill import (FIXED, MACRO, PLACED, TERMINAL, M_BLOCK, SCHEMA, IO_DIR, _sha256, save_arrays,
+from .distill import (FIXED, MACRO, PLACED, TERMINAL, M_BLOCK, SCHEMA, IO_DIR, source_ref, save_arrays,
                       save_names_manifest)
 
 
@@ -64,9 +64,9 @@ def _write(out_dir, design, fmt, sources, dbu, units, names, size, flags, xy, p_
     deg = np.diff(n_ptr)
     manifest = {
         'schema': SCHEMA, 'design': design,
-        'source': {'format': fmt, 'files': {k: {'path': os.path.abspath(v), 'sha256': _sha256(v)} for k, v in sources.items()}},
+        'source': {'format': fmt, 'files': {k: source_ref(v) for k, v in sources.items()}},
         'dbu': dbu, 'units': units, 'dies': [{'name': 'die0', 'tech_profile': None}],
-        'facts': facts, 'fidelity': 'F3', 'writeback': False, 'reference_placement': None,
+        'facts': facts, 'fidelity': 'F3', 'reference_placement': None,
         'placed': bool(((flags[movable] & PLACED) != 0).all()) if movable.any() else True,
         'counts': {'cells': int(len(cells)), 'movable': int(movable.sum()), 'macros': int(((flags & MACRO) != 0).sum()),
                    'physical_only': 0, 'terminals': int(len(io_idx)), 'nets': len(nets), 'nets_2plus': int((deg >= 2).sum()),

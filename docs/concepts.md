@@ -18,8 +18,9 @@ A design is a set of *facts*. Each fact has a *provenance*: the source it came f
 | `rows` | placement rows: origin, site width, height, orientation |
 | `constraints` | fence regions, placement blockages (not stored yet) |
 | `routing`, `timing`, `stack` | routing resources, Liberty/SDC, 3D stack (not stored yet) |
-| `writeback` | a source DEF the result can be written back into |
-| `slow_loop` | an ORFS run to hand the result to |
+| `cell_library` | the cells are instances of a real cell library (LEF macros): the result can go back to DEF |
+| `tracks` | routing tracks per layer and the routing layer of every macro pin (macro pins go on their tracks) |
+| `slow_loop` | the design comes from an ORFS stage, so ORFS can take the result |
 | `placement` | positions of all movable cells (solution state) |
 
 Each *capability* (an engine or a metric) requires a set of facts:
@@ -32,14 +33,15 @@ Each *capability* (an engine or a metric) requires a set of facts:
 | `macro_place` | ... + floorplan.io |
 | `global_place` | ... + floorplan.io, floorplan.macros |
 | `legalize` | ... + rows, placement |
-| `export` | writeback |
-| `orfs_floorplan_handoff` | writeback, slow_loop, floorplan.io, floorplan.macros |
+| `export` | netlist, cell_library |
+| `orfs_floorplan_handoff` | cell_library, slow_loop, floorplan.io, floorplan.macros |
 | `orfs_handoff` | ... + placement |
 
 `d.capabilities()`, `d.missing('global_place')` and `d.require('legalize')` answer the questions; `d.status()`
 prints all of it. Calling an engine without its facts raises `MissingFacts` with a hint on how to get them.
 
-**Missing facts are never filled in silently.** A Bookshelf benchmark has no technology, so it has no write-back.
+**Missing facts are never filled in silently.** A Bookshelf benchmark has no cell library, so it does not export
+to DEF (`force=True` writes one anyway, with a warning).
 A soft-block floorplan has no cell geometry, because the block shapes are the question, not a fact. Deriving a
 missing fact will be an explicit operation (a future `attar.derive`) that records its provenance as
 `derived:<method>`.
@@ -56,9 +58,27 @@ floorplan.macros  naive:place_macros
 
 What happens to a result depends on where the design came from:
 
-- **A**: can be validated in the slow loop (an ORFS run is recorded and the floorplan is complete).
-- **B**: can be written back to DEF, but there is no slow loop for it.
-- **C**: Attar is the end point (Bookshelf, YAL, GSRC: no technology to hand off to).
+- **A**: can be validated in the slow loop (it comes from an ORFS stage and the floorplan is complete).
+- **B**: has a cell library, so the result can be stamped onto a DEF, but there is no slow loop for it.
+- **C**: Attar is the end point (Bookshelf, YAL, GSRC: no cell library to hand off to).
+
+## Self-contained designs and export
+
+A distilled design holds everything the fast loop reads, macro pin layers and routing tracks included, so a copy of
+its folder works on any machine. Manifests name each source file with its sha256, never a path, and Attar reads no
+environment variables.
+
+A DEF comes back only through `d.export(template_def, out_def, force=False)`: it takes any DEF of the design (for
+ORFS designs, `orfs_runs/rt/<design>/<stage>.def`), and copies it with the design's answers stamped on: movable
+cells, macros and IO pins an engine placed, and a die and rows an engine made. Before writing, it checks:
+
+1. `cell_library`: the design is made of LEF masters (not Bookshelf, YAL, GSRC);
+2. units: the template's DBU per micron equals the design's;
+3. netlist: the template's fingerprint (components and masters, IO pins, signal nets) equals the one recorded at
+   distillation;
+4. die: the template's die equals the design's, unless an engine made the die.
+
+A mismatch is refused with what differs; `force=True` writes anyway, with a warning.
 
 ## Design
 

@@ -10,7 +10,7 @@ in a few lines of Python. Then hand the result to OpenROAD and route it.
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
 [![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](#does-the-fast-loop-agree-with-the-slow-loop)
-[![Tests](https://img.shields.io/badge/tests-59%20passing-5f7f1e?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/tests-63%20passing-5f7f1e?style=flat-square)](tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
 [Quickstart](#quickstart) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery) &nbsp;·&nbsp;
@@ -59,7 +59,7 @@ d.status()                # what it has, what it can do
 d.floorplan()             # IO pins + macros   (or floorplan(utilization=0.6) for a new die)
 d.place()                 # global placement + legalization
 d.plot('cva6.png')
-d.export('cva6.def')      # back to DEF, then on to ORFS
+d.export('2_1_floorplan.def', 'cva6.def')   # stamp onto ORFS's DEF
 ```
 
 `examples/quickstart.py` is this program with a design name argument. The designs come from a local *zoo* that you
@@ -102,8 +102,9 @@ d.pos = pos.detach(); naive.legalize(d)               # ... so legalize (multi-r
    Each answer becomes a fact that unlocks the next step.
 4. **Measure.** `attar.Evaluator` computes HPWL (exact, batched), Steiner wirelength, RUDY, density overflow and
    legality, on the current placement or on any positions you pass.
-5. **Hand off.** `d.export()` writes the answers into a copy of the source DEF. For ORFS designs,
-   `tools/orfs_handoff.py` applies the floorplan to the ORFS run, and ORFS places, routes and times it.
+5. **Hand off.** `d.export(template_def, out_def)` stamps the answers onto any DEF of the design, after checking
+   its units, netlist fingerprint and die. For ORFS designs, `tools/orfs_handoff.py` applies the floorplan to the
+   ORFS run, and ORFS places, routes and times it.
 
 More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [slow loop](docs/slow_loop.md) ·
 [API](docs/api.md)
@@ -226,11 +227,12 @@ Capabilities
   ✅ IO pin placement
   ❌ global placement                  needs floorplan.io
   ...
-  -> missing floorplan.io: d.floorplan() places it; then d.export("out.def") and hand the floorplan to ORFS
+  -> missing floorplan.io: d.floorplan() places it; then d.export("<a DEF of this design>", "out.def") and hand
+     the floorplan to ORFS
 ```
 
 Every reader states which facts it provides, and every engine and metric states which facts it needs:
-- a Bookshelf design has no write-back;
+- a Bookshelf design has no cell library, so it does not export to DEF;
 - a block floorplan has no rows;
 - a soft-block benchmark has no cell geometry.
 
@@ -262,7 +264,7 @@ Also on the list:
 attar/            the package: Design, Evaluator, readers, kernels, attar.naive engines
 examples/         quickstart.py, floorplan_flow.py
 tools/            distillation, ORFS round trip and hand-off, validation, benchmarks, README figures
-tests/            59 tests (python -m unittest discover -s tests); designs missing from the zoo are skipped
+tests/            66 tests (python -m unittest discover -s tests); designs missing from the zoo are skipped
 docs/             concepts, benchmarks, slow loop, API, the project spec (zh-TW), validation results, images
 ```
 

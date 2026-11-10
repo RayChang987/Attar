@@ -1,6 +1,6 @@
 """Bookshelf reader (ISPD 2005/2006, ICCAD 2004 style): .aux -> .nodes .nets .wts .pl .scl -> Attar IR.
 
-Facts provided: netlist, cell_geometry, pin_offsets, floorplan.die, floorplan.io, floorplan.macros, rows. No writeback, no
+Facts provided: netlist, cell_geometry, pin_offsets, floorplan.die, floorplan.io, floorplan.macros, rows. No cell library, no
 slow loop: Bookshelf designs have no technology, so Attar is their end point (tier C).
 
 Conventions: Bookshelf pin offsets are relative to the node center and may be half units, so coordinates are stored
@@ -16,7 +16,7 @@ import time
 import numpy as np
 
 from .deffile import ORIENT_ID
-from .distill import FIXED, MACRO, PLACED, TERMINAL, PHYSICAL, M_CORE, M_BLOCK, SCHEMA, _sha256, save_arrays, save_names_manifest
+from .distill import FIXED, MACRO, PLACED, TERMINAL, PHYSICAL, M_CORE, M_BLOCK, SCHEMA, save_arrays, save_names_manifest, source_ref
 
 DBU = 2  # half Bookshelf units (the default; see _pick_dbu)
 DBUS = (2, 10, 100, 1000)
@@ -248,14 +248,14 @@ def distill_bookshelf(aux, out_dir, snapshots=None, extra=None):
         sx[miss] = np.nan_to_num(x)[miss]; sy[miss] = np.nan_to_num(y)[miss]
         core['snap_%s_xy' % sname] = q(np.stack([sx, sy], 1)).astype(np.int32)
         core['snap_%s_orient' % sname] = so
-        snap_meta[sname] = {'path': os.path.abspath(path), 'sha256': _sha256(path), 'nodes_missing': int(miss.sum())}
+        snap_meta[sname] = dict(source_ref(path), nodes_missing=int(miss.sum()))
     save_arrays(out_dir, core)
 
     deg = np.diff(ptr)
-    src = {k: {'path': v, 'sha256': _sha256(v)} for k, v in sorted(files.items()) if os.path.exists(v)}
+    src = {k: source_ref(v) for k, v in sorted(files.items()) if os.path.exists(v)}
     manifest = {
         'schema': SCHEMA, 'design': os.path.splitext(os.path.basename(aux))[0],
-        'source': {'format': 'bookshelf', 'aux': os.path.abspath(aux), 'files': src},
+        'source': {'format': 'bookshelf', 'aux': source_ref(aux), 'files': src},
         'dbu': dbu, 'units': 'Bookshelf units (stored as 1/%d units%s)' % (dbu, ', rounded by up to %.2g' % dbu_err if dbu_err else ''),
         'dies': [{'name': 'die0', 'tech_profile': None}],
         'facts': dict([('netlist', 'bookshelf'),
@@ -264,7 +264,7 @@ def distill_bookshelf(aux, out_dir, snapshots=None, extra=None):
                        ('rows', 'bookshelf')] + ([('floorplan.macros', 'bookshelf')] if not movable_macros else [])),
         'macros_unplaced': movable_macros,
         'not_stored': {'soft_blocks': soft} if soft else {},
-        'fidelity': 'F3', 'writeback': False, 'reference_placement': None,
+        'fidelity': 'F3', 'reference_placement': None,
         'snapshots': snap_meta,
         'placed': not all_unplaced,
         'counts': {'cells': int(N - len(io_idx)), 'movable': int(movable.sum()), 'macros': int(macro.sum()),

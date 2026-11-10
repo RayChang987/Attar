@@ -1,4 +1,5 @@
-"""DEF reader (header, ROWS, COMPONENTS, PINS, NETS connectivity) and placement write-back.
+"""DEF reader (header, ROWS, TRACKS, COMPONENTS, PINS, NETS connectivity), the netlist fingerprint, and placement
+write-back.
 
 Routing in NETS and all of SPECIALNETS are skipped: the distillation never needs them.
 """
@@ -30,7 +31,7 @@ def _pin_offset(orient, cx, cy):
 
 def read_def(path):
     d = {'design': None, 'dbu': None, 'die': None, 'rows': [], 'comps': [], 'pins': [], 'nets': [], 'blockages': 0, 'pg_pins': 0,
-         'regions': 0, 'groups': 0}
+         'regions': 0, 'groups': 0, 'tracks': []}
     with open(path, errors='replace') as f:
         for line in f:
             if line.startswith('DESIGN '):
@@ -45,6 +46,11 @@ def read_def(path):
                 nx, ny = int(t[7]), int(t[9])
                 sx = int(t[11]) if len(t) > 11 and t[10] == 'STEP' else 0
                 d['rows'].append((t[2], int(t[3]), int(t[4]), t[5], nx, ny, sx))
+            elif line.startswith('TRACKS'):
+                t = line.replace(';', ' ').split()   # TRACKS X start DO n STEP s LAYER l1 [l2 ...]
+                layers = t[t.index('LAYER') + 1:] if 'LAYER' in t else ['']
+                for l in layers:
+                    d['tracks'].append((t[1], int(t[2]), int(t[4]), int(t[6]), l))     # (axis, start, num, step, layer)
             elif line.startswith('BLOCKAGES'):
                 for s in _statements(f, 'END BLOCKAGES'):
                     if s.split()[1:2] == ['PLACEMENT']:
@@ -81,6 +87,23 @@ def read_def(path):
             elif line.startswith('NETS'):
                 _read_nets(f, d['nets'])
     return d
+
+
+def netlist_fingerprint(d):
+    """sha256 of a parsed DEF's netlist: components (name, master), signal IO pins, and every signal net with its
+    connections. Positions, floorplan and routing do not count, so the same design at another placement (or written
+    back by Attar) has the same fingerprint, and a different netlist (e.g. buffers ORFS inserted) does not."""
+    import hashlib
+    h = hashlib.sha256()
+    for name, master, *_ in sorted(d['comps']):
+        h.update(('C %s %s\n' % (name, master)).encode())
+    for p in sorted(x[0] for x in d['pins']):
+        h.update(('P %s\n' % p).encode())
+    for name, conns, use in sorted(d['nets'], key=lambda n: n[0]):
+        if use in ('POWER', 'GROUND'):
+            continue
+        h.update(('N %s %s\n' % (name, ' '.join('%s/%s' % c for c in sorted(conns)))).encode())
+    return h.hexdigest()
 
 
 def _read_nets(f, nets):

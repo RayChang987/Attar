@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Attar in a few lines: load a design, floorplan it, place it, look at it.
 
-usage: python3 examples/quickstart.py [design, default orfs_asap7_2_1/aes] [utilization, default 0.6]"""
+usage: python3 examples/quickstart.py [design, default orfs_asap7_2_1/aes] [utilization, default 0.6] [a DEF of the design]
+With a DEF of the design (for ORFS designs: the stage DEF, e.g. orfs_runs/rt/aes/2_1_floorplan.def), the result is
+stamped onto it and written as examples/out_<design>.def."""
 import os
 import sys
 
@@ -10,6 +12,7 @@ import attar  # noqa: E402
 
 name = sys.argv[1] if len(sys.argv) > 1 else 'orfs_asap7_2_1/aes'
 util = float(sys.argv[2]) if len(sys.argv) > 2 else 0.6
+template = sys.argv[3] if len(sys.argv) > 3 else None
 out = os.path.dirname(os.path.abspath(__file__))
 tag = name.replace('/', '_')
 
@@ -28,10 +31,10 @@ d.plot(os.path.join(out, tag + '_placed.png'))
 d.status()
 print(attar.Evaluator(d).evaluate(metrics=('hpwl', 'steiner_wirelength', 'legality')))
 
-# write it back to DEF; designs from an ORFS floorplan (2_1) can be handed to ORFS to route
-if 'export' in d.capabilities():
+# stamp the result onto a DEF of the design; designs from an ORFS floorplan (2_1) can be handed to ORFS to route
+if template and 'export' in d.capabilities():
     out_def = os.path.join(out, 'out_%s.def' % tag)
-    d.export(out_def)
+    d.export(template, out_def)
     print('wrote', out_def)
     if 'orfs_floorplan_handoff' in d.capabilities() or 'orfs_handoff' in d.capabilities():
         print('hand off to ORFS (minutes):\n  ' + d.handoff_command(out_def))

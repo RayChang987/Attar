@@ -11,7 +11,7 @@ import os
 import numpy as np
 import torch
 
-from . import st
+from . import paths, st
 from .deffile import ORIENTS
 from .distill import ASIDE, FIXED, MACRO, PLACED, TERMINAL, PHYSICAL  # noqa: F401
 from .facts import CAPABILITIES, FACTS, MissingFacts, infer_facts, upgrade_facts
@@ -165,11 +165,12 @@ class Design:
         from .status import tier
         return tier(self)
 
-    def handoff_command(self, out_def):
-        """Command that injects an exported DEF into the recorded ORFS run and finishes the flow."""
+    def handoff_command(self, out_def, run_dir=None):
+        """Command that hands an exported DEF to an ORFS run of this design (run_dir: its WORK_HOME) and finishes the
+        flow there."""
         from .status import handoff_command
         self.require('orfs_floorplan_handoff' if self.manifest.get('orfs', {}).get('stage') == '2_1_floorplan' else 'orfs_handoff')
-        return handoff_command(self, out_def)
+        return handoff_command(self, out_def, run_dir)
 
     def plot(self, path=None, **kw):
         """Draw die, core, rows, cells, macros and IO pins (attar.viz.plot); saved to path if given."""
@@ -195,8 +196,7 @@ class Design:
 
     # -- floorplan state (answers of the IO and macro placers become facts) -------------------------------------
     def _floorplan_changed(self, why):
-        """An engine changed the floorplan (IO pins, macros, die). Export writes all of it back, so 'writeback'
-        stays. The slow loop takes a changed floorplan only from the ORFS floorplan stage (2_1: tapcells, PDN and
+        """An engine changed the floorplan (IO pins, macros, die). Export writes all of it onto the DEF. The slow loop takes a changed floorplan only from the ORFS floorplan stage (2_1: tapcells, PDN and
         everything after are redone); a later stage already built them around the old floorplan, so 'slow_loop'
         goes there."""
         if 'slow_loop' in self.facts and self.manifest.get('orfs', {}).get('stage') != '2_1_floorplan':
@@ -475,17 +475,50 @@ class Design:
         v = next(i for i in range(h + 1, len(names)) if dr[i] == 1)
         return names[h], names[v]
 
-    def export(self, out_def):
-        """Write the design's answers into a copy of the source DEF (spec 3, principle 5): the movable cells (when
-        placed), the macros (FIXED), and what an engine changed of the floorplan: IO pins (with a pin shape on the
-        ORFS IO layers), the die outline, rows and track counts. Everything else is copied byte for byte."""
-        self.require('export')
-        src = self.manifest['source']['def']
-        from .distill import _sha256
-        from .deffile import write_def
-        if _sha256(src['path']) != src['sha256']:
-            raise RuntimeError('source DEF changed since distillation: %s' % src['path'])
-        dbu = self.dbu
+    def export(self, template_def, out_def, force=False):
+        """Stamp this design onto a DEF of it and write the result: template_def is any DEF of this design (the one
+        it was distilled from, or one re-exported from the same flow stage); out_def gets a copy of it with the
+        design's answers: the movable cells (when placed), the macros (FIXED), and what an engine changed of the
+        floorplan: IO pins (with a pin shape on the ORFS IO layers, on their tracks), the die outline, rows and
+        track counts. Everything else is copied byte for byte.
+
+        Checks, each a refusal unless force=True (then a warning):
+          cell_library  the design is made of real library masters (LEF/DEF sources; not Bookshelf, YAL, GSRC)
+          units         the template's DBU per micron equals the design's
+          netlist       the template's netlist fingerprint equals the design's (same cells, masters, IO pins, nets)
+          die           the template's die equals the design's, unless an engine made the die
+        Returns counts of what was rewritten."""
+        import warnings
+        from .deffile import netlist_fingerprint, read_def, write_def
+        if 'cell_library' not in self.facts:
+            if not force:
+                self.require('export')
+            warnings.warn('%s has no cell library (%s source): the DEF is written anyway (force=True), coordinates '
+                          'in its units' % (self.manifest.get('design'), self.manifest.get('source', {}).get('format')))
+        t = read_def(template_def)
+        problems = []
+        if t['dbu'] != self.dbu:
+            problems.append('units: the template has %s DBU per micron, the design %s' % (t['dbu'], self.dbu))
+        fp = self.manifest.get('netlist_sha256')
+        if fp is not None and netlist_fingerprint(t) != fp:
+            problems.append('netlist: ' + self._netlist_diff(t))
+        elif fp is None:                             # no fingerprint (an older IR): at least every cell must be there
+            have = {c[0] for c in t['comps']}
+            n = self.manifest.get('counts', {}).get('cells', 0)
+            miss = [c for c in self.names['cells'][:n] if c not in have]
+            if miss:
+                problems.append('netlist: %d of the design\'s cells are not in the template, e.g. %s' % (len(miss), miss[:3]))
+        engine_die = str(self.facts.get('floorplan.die', '')).startswith('naive')
+        if not engine_die and self.die_box is not None:
+            die = tuple(int(round(v * self.dbu)) for v in self.die_box[0].tolist())
+            if t['die'] is not None and tuple(t['die']) != die:
+                problems.append('die: the template has %s, the design %s (DBU)' % (tuple(t['die']), die))
+        if problems:
+            msg = 'template %s does not match %s:\n  %s' % (template_def, self.manifest.get('design'), '\n  '.join(problems))
+            if not force:
+                raise ValueError(msg + '\n(force=True writes it anyway)')
+            warnings.warn(msg)
+        dbu = t['dbu'] or self.dbu
         xy = torch.round(self.pos * dbu).to(torch.int64).cpu().numpy()
         o = self.orient.cpu().numpy(); mv = self.movable.cpu().numpy(); fl = self.flags.cpu().numpy()
         cells = self.names['cells']
@@ -496,37 +529,52 @@ class Design:
         mac = np.nonzero((fl & MACRO) != 0)[0]
         if str(self.facts.get('floorplan.macros', '')).startswith('naive'):     # only what an engine changed
             comps.update({cells[i]: (int(xy[i, 0]), int(xy[i, 1]), ORIENTS[o[i]], 'FIXED') for i in mac})
+        tracks = self.tracks() or {(a, l): (st_, sp) for a, st_, _, sp, l in t['tracks']}
         pins = {}
         if str(self.facts.get('floorplan.io', '')).startswith('naive') and self.io is not None and len(self.io):
-            pins = self._pin_shapes(xy)
+            pins = self._pin_shapes(xy, dbu, tracks)
         die = rows = None
-        if str(self.facts.get('floorplan.die', '')).startswith('naive'):
+        if engine_die:
             die = [int(round(v * dbu)) for v in self.die_box[0].tolist()]
-            site = next((l.split()[2] for l in open(src['path'], errors='replace') if l.startswith('ROW ')), 'core')
+            site = t['rows'][0][0] if t['rows'] else 'core'
             r_xy = torch.round(self.row_xy * dbu).long().tolist(); sw = torch.round(self.row_site_w * dbu).long().tolist()
             rows = [('ROW_%d' % k, site, r_xy[k][0], r_xy[k][1], ORIENTS[int(self.row_orient[k])], int(self.row_sites[k]), sw[k])
                     for k in range(len(r_xy))]
-        return write_def(src['path'], out_def, comps=comps, pins=pins, die=die, rows=rows)
+        return write_def(template_def, out_def, comps=comps, pins=pins, die=die, rows=rows)
 
-    def _source_tracks(self):
-        """{(axis, layer): (start, step)} from the TRACKS of the source DEF."""
-        tracks = {}
-        for line in open(self.manifest['source']['def']['path'], errors='replace'):
-            if line.startswith('TRACKS'):
-                t = line.split()                   # TRACKS X start DO n STEP s LAYER l ;
-                tracks[(t[1], t[8])] = (int(t[2]), int(t[6]))
-            elif line.startswith('COMPONENTS'):
-                break
-        return tracks
+    def _netlist_diff(self, t):
+        """What differs between a parsed template DEF and this design's netlist, briefly."""
+        n = self.manifest.get('counts', {}).get('cells', 0)
+        mine, theirs = set(self.names['cells'][:n]), {c[0] for c in t['comps']}
+        extra, miss = sorted(theirs - mine), sorted(mine - theirs)
+        parts = []
+        if extra:
+            parts.append('the template has %d cells the design does not (e.g. %s)' % (len(extra), ', '.join(extra[:3])))
+        if miss:
+            parts.append('the design has %d cells the template does not (e.g. %s)' % (len(miss), ', '.join(miss[:3])))
+        if not parts:
+            parts.append('same cells, but masters, IO pins or net connections differ')
+        return '; '.join(parts)
+
+    def tracks(self):
+        """{(axis 'X' or 'Y', layer name): (start, step)} in DBU: the routing tracks stored in the IR (empty when the
+        source had none, or for an IR older than attar-ir 0.5)."""
+        a = self.raw
+        if 'tr_axis' not in a or not len(a['tr_axis']):
+            return {}
+        names = self.names['layers']
+        return {('Y' if a['tr_axis'][k] else 'X', names[a['tr_layer'][k]]): (int(a['tr_start'][k]), int(a['tr_step'][k]))
+                for k in range(len(a['tr_axis'])) if a['tr_layer'][k] >= 0}
 
     def macro_grid(self, mac):
         """Where macros may go so that their pins can be routed: per axis a step and, per macro, an offset, so the
-        legal lower-left positions are offset + k * step (microns). With a LEF/DEF source, the signal pins of a
-        macro must sit on the preferred-direction tracks of their layer (DEF TRACKS; y for horizontal layers, x for
-        vertical ones), as ORFS's macro placer leaves them: off-track macro pins made ORFS detailed routing fail
-        (riscv32i: ORFS's own macro placement moved 24 dbu off the M4 tracks gave 12 unroutable nets). The residue
-        most of a macro's pins agree on wins. Otherwise (and on an axis no pin constrains) the site / row grid from
-        the core origin, or the database grid without rows. Orientation N only (as Naive places macros).
+        legal lower-left positions are offset + k * step (microns). With the 'tracks' fact, the signal pins of a
+        macro must sit on the preferred-direction tracks of their layer (y for horizontal layers, x for vertical
+        ones), as ORFS's macro placer leaves them: off-track macro pins made ORFS detailed routing fail (riscv32i:
+        ORFS's own macro placement moved 24 dbu off the M4 tracks gave 12 unroutable nets). The residue most of a
+        macro's pins agree on wins (ties: the smallest). Without it (and on an axis no pin constrains) the site /
+        row grid from the core origin, or the database grid without rows. Everything comes from the IR. Orientation
+        N only (as Naive places macros). Sets self.macro_grid_source ('tracks' or 'rows').
         Returns (step (2,), offsets (len(mac), 2)) as tensors."""
         dev = self.device
         n = len(mac)
@@ -536,56 +584,56 @@ class Design:
         step = [sw, hb]
         off = np.zeros((n, 2))
         off[:, 0] = core[0] % sw; off[:, 1] = core[1] % hb
-        src = self.manifest.get('source', {})
-        if src.get('format') != 'lefdef' or n == 0:
+        tracks = self.tracks() if 'tracks' in self.facts else {}
+        self.macro_grid_source = 'tracks' if tracks else 'rows'
+        if not tracks or n == 0 or 'm_pin_layer' not in self.raw:
             return torch.tensor(step, device=dev), torch.as_tensor(off, device=dev, dtype=torch.float32)
-        from .lef import read_lef
-        lefs, tech = read_lef([l['path'] for l in src['lef']])
-        hor = {l['name']: l.get('direction') == 'HORIZONTAL' for l in tech['layers']}
-        tracks = self._source_tracks()
-        masters, cm = self.names['masters'], self.raw['c_master']
-        votes = [{}, {}]                                  # axis -> {(step, residue): pins} per macro
+        a = self.raw
+        tp, _ = st.load(os.path.join(self.path, 'tech_profile.safetensors'))
+        names, ldir = self.names['layers'], tp['layer_dir']           # 0: horizontal (tracks along y)
+        ptr, box, use, lay, cm = a['m_pin_ptr'], a['m_pin_box'], a['m_pin_use'], a['m_pin_layer'], a['c_master']
+        from .distill import U_GROUND, U_POWER
+        votes = [{}, {}]                                  # axis -> {(step, residue): macros}
         per = []
         for i in mac.tolist():
-            M = lefs.get(masters[cm[i]]) if cm[i] >= 0 else None
             v = [{}, {}]
-            for pn, (b, use) in (M.pins.items() if M is not None else ()):
-                L = M.pin_layer.get(pn)
-                if use in ('POWER', 'GROUND') or L not in hor:
+            m = int(cm[i])
+            for k in (range(int(ptr[m]), int(ptr[m + 1])) if m >= 0 else ()):
+                L = int(lay[k])
+                if use[k] in (U_POWER, U_GROUND) or L < 0:
                     continue
-                ax = 1 if hor[L] else 0
-                start, st = tracks.get(('Y' if ax else 'X', L), (None, None))
-                if st is None:
+                ax = 1 if ldir[L] == 0 else 0
+                start, st_ = tracks.get(('Y' if ax else 'X', names[L]), (None, None))
+                if st_ is None:
                     continue
-                c = round((b[0] + b[2]) / 2 * self.dbu) if ax == 0 else round((b[1] + b[3]) / 2 * self.dbu)
-                key = (st, (start - c) % st)
+                c = (int(box[k, 0]) + int(box[k, 2])) // 2 if ax == 0 else (int(box[k, 1]) + int(box[k, 3])) // 2
+                key = (st_, (start - c) % st_)
                 v[ax][key] = v[ax].get(key, 0) + 1
             per.append(v)
             for ax in (0, 1):
                 if v[ax]:
-                    k = max(v[ax], key=v[ax].get)[0]
-                    votes[ax][k] = votes[ax].get(k, 0) + 1
+                    kk = max(v[ax].items(), key=lambda kv: (kv[1], -kv[0][1]))[0][0]
+                    votes[ax][kk] = votes[ax].get(kk, 0) + 1
         for ax in (0, 1):
             if not votes[ax]:
                 continue
-            st = max(votes[ax], key=votes[ax].get)          # the step most macros' pins want
-            step[ax] = st / self.dbu
+            st_ = max(votes[ax].items(), key=lambda kv: (kv[1], -kv[0]))[0]       # the step most macros' pins want
+            step[ax] = st_ / self.dbu
             for j, v in enumerate(per):
-                cand = {k: c for k, c in v[ax].items() if k[0] == st}
-                off[j, ax] = (max(cand, key=cand.get)[1] if cand else 0) / self.dbu
+                cand = {k: c for k, c in v[ax].items() if k[0] == st_}
+                off[j, ax] = (max(cand.items(), key=lambda kv: (kv[1], -kv[0][1]))[0][1] if cand else 0) / self.dbu
         return torch.tensor(step, device=dev), torch.as_tensor(off, device=dev, dtype=torch.float32)
 
-    def _pin_shapes(self, xy):
+    def _pin_shapes(self, xy, dbu, tracks):
         """IO pins as DEF pins, as ORFS's place_pins makes them: on the nearest die edge, a shape on the vertical
         layer (bottom, top) or horizontal layer (left, right), half of it inside the die, centered on a track of
-        that layer (TRACKS of the source DEF), at least 2 tracks from the next pin on the same edge."""
-        from . import st
+        that layer (tracks: {(axis, layer): (start, step)} in DBU), at least 2 tracks from the next pin on the same
+        edge."""
         tp, _ = st.load(os.path.join(self.path, 'tech_profile.safetensors'))
         names = self.names['layers']
         h, v = self.pin_layers()
         width = {n: int(tp['layer_width'][i]) for i, n in enumerate(names)}
-        tracks = self._source_tracks()
-        die = [int(round(t * self.dbu)) for t in self.die_box[0].tolist()]
+        die = [int(round(t * dbu)) for t in self.die_box[0].tolist()]
         cells = self.names['cells']
         sides = {0: [], 1: [], 2: [], 3: []}
         for i in self.io.tolist():
@@ -616,23 +664,34 @@ class Design:
         return out
 
 
-ZOO = os.environ.get('ATTAR_ZOO', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'zoo'))
-
-
-def load(name, device='cpu'):
-    """Load a distilled design: a folder path, or a zoo name such as 'orfs_asap7/aes' (looked up in $ATTAR_ZOO)."""
-    path = name if os.path.isdir(name) else os.path.join(ZOO, name)
+def load(name, device='cpu', download=True, root=None):
+    """Load a distilled design: a folder path, or a zoo name such as 'orfs_asap7/aes' looked up in the zoo (`root`,
+    default paths.zoo_dir()). A zoo name that is not there is downloaded from the Hugging Face Hub first
+    (attar.hub), unless download=False."""
+    if os.path.isdir(name):
+        path = name
+    else:
+        path = os.path.join(paths.zoo_dir(root), name)
+        if download and not os.path.exists(os.path.join(path, 'manifest.json')) and not os.path.isabs(name):
+            from .hub import fetch
+            fetch(name, root=root)
     if not os.path.exists(os.path.join(path, 'manifest.json')):
-        raise FileNotFoundError('no distilled design %r (looked in %s)' % (name, path))
+        raise FileNotFoundError('no distilled design %r (looked in %s%s)' % (
+            name, path, ' and on the Hugging Face Hub' if download and not os.path.isdir(name) else ''))
     return Design(path, device)
 
 
-def zoo(suite=None):
-    """Names of the distilled designs in the local zoo."""
+def zoo(suite=None, remote=False, root=None):
+    """Names of the distilled designs: in the local zoo (`root`, default paths.zoo_dir()), or (remote=True) on the
+    Hugging Face Hub."""
+    if remote:
+        from .hub import index
+        return sorted(n for n in index() if suite is None or n.split('/')[0] == suite)
+    root = paths.zoo_dir(root)
     out = []
-    for s in sorted(os.listdir(ZOO)) if os.path.isdir(ZOO) else []:
-        if (suite and s != suite) or not os.path.isdir(os.path.join(ZOO, s)):
+    for s in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        if (suite and s != suite) or s.startswith('.') or not os.path.isdir(os.path.join(root, s)):
             continue
-        out += ['%s/%s' % (s, d) for d in sorted(os.listdir(os.path.join(ZOO, s)))
-                if os.path.exists(os.path.join(ZOO, s, d, 'manifest.json'))]
+        out += ['%s/%s' % (s, d) for d in sorted(os.listdir(os.path.join(root, s)))
+                if os.path.exists(os.path.join(root, s, d, 'manifest.json'))]
     return out

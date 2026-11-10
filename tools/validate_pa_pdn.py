@@ -4,7 +4,8 @@
 1. HPWL on the GPU from the distilled final DEF vs Innovus' own 'Total net bbox length' before routeDesign.
 2. Write-back of the unchanged placement: COMPONENTS identical to the source.
 3. Write-back of a perturbed placement (shifts and flips): re-distilled HPWL equals the in-memory HPWL.
-usage: validate_pa_pdn.py <scratch dir> [design ...]"""
+usage: validate_pa_pdn.py <scratch dir> [design ...] [--ns3k ~/i3dPDK_NS3K]"""
+import argparse
 import glob
 import os
 import sys
@@ -15,10 +16,6 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import attar  # noqa: E402
 
-HOME = os.path.expanduser('~')
-OUT = HOME + '/i3dPDK_NS3K/innovus_enablement/pnr/out'
-ENA = HOME + '/i3dPDK_NS3K/innovus_enablement'
-LEFS = [ENA + '/lef_x4/i3dPDK_NS3K_5T_tech_unidir_dir.lef', ENA + '/lef_x4/NS3K_5T_cells.lef'] + sorted(glob.glob(ENA + '/lef_x4/fakeram*.lef'))
 
 
 def innovus_bbox(run):
@@ -46,8 +43,14 @@ def sync(dev):
 
 
 if __name__ == '__main__':
-    tmp = sys.argv[1]
-    designs = sys.argv[2:] or ['gcd', 'aes', 'jpeg', 'riscv32i', 'bp_fe_top', 'ariane133']
+    ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    ap.add_argument('scratch'); ap.add_argument('designs', nargs='*', default=['gcd', 'aes', 'jpeg', 'riscv32i', 'bp_fe_top', 'ariane133'])
+    ap.add_argument('--ns3k', default='~/i3dPDK_NS3K', help='the i3dPDK_NS3K kit folder')
+    a = ap.parse_args()
+    tmp, designs = a.scratch, a.designs
+    ENA = os.path.join(os.path.abspath(os.path.expanduser(a.ns3k)), 'innovus_enablement')
+    OUT = ENA + '/pnr/out'
+    LEFS = [ENA + '/lef_x4/i3dPDK_NS3K_5T_tech_unidir_dir.lef', ENA + '/lef_x4/NS3K_5T_cells.lef'] + sorted(glob.glob(ENA + '/lef_x4/fakeram*.lef'))
     dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device', dev)
     for d in designs:
@@ -72,7 +75,7 @@ if __name__ == '__main__':
 
         # 2. unchanged write-back
         out = os.path.join(tmp, d + '.same.def')
-        n = x.export(out)
+        n = x.export(src, out)
         a, b = components(src), components(out)
         diff = sum(1 for u, v in zip(a, b) if u != v) + abs(len(a) - len(b))
         print('  write-back unchanged: %d lines needed rewriting, %d COMPONENTS lines differ; other sections identical: %s' % (
@@ -88,7 +91,7 @@ if __name__ == '__main__':
         x.update_orient()
         h1 = x.hpwl().item()
         out = os.path.join(tmp, d + '.moved.def')
-        x.export(out)
+        x.export(src, out)
         attar.distill(out, LEFS, ir + '_moved')
         h2 = attar.load(ir + '_moved', dev).hpwl().item()
         print('  write-back perturbed (%d cells): in-memory %.3f um, re-distilled %.3f um, diff %.2e' % (len(pick), h1, h2, abs(h1 - h2) / h1))

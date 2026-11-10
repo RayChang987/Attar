@@ -7,7 +7,7 @@ import unittest
 import numpy as np  # noqa: F401
 import torch  # noqa: F401
 
-from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, need, gpl_final_hpwl, attar
+from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, BOOKSHELF, need, gpl_final_hpwl, attar, source_def, source_lefs
 from attar import st  # noqa: F401
 from attar.deffile import read_def  # noqa: F401
 from attar.design import _orient_offset  # noqa: F401
@@ -49,7 +49,7 @@ class DesignTest(unittest.TestCase):
         names = attar.zoo('orfs_asap7')
         self.assertIn(SMALL, names)
         d = need(SMALL)
-        self.assertTrue(d.has('netlist') and d.has('rows') and d.has('writeback'))
+        self.assertTrue(d.has('netlist') and d.has('rows') and d.has('cell_library') and d.has('tracks'))
         self.assertFalse(d.has('timing'))
         self.assertEqual(d.facts['pin_offsets'], 'lef')
         self.assertEqual(d.manifest['fidelity'], 'F1')
@@ -62,8 +62,8 @@ class DesignTest(unittest.TestCase):
 
     def test_hpwl_matches_an_independent_numpy_computation(self):
         d = need(MEDIUM).restore('reference')
-        src = read_def(d.manifest['source']['def']['path'])
-        macros, _ = read_lef([l['path'] for l in d.manifest['source']['lef']])
+        src = read_def(source_def(d))
+        macros, _ = read_lef(source_lefs(d))
         dbu = src['dbu']
         comp = {c[0]: c for c in src['comps']}
         io = {p[0]: (p[3], p[4]) for p in src['pins']}
@@ -112,11 +112,12 @@ class CapabilityTest(unittest.TestCase):
 
     def test_explicit_positions_need_no_placement_state(self):
         d = need(MEDIUM)
-        ref = attar.load(MEDIUM, DEV).restore('reference')
+        ref = attar.load(MEDIUM, DEV, download=False).restore('reference')
         self.assertAlmostEqual(d.hpwl(ref.pos).item(), ref.hpwl().item(), delta=1e-3)
+        src = source_def(d)
         with tempfile.TemporaryDirectory() as t:       # unplaced: export writes the floorplan only (unchanged here)
-            d.export(t + '/fp.def')
-            self.assertTrue(filecmp.cmp(t + '/fp.def', d.manifest['source']['def']['path'], shallow=False))
+            d.export(src, t + '/fp.def')
+            self.assertTrue(filecmp.cmp(t + '/fp.def', src, shallow=False))
 
     def test_missing_facts_are_not_filled_in(self):
         d = need(SMALL)
@@ -136,7 +137,7 @@ class CapabilityTest(unittest.TestCase):
 class DieTest(unittest.TestCase):
     def test_2d_design_is_one_die_matching_the_def(self):
         d = need(MEDIUM)
-        src = read_def(d.manifest['source']['def']['path'])
+        src = read_def(source_def(d))
         self.assertEqual(d.num_dies, 1)
         np.testing.assert_allclose(d.die_box[0].cpu().numpy(), [v / src['dbu'] for v in src['die']], atol=1e-4)
         self.assertEqual(int(d.cell_die.max()), 0)
@@ -204,9 +205,10 @@ class VizTest(unittest.TestCase):
 class WritebackTest(unittest.TestCase):
     def test_unchanged_reference_writes_back_the_source_byte_for_byte(self):
         d = need(SMALL).restore('reference')
+        src = source_def(d)
         with tempfile.TemporaryDirectory() as t:
-            d.export(t + '/out.def')
-            self.assertTrue(filecmp.cmp(t + '/out.def', d.manifest['source']['def']['path'], shallow=False))
+            d.export(src, t + '/out.def')
+            self.assertTrue(filecmp.cmp(t + '/out.def', src, shallow=False))
 
     def test_moved_and_flipped_cells_survive_a_redistill(self):
         d = need(SMALL).restore('reference')
@@ -217,11 +219,11 @@ class WritebackTest(unittest.TestCase):
         d.pos[pick, 0] += 2 * site
         d.orient[pick] = torch.tensor([0, 1, 4, 5], device=d.device)[torch.randint(0, 4, (len(pick),), generator=g).to(d.device)]
         d.update_orient()
-        lefs = [l['path'] for l in d.manifest['source']['lef']]
+        src, lefs = source_def(d), source_lefs(d)
         with tempfile.TemporaryDirectory() as t:
-            d.export(t + '/moved.def')
+            d.export(src, t + '/moved.def')
             attar.distill(t + '/moved.def', lefs, t + '/ir')
-            e = attar.load(t + '/ir', DEV)
+            e = attar.load(t + '/ir', DEV, download=False)
             self.assertAlmostEqual(e.hpwl().item(), d.hpwl().item(), delta=1e-3)
             np.testing.assert_array_equal(e.orient.cpu().numpy(), d.orient.cpu().numpy())
 
@@ -229,9 +231,42 @@ class WritebackTest(unittest.TestCase):
         d = need(SMALL).restore('reference')
         fixed = ((d.flags & (FIXED | TERMINAL)) != 0)
         d.pos[fixed] += 5.0  # must be ignored by export
+        src = source_def(d)
         with tempfile.TemporaryDirectory() as t:
-            d.export(t + '/out.def')
-            self.assertTrue(filecmp.cmp(t + '/out.def', d.manifest['source']['def']['path'], shallow=False))
+            d.export(src, t + '/out.def')
+            self.assertTrue(filecmp.cmp(t + '/out.def', src, shallow=False))
+
+    def test_export_checks_the_template(self):
+        d = need(SMALL).restore('reference')
+        other = source_def(need(MEDIUM))                         # a DEF of another design
+        with tempfile.TemporaryDirectory() as t:
+            with self.assertRaises(ValueError) as e:
+                d.export(other, t + '/x.def')
+            self.assertIn('netlist', str(e.exception))
+            self.assertIn('force=True', str(e.exception))
+            self.assertFalse(os.path.exists(t + '/x.def'))
+            with open(source_def(d)) as f:                     # same design, other units
+                src = f.read()
+            dbu = 'UNITS DISTANCE MICRONS %d' % d.dbu
+            self.assertIn(dbu, src)
+            with open(t + '/units.def', 'w') as f:
+                f.write(src.replace(dbu, 'UNITS DISTANCE MICRONS %d' % (2 * d.dbu)))
+            with self.assertRaises(ValueError) as e:
+                d.export(t + '/units.def', t + '/x.def')
+            self.assertIn('units', str(e.exception))
+            with self.assertWarns(UserWarning):              # force: written anyway, with a warning
+                d.export(other, t + '/x.def', force=True)
+            self.assertTrue(os.path.exists(t + '/x.def'))
+
+    def test_export_needs_a_cell_library(self):
+        b = need(BOOKSHELF)
+        self.assertNotIn('cell_library', b.facts)
+        self.assertIn('cell_library', b.missing('export'))
+        src = source_def(need(SMALL))
+        with tempfile.TemporaryDirectory() as t:
+            with self.assertRaises(MissingFacts) as e:
+                b.export(src, t + '/x.def')
+            self.assertIn('force=True', str(e.exception))
 
 class StatusTest(unittest.TestCase):
     def test_status_checklist_and_tiers(self):
@@ -249,7 +284,7 @@ class StatusTest(unittest.TestCase):
 
     def test_tier_b_and_the_gap_to_a(self):
         try:
-            n = attar.load('ns3k/aes', DEV)            # NS3K: DEF write-back, no slow loop here
+            n = attar.load('ns3k/aes', DEV, download=False)            # NS3K: DEF write-back, no slow loop here
         except FileNotFoundError:
             raise unittest.SkipTest('no ns3k zoo')
         self.assertEqual(n.tier(), 'B')

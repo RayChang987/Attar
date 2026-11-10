@@ -40,11 +40,11 @@ Attar 只做「全域、可張量化、容許估計誤差」的問題；需要�
 
 設計原則：
 
-1. **蒸餾，不是刪除**：只保留算代理指標必需的參數；原始 LEF、Liberty、DEF 的路徑與雜湊保留在 manifest，供回寫與重現使用。
+1. **蒸餾，不是刪除**：只保留算代理指標必需的參數；原始 LEF、Liberty、DEF 以檔名與雜湊記在 manifest（不記路徑），供重現使用；IR 自給自足，快迴圈只讀 IR，不讀任何環境變數。
 2. **資料全程在 GPU 張量**：只有讀檔與寫檔兩端做轉換；內層迴圈不呼叫 `.item()`、`.cpu()`，收斂判斷每 k 次迭代才同步一次。
 3. **零編譯安裝**：核心只依賴 PyTorch 原生運算，不寫自訂 C++/CUDA kernel；Xplace、DREAMPlace 只當選配 adapter。
 4. **每個指標都標保真度與解析度**：使用者永遠知道數字可信到什麼程度，以及差距多大才算數（第 7 節）。低於解析度的差距，報告直接標「無法判斷」。
-5. **單向蒸餾，placement 可回寫**：PDK 只蒸餾、不重建。回到慢迴圈的只有演算法的輸出，也就是 cell 的座標與方向；它們寫回原始 DEF 的 COMPONENTS，其餘內容原封不動。只有來源是 DEF 的設計能回寫，Bookshelf 設計明確標示「不可回寫」。
+5. **單向蒸餾，placement 可回寫**：PDK 只蒸餾、不重建。回到慢迴圈的只有演算法的輸出（cell 座標與方向，以及引擎改過的 floorplan）：`d.export(template_def, out_def)` 把它們「印」在使用者給的一份該設計的 DEF 上，其餘內容原封不動；寫出前檢查 cell library、單位、netlist 指紋與 die，不符就拒絕（`force=True` 才強寫並警告）。只有具 `cell_library` 事實（LEF/DEF 來源）的設計能 export，Bookshelf、YAL、GSRC 沒有。
 
 回寫的理由：快迴圈有解析度上限（第 7.1 節：HPWL 差距在 1–2% 以內時，routed WL 同向率只有約 85%），而論文的改進常落在這個範圍。回寫讓使用者在移植演算法到 OpenROAD 之前，就能用 ORFS 驗證；第 7 節的驗證實驗本身也需要這條路。
 
@@ -58,7 +58,7 @@ Attar 只做「全域、可張量化、容許估計誤差」的問題；需要�
 | Detailed routing、DRC | 規則密集、局部、序列化 | TritonRoute、商業工具 |
 | CTS、PDN | 結構性設計決策，非全域最佳化 | ORFS flow |
 | 精確寄生萃取 | 需完整幾何 | OpenRCX |
-| 從 IR 重建完整 DEF、LEF、Liberty | 蒸餾掉的資訊無法還原；回寫只需替換座標 | 原始檔（manifest 記錄路徑與雜湊） |
+| 從 IR 重建完整 DEF、LEF、Liberty | 蒸餾掉的資訊無法還原；回寫只需替換座標 | 使用者給的 DEF 模板（manifest 記錄檔名與雜湊） |
 | OpenDB（odb）讀寫後端 | 需編譯 OpenROAD，違反零編譯 | ORFS |
 | RosettaStone 專屬整合 | 它吃 ORFS 格式；回寫的 DEF 能進 ORFS 即可 | ORFS 注入範例腳本 |
 
@@ -121,7 +121,8 @@ v0.1 的成功不是「環節都有」，而是「wirelength 的快迴圈結論�
 | `routing` | layer 方向與 pitch、GCell grid 與容量、pin access | 題目 |
 | `timing` | Liberty 的 arc 與 pin cap、clock、I/O delay | 題目 |
 | `stack` | 3D：各 die 的製程、HBT 參數 | 題目 |
-| `writeback` | 可回寫的來源 DEF（路徑加雜湊） | 題目 |
+| `cell_library` | cell 是真實 cell library（LEF master）的實例，結果可印回 DEF | 題目 |
+| `tracks` | 各層 routing track 與每個 macro pin 的 layer（macro pin 對齊 track） | 題目 |
 | `placement` | 所有可移動 cell 的位置與方向 | 解答狀態 |
 
 **能力（capabilities）**：每個演算法宣告它需要哪些事實，Design 由此推出 `capabilities()`。缺事實時，`d.missing("global_route")` 會列出缺哪幾項，不只是報錯。
@@ -135,7 +136,7 @@ v0.1 的成功不是「環節都有」，而是「wirelength 的快迴圈結論�
 | legalization、detailed placement | 再加 `rows`、`placement` |
 | global routing | 再加 `routing`、`placement` |
 | STA、sizing | `netlist`、`timing`（有 `placement` 時才估線的 RC） |
-| 回寫 | `writeback`、`placement` |
+| export（印回 DEF） | `netlist`、`cell_library` |
 
 **題目與解答狀態分開**：題目（netlist、幾何、floorplan、tech）基本不變；解答狀態（位置、方向、die 分配，之後還有 route 與 sizing 結果）由演算法改寫。解答狀態可以存成具名 snapshot，例如蒸餾時保留的來源 placement 就是一個叫 `reference` 的 snapshot。會改 netlist 的操作（buffering、sizing）同時動到題目，需要另外的交易機制，列為後續工作。
 
@@ -194,7 +195,7 @@ Tech Profile 是一小組張量，只保留算代理指標必需的參數；線�
 
 ### 5.4 磁碟格式
 
-每個設計一個資料夾：張量存 safetensors，加一份 JSON manifest，記錄 schema 版本、來源格式、DBU、存在哪些層、保真度等級、原始檔案路徑與雜湊。首次讀原始格式時寫入快取，之後直接讀快取。散布方式見 5.6。
+每個設計一個資料夾：張量存 safetensors，加一份 JSON manifest，記錄 schema 版本、來源格式、DBU、存在哪些層、保真度等級、原始檔案的檔名與雜湊（不記路徑）。首次讀原始格式時寫入快取，之後直接讀快取。散布方式見 5.6。
 
 原型實測（RTX 3080 Ti）：118 萬 cell、220 個 macro 的 bp_quad，從 1.15GB DEF 蒸餾 34 秒（一次性），之後從快取載入到 GPU 0.3 秒、IR 95MB、HPWL 1.5 ms、WA wirelength 前向加反向 8.5 ms、GPU 記憶體 0.9GB。ASAP7 的 9 個 ORFS 設計（含 4 個 macro 設計，最大 12.5 萬 cell）載入都在 0.5 秒內，HPWL 與 OpenROAD GPL 回報值差 −0.66% 到 +0.03%。manifest 另記資料品質警告，例如 ORFS `AUTO_MEMORIES` 產生的 macro LEF 有 signal pin 超出外框。
 
@@ -222,8 +223,8 @@ Floorplanning benchmark 是 block 層級。硬模組直接放進 Core 層（每�
 | zoo suite | 讀取器 | 設計數 | 有的事實 | 一載入就能做 |
 | --- | --- | --- | --- | --- |
 | `ispd2005` | Bookshelf | 8 | 全部 Core（tier C） | GP、LG |
-| `ispd2015` | LEF/DEF | 20 | Core + writeback；fence、blockage 只計數（`not_stored`），`placement.constraints` 的 maximum_utilization 記為 `target_density` | GP、LG、export |
-| `ispd2018`、`ispd2019` | LEF/DEF | 10 + 10 | Core + writeback + placement；route guide 未讀 | HPWL、合法性、重新擺放 |
+| `ispd2015` | LEF/DEF | 20 | Core + cell_library + tracks；fence、blockage 只計數（`not_stored`），`placement.constraints` 的 maximum_utilization 記為 `target_density` | GP、LG、export |
+| `ispd2018`、`ispd2019` | LEF/DEF | 10 + 10 | Core + cell_library + tracks + placement；route guide 未讀 | HPWL、合法性、重新擺放 |
 | `ispd2024` | LEF/DEF（Nangate45） | 5 | 同上；`.cap/.net` 未讀 | 同上 |
 | `iccad2025` | LEF/DEF（ASAP7 + Liberty 路徑，F1） | 13 | 同上；Verilog、SDC、SPEF 未讀 | 同上（11 個輸入的 cell 全是 N，rail 不合法） |
 | `gsrc_place` | Bookshelf | 4 | 全部 Core | GP、LG |
@@ -368,7 +369,7 @@ d = attar.load("orfs/asap7/aes", device="cuda")        # 首次下載並轉換�
 d = attar.place.global_place(d, engine="builtin")       # 可換 "xplace"、"dreamplace"
 d = attar.place.legalize(d, engine="tetris")
 print(attar.compare(d, baseline="builtin"))             # HPWL 等差距，附保真度與「可信／無法判斷」
-attar.export(d, "out.def")                              # 只回寫座標與方向，交給 ORFS 驗證
+d.export("aes.def", "out.def")                          # 印在該設計的 DEF 上，交給 ORFS 驗證
 ```
 
 API 原則：

@@ -1,8 +1,23 @@
 # Benchmarks
 
-Attar ships readers, not data. The zoo (`zoo/<suite>/<design>`) is built locally from public benchmarks; each
-design is a folder with `core.safetensors` (integer arrays), `names.json.gz`, `tech_profile.safetensors` and
+The pip package ships readers, not data. The zoo of distilled designs lives on the Hugging Face Hub
+(`RayChang987/attar-zoo`) and is downloaded on first use, or built locally from the raw benchmarks. Each design is a
+folder `<suite>/<design>` with `core.safetensors` (integer arrays), `names.json.gz`, `tech_profile.safetensors` and
 `manifest.json` (facts, provenance, counts, source hashes).
+
+## Where Attar looks
+
+The zoo is `zoo/` in a source checkout, else `~/.cache/attar/zoo`; every function that reads it takes `root=`.
+There are no environment variables. A design is self-contained: loading, evaluating, placing (macros on their
+routing tracks included) and plotting read only its folder. Manifests record each source file by name and sha256,
+never by path. To get a DEF back, hand `Design.export` a DEF of the design (see [concepts](concepts.md#self-contained-designs-and-export)).
+
+## Publishing the zoo
+
+```bash
+python tools/zoo_release.py                    # checks manifests, writes zoo/index.json and zoo/README.md (the card)
+hf upload-large-folder RayChang987/attar-zoo zoo/ --repo-type dataset
+```
 
 ## Building the zoo
 
@@ -11,7 +26,7 @@ design is a folder with `core.safetensors` (integer arrays), `names.json.gz`, `t
 | ISPD 2005/2015, GSRC placement, ICCAD 2025 | `benchmarks/placement/<suite>/` | `python tools/distill_benchmarks.py <suite>` |
 | ISPD 2018/2019/2024 routing benchmarks | `benchmarks/routing/<suite>/` | `python tools/distill_benchmarks.py <suite>` |
 | MCNC (YAL), GSRC blocks, IBM-HB+ | `benchmarks/floorplan/...` | `python tools/distill_benchmarks.py mcnc gsrc_hard ...` |
-| ORFS asap7 designs | `orfs_runs/<design>_base` (`tools/orfs_run_to_gp.sh`) | `python tools/distill_orfs.py <design>`; `STAGE=2_1_floorplan` for the floorplan stage |
+| ORFS asap7 designs | `orfs_runs/<design>_base` (`tools/orfs_run_to_gp.sh`) | `python tools/distill_orfs.py <design>`; `--stage 2_1_floorplan` for the floorplan stage |
 
 `python tools/distill_benchmarks.py --list` shows what each suite expects. The ORFS tools use the docker image
 `openroad/orfs:26Q4-368-g9ca2a9e76`.
@@ -20,15 +35,15 @@ design is a folder with `core.safetensors` (integer arrays), `names.json.gz`, `t
 
 | reader | formats | facts |
 | --- | --- | --- |
-| `attar.distill` | LEF/DEF | netlist, geometry, pin offsets, die, IO pins and macros (when placed), rows, write-back; Liberty paths recorded (fidelity F1) |
-| `attar.bookshelf` | Bookshelf (.aux) | netlist, geometry, pin offsets, die (rows + fixed nodes), IO, macros, rows; no write-back |
+| `attar.distill` | LEF/DEF | netlist, geometry, pin offsets, die, IO pins and macros (when placed), rows, cell library, tracks; Liberty files recorded (fidelity F1) |
+| `attar.bookshelf` | Bookshelf (.aux) | netlist, geometry, pin offsets, die (rows + fixed nodes), IO, macros, rows; no cell library |
 | `attar.fpformats.distill_yal` | YAL (MCNC) | netlist, block geometry, pin offsets, die (parent outline), pads; blocks unplaced |
 | `attar.fpformats.distill_blocks` | GSRC/UCSC .blocks | netlist; hard blocks: geometry, pins at block centers; soft blocks: area and aspect range only (no geometry) |
 
 Rules every reader follows:
 
 - **Only what the format has.** Fence regions, blockages, route guides, SDC and SPEF are counted or recorded by
-  path (`not_stored`, `unread_sources` in the manifest), never half-claimed as a fact.
+  name (`not_stored`, `unread_sources` in the manifest), never half-claimed as a fact.
 - **Placed non-core instances are floorplan.** Macros, pads, corners and endcaps that the source places are frozen.
 - **Units are kept exact.** DEF in DBU; Bookshelf in the smallest of 1/2, 1/10, 1/100, 1/1000 unit that stores
   every value exactly (IBM-HB+'s sqrt(area) blocks are rounded to 1/1000 and the error is recorded).
@@ -43,7 +58,7 @@ Rules every reader follows:
 | ispd2024 | 5 | 120k-715k | placed | re-placed legal |
 | iccad2025 | 13 | 2k-298k | placed | re-placed legal |
 | gsrc_place | 4 | 0.8k-28k | cells unplaced | legal |
-| ns3k | 16 | 0.3k-170k | cells unplaced | legal |
+| ns3k | 16 | 0.3k-170k | cells unplaced | legal (`tools/distill_pa_pdn.py --ns3k <kit>`) |
 | orfs_asap7 | 9 | 0.4k-125k | cells unplaced | legal; ORFS round trip |
 | orfs_asap7_2_1, _3_2 | 9 | 9k-108k | IO, macros unplaced | floorplan + legal; ORFS hand-off |
 | stress/bp_quad | 1 | 1.18M | placed | from scratch, legal |

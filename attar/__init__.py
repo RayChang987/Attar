@@ -4,5 +4,6 @@ from the facts it has. See README.md."""
 from .design import Design, load, zoo
 from .distill import distill
 from .evaluator import Evaluator
+from .hub import fetch
 
-__all__ = ['Design', 'load', 'zoo', 'distill', 'Evaluator']
+__all__ = ['Design', 'load', 'zoo', 'fetch', 'distill', 'Evaluator']

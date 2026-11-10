@@ -4,7 +4,7 @@ import unittest
 
 import torch  # noqa: F401
 
-from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, BOOKSHELF, need, attar
+from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, BOOKSHELF, need, attar, source_def, source_lefs
 
 
 class NaiveTest(unittest.TestCase):
@@ -47,7 +47,7 @@ class NaiveTest(unittest.TestCase):
     def test_multi_row_height_cells_are_legalized(self):
         from attar import naive
         try:
-            d = attar.load('ns3k/serv', DEV)               # NS3K: 2-row flip-flops among 1-row cells
+            d = attar.load('ns3k/serv', DEV, download=False)               # NS3K: 2-row flip-flops among 1-row cells
         except FileNotFoundError:
             raise unittest.SkipTest('no ns3k zoo')
         naive.global_place(d, verbose=False)
@@ -80,7 +80,7 @@ class RailTest(unittest.TestCase):
     def test_checker_catches_wrong_parity_and_lg_respects_it(self):
         from attar import naive
         try:
-            d = attar.load('ns3k/aes', DEV)
+            d = attar.load('ns3k/aes', DEV, download=False)
         except FileNotFoundError:
             raise unittest.SkipTest('no ns3k zoo')
         naive.global_place(d, verbose=False)
@@ -107,13 +107,13 @@ class FloorplanTest(unittest.TestCase):
     def test_io_placement_unlocks_global_placement(self):
         from attar import naive
         try:
-            d = attar.load('orfs_asap7_3_2/aes', DEV)              # ORFS before its IO placement
+            d = attar.load('orfs_asap7_3_2/aes', DEV, download=False)              # ORFS before its IO placement
         except FileNotFoundError:
             raise unittest.SkipTest('no 3_2 zoo')
         self.assertEqual(d.missing('global_place'), ['floorplan.io'])
         naive.place_io(d, verbose=False)
         self.assertIn('global_place', d.capabilities())
-        self.assertIn('writeback', d.facts)                      # export writes the IO pins
+        self.assertIn('export', d.capabilities())                # export writes the IO pins
         self.assertNotIn('slow_loop', d.facts)                   # but ORFS 3_2 has built taps/PDN already
         b = d.die_box[0]
         p = d.io_pos
@@ -127,7 +127,7 @@ class FloorplanTest(unittest.TestCase):
     def test_macro_placement_then_cells_is_legal(self):
         from attar import naive
         try:
-            d = attar.load('orfs_asap7_2_1/riscv32i', DEV)         # ORFS floorplan: IO pins and macros unplaced
+            d = attar.load('orfs_asap7_2_1/riscv32i', DEV, download=False)         # ORFS floorplan: IO pins and macros unplaced
         except FileNotFoundError:
             raise unittest.SkipTest('no 2_1 zoo')
         self.assertEqual(d.capabilities(), ['die_size', 'export', 'io_place', 'plot', 'wirelength_model'])
@@ -153,7 +153,7 @@ class FloorplanTest(unittest.TestCase):
         self.assertTrue(d.facts['floorplan.die'].startswith('naive:make_die'))
         self.assertIn('floorplan.io', d.facts); self.assertIn('floorplan.macros', d.facts)
         self.assertNotIn('placement', d.present)          # the floorplan leaves the cells to the placer
-        self.assertIn('writeback', d.facts)               # export rewrites DIEAREA, ROWs, TRACKS
+        self.assertIn('export', d.capabilities())         # export rewrites DIEAREA, ROWs, TRACKS
         self.assertNotIn('slow_loop', d.facts)            # gcd comes from ORFS 3_3: no floorplan hand-off
         self.assertEqual(d.snapshots, {})
         r = d.place(verbose=False)
@@ -164,19 +164,19 @@ class FloorplanTest(unittest.TestCase):
 
     def test_naive_floorplan_writes_back_and_redistills(self):
         try:
-            d = attar.load('orfs_asap7_2_1/riscv32i', DEV)
+            d = attar.load('orfs_asap7_2_1/riscv32i', DEV, download=False)
         except FileNotFoundError:
             raise unittest.SkipTest('no 2_1 zoo')
         d.floorplan(utilization=0.5, verbose=False)
         d.place(verbose=False)
         self.assertIn('slow_loop', d.facts)                     # ORFS 2_1: the floorplan can be handed off
         self.assertIn('orfs_floorplan_handoff', d.capabilities())
-        lefs = [l['path'] for l in d.manifest['source']['lef']]
+        src, lefs = source_def(d), source_lefs(d)
         with tempfile.TemporaryDirectory() as t:
-            r = d.export(t + '/fp.def')
+            r = d.export(src, t + '/fp.def')
             self.assertEqual((r['pins'], r['die']), (len(d.io), 1))
             attar.distill(t + '/fp.def', lefs, t + '/ir')
-            e = attar.load(t + '/ir', DEV)
+            e = attar.load(t + '/ir', DEV, download=False)
         self.assertEqual(e.manifest['io_unplaced'], 0); self.assertEqual(e.manifest['macros_unplaced'], 0)
         self.assertTrue(torch.allclose(e.die_box, d.die_box, atol=1e-3))
         self.assertEqual(len(e.row_h), len(d.row_h))
@@ -187,14 +187,14 @@ class FloorplanTest(unittest.TestCase):
         from attar import naive
         from attar.lef import read_lef
         try:
-            d = attar.load('orfs_asap7_2_1/riscv32i', DEV)
+            d = attar.load('orfs_asap7_2_1/riscv32i', DEV, download=False)
         except FileNotFoundError:
             raise unittest.SkipTest('no 2_1 zoo')
         naive.place_io(d, verbose=False)
-        naive.place_macros(d, verbose=False)
-        lefs, _ = read_lef([l['path'] for l in d.manifest['source']['lef']])
-        tracks = d._source_tracks()
-        start, step = tracks[('Y', 'M4')]
+        r = naive.place_macros(d, verbose=False)
+        lefs, _ = read_lef(source_lefs(d))
+        self.assertEqual(r['grid'], 'tracks')
+        start, step = d.tracks()[('Y', 'M4')]
         for i in d.macros.tolist():
             M = lefs[d.names['masters'][d.raw['c_master'][i]]]
             y = round(float(d.pos[i, 1]) * d.dbu)
@@ -216,8 +216,45 @@ class FloorplanTest(unittest.TestCase):
         io0 = d.io_pos.clone()
         d.floorplan(verbose=False)
         self.assertTrue(torch.equal(d.io_pos, io0))
-        self.assertIn('writeback', d.facts)
+        self.assertIn('export', d.capabilities())
 
+    def test_macro_grid_from_the_ir_alone(self):
+        from attar.deffile import read_def
+        from attar.lef import read_lef
+        done = 0
+        for name in ('orfs_asap7_2_1/riscv32i', 'orfs_asap7_2_1/cva6'):
+            try:
+                d = attar.load(name, DEV, download=False)
+            except FileNotFoundError:
+                continue
+            mac = d.macros
+            step, off = d.macro_grid(mac)                  # reads the IR only
+            self.assertEqual(d.macro_grid_source, 'tracks')
+            # independently from the raw LEF and DEF: on each axis, the offset puts as many signal pins of the
+            # macro on a preferred-direction track of their layer as any offset can
+            lefs, tech = read_lef(source_lefs(d))
+            horiz = {l['name']: l.get('direction') == 'HORIZONTAL' for l in tech['layers']}
+            tr = {(a, l): (s0, sp) for a, s0, _, sp, l in read_def(source_def(d))['tracks']}
+            u = d.dbu
+            for k, i in enumerate(mac.tolist()):
+                M = lefs[d.names['masters'][d.raw['c_master'][i]]]
+                for ax in (0, 1):
+                    res = {}
+                    for pn, (b, use) in M.pins.items():
+                        l = M.pin_layer.get(pn)
+                        if use != 'SIGNAL' or l not in horiz or horiz[l] != (ax == 1) or ('XY'[ax], l) not in tr:
+                            continue
+                        s0, sp = tr[('XY'[ax], l)]
+                        c = (round(b[ax] * u) + round(b[ax + 2] * u)) // 2
+                        res[(sp, (s0 - c) % sp)] = res.get((sp, (s0 - c) % sp), 0) + 1
+                    if not res:
+                        continue
+                    o = round(float(off[k, ax]) * u)
+                    got = sum(n for (sp, r), n in res.items() if (o - r) % sp == 0)
+                    self.assertEqual(got, max(res.values()), (name, d.names['cells'][i], ax))
+                    done += 1
+        if not done:
+            raise unittest.SkipTest('no 2_1 zoo')
 
 if __name__ == '__main__':
     unittest.main()

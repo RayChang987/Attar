@@ -13,8 +13,8 @@ import time
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, ROOT)
 from attar.bookshelf import distill_bookshelf  # noqa: E402
-from attar.design import ZOO  # noqa: E402
-from attar.distill import distill  # noqa: E402
+from attar.paths import zoo_dir  # noqa: E402
+from attar.distill import distill, source_ref  # noqa: E402
 from attar.fpformats import distill_blocks, distill_yal  # noqa: E402
 
 B = os.path.join(ROOT, 'benchmarks')
@@ -113,8 +113,10 @@ SUITES = {
 
 
 def run(suite, name, kind, kw):
-    out = os.path.join(ZOO, suite, name)
+    out = os.path.join(zoo_dir(), suite, name)
     extra = dict(kw.pop('extra', {}) or {}, suite=suite)
+    if 'unread_sources' in extra:                 # by name + sha256, like every source
+        extra['unread_sources'] = {k: source_ref(v) for k, v in extra['unread_sources'].items()}
     if kind == 'lefdef':
         m = distill(kw['def_path'], kw['lef_paths'], out, lib_paths=kw.get('lib_paths', ()), extra=extra)
     elif kind == 'bookshelf':
