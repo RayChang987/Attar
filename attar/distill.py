@@ -14,10 +14,10 @@ import time
 import numpy as np
 
 from . import st
-from .deffile import ORIENT_ID, netlist_fingerprint, read_def
+from .deffile import ORIENT_ID, netlist_fingerprint, read_def, split_frame, write_framed
 from .lef import read_lef
 
-SCHEMA = 'attar-ir/0.6'
+SCHEMA = 'attar-ir/0.7'
 IO_DIR = {'INPUT': 0, 'OUTPUT': 1, 'INOUT': 2, 'FEEDTHRU': 3}
 # pin direction as seen from the net (p_dir, m_pin_dir): a sink, a driver, both, or not stated by the source. An IO
 # terminal stands for the outside world, so an INPUT port drives its net (D_OUT), as Bookshelf terminals do.
@@ -57,6 +57,28 @@ def pin_dir_counts(p_dir, n_ptr):
             'inout': int((p_dir == D_INOUT).sum()), 'unknown': int((p_dir == D_UNKNOWN).sum()),
             'nets_one_driver': int(((drv == 1) & (deg >= 2)).sum()), 'nets_no_driver': int(((drv == 0) & (deg >= 2)).sum()),
             'nets_multi_driver': int(((drv > 1) & (deg >= 2)).sum())}
+
+
+def _sparse(values):
+    """{index: text} as {'default': the most common text, 'except': {index: text}} (most cells and nets share one)."""
+    from collections import Counter
+    default = Counter(values.values()).most_common(1)[0][0] if values else ''
+    return {'default': default, 'except': {str(k): v for k, v in values.items() if v != default}}
+
+
+def _check_frame(d, frame, comps, owned_idx, cell_attrs, net_attrs, net_names, core, cell_names, mpin_flat, n_comps, out_dir):
+    """Reassemble the source DEF from the frame and the IR (owned components at their source placement) and compare
+    it with the source: '' if it is the same design, else what differs (then export needs a template)."""
+    import tempfile
+    from .deffile import comp_statement, net_statements, same_design
+    ca = lambda i: cell_attrs['except'].get(str(i), cell_attrs['default'])
+    na = lambda k: net_attrs['except'].get(str(k), net_attrs['default'])
+    lines = [comp_statement(comps[i][0], comps[i][1], comps[i][2], comps[i][3], comps[i][4], comps[i][5], ca(i)) for i in owned_idx]
+    is_term = np.arange(len(cell_names)) >= n_comps
+    nets = net_statements(net_names, core['n_ptr'], core['p_cell'], core['p_mpin'], cell_names, is_term, mpin_flat, na)
+    with tempfile.TemporaryDirectory(dir=out_dir) as t:
+        write_framed(frame, os.path.join(t, 'x.def'), lines, nets)
+        return same_design(d, read_def(os.path.join(t, 'x.def')))
 
 
 def save_arrays(out_dir, core, tp=None):
@@ -204,9 +226,24 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
           'layer_offset': np.array([q(l.get('offset', 0)) for l in layers], np.int32)}
 
     save_arrays(out_dir, core, tp)
+    # the frame (deffile.split_frame): the source DEF minus the components Attar may move and the signal nets, kept
+    # verbatim (PDN, IO pin shapes, fixed macros, ...); Design.export writes those back around it, from the IR
+    owned_idx = [i for i in range(len(comps)) if not (c_flags[i] & FIXED)]
+    frame, comp_attr, net_attr = split_frame(def_path, {comps[i][0] for i in owned_idx})
+    cell_attrs = _sparse({i: comp_attr.get(comps[i][0], '') for i in owned_idx})
+    net_attrs = _sparse({k: net_attr.get(n, '') for k, n in enumerate(net_names)})
+    mpin_flat = [p for names in mpin_names for p in names]
+    frame_bad = _check_frame(d, frame, comps, owned_idx, cell_attrs, net_attrs, net_names, core, cell_names, mpin_flat,
+                             len(comps), out_dir)
+    if not frame_bad:
+        with gzip.open(os.path.join(out_dir, 'frame.def.gz'), 'wt') as f:
+            f.write(frame)
+    elif os.path.exists(os.path.join(out_dir, 'frame.def.gz')):
+        os.remove(os.path.join(out_dir, 'frame.def.gz'))
     with gzip.open(os.path.join(out_dir, 'names.json.gz'), 'wt') as f:
         json.dump({'design': d['design'], 'cells': cell_names, 'nets': net_names, 'masters': used,
-                   'master_pins': mpin_names, 'layers': [l['name'] for l in layers]}, f, separators=(',', ':'))
+                   'master_pins': mpin_names, 'layers': [l['name'] for l in layers],
+                   'cell_attrs': cell_attrs, 'net_attrs': net_attrs}, f, separators=(',', ':'))
 
     deg = np.diff(core['n_ptr'])
     movable = ((c_flags & (FIXED | TERMINAL)) == 0)
@@ -224,6 +261,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
                        ('cell_library', 'lef')] + ([('rows', 'def')] if rows else [])
                       + ([('tracks', 'def+lef')] if trk else [])
                       + ([('pin_direction', 'lef+def')] if any(v != D_UNKNOWN for v in m_pin_dir) else [])
+                      + ([('def_frame', 'def')] if not frame_bad else [])
                       + ([('floorplan.io', 'def')] if io_unplaced == 0 else [])
                       + ([('floorplan.macros', 'def')] if macros_unplaced == 0 else [])),
         'io_unplaced': io_unplaced,
@@ -239,6 +277,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
                    'nets': int(len(net_names)), 'nets_2plus': int((deg >= 2).sum()), 'pins': int(len(p_cell)),
                    'rows': int(len(rows)), 'masters': int(len(used)), 'skipped_pin_refs': int(skipped)},
         'pin_direction': pin_dir_counts(p_dir, n_ptr),
+        'def_frame': {'bytes': len(frame), 'check': frame_bad or 'ok'},
         'distill_seconds': round(time.time() - t0, 2),
     }
     # data-quality warnings, e.g. generated macro LEFs with pins outside the SIZE outline

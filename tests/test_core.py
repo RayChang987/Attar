@@ -114,10 +114,13 @@ class CapabilityTest(unittest.TestCase):
         d = need(MEDIUM)
         ref = attar.load(MEDIUM, DEV, download=False).restore('reference')
         self.assertAlmostEqual(d.hpwl(ref.pos).item(), ref.hpwl().item(), delta=1e-3)
-        src = source_def(d)
-        with tempfile.TemporaryDirectory() as t:       # unplaced: export writes the floorplan only (unchanged here)
-            d.export(src, t + '/fp.def')
-            self.assertTrue(filecmp.cmp(t + '/fp.def', src, shallow=False))
+        with tempfile.TemporaryDirectory() as t:       # unplaced: the cells Attar owns go out UNPLACED, the rest as is
+            d.export(t + '/fp.def')
+            out, src = read_def(t + '/fp.def'), read_def(source_def(d))
+        owned = {c[0] for c in src['comps'] if c[2] != 'FIXED'}
+        self.assertEqual({c[2] for c in out['comps'] if c[0] in owned}, {'UNPLACED'})
+        self.assertEqual(sorted(c for c in out['comps'] if c[0] not in owned), sorted(c for c in src['comps'] if c[0] not in owned))
+        self.assertEqual((out['pins'], out['die'], out['rows']), (src['pins'], src['die'], src['rows']))
 
     def test_missing_facts_are_not_filled_in(self):
         d = need(SMALL)
@@ -203,11 +206,19 @@ class VizTest(unittest.TestCase):
         self.assertTrue(any('unplaced' in x.get_text() for x in fig.axes[0].texts))
 
 class WritebackTest(unittest.TestCase):
-    def test_unchanged_reference_writes_back_the_source_byte_for_byte(self):
+    def test_unchanged_reference_exports_the_source_design(self):
+        from attar.deffile import same_design
+        for name in (SMALL, MACRO_DESIGNS[0]):          # no template: the frame and the IR are the whole design
+            d = need(name).restore('reference')
+            with tempfile.TemporaryDirectory() as t:
+                d.export(t + '/out.def')
+                self.assertEqual(same_design(read_def(source_def(d)), read_def(t + '/out.def')), '', name)
+
+    def test_template_stamp_of_the_unchanged_reference_is_the_source_byte_for_byte(self):
         d = need(SMALL).restore('reference')
         src = source_def(d)
         with tempfile.TemporaryDirectory() as t:
-            d.export(src, t + '/out.def')
+            d.export(t + '/out.def', template=src)
             self.assertTrue(filecmp.cmp(t + '/out.def', src, shallow=False))
 
     def test_moved_and_flipped_cells_survive_a_redistill(self):
@@ -219,9 +230,9 @@ class WritebackTest(unittest.TestCase):
         d.pos[pick, 0] += 2 * site
         d.orient[pick] = torch.tensor([0, 1, 4, 5], device=d.device)[torch.randint(0, 4, (len(pick),), generator=g).to(d.device)]
         d.update_orient()
-        src, lefs = source_def(d), source_lefs(d)
+        lefs = source_lefs(d)
         with tempfile.TemporaryDirectory() as t:
-            d.export(src, t + '/moved.def')
+            d.export(t + '/moved.def')
             attar.distill(t + '/moved.def', lefs, t + '/ir')
             e = attar.load(t + '/ir', DEV, download=False)
             self.assertAlmostEqual(e.hpwl().item(), d.hpwl().item(), delta=1e-3)
@@ -231,17 +242,35 @@ class WritebackTest(unittest.TestCase):
         d = need(SMALL).restore('reference')
         fixed = ((d.flags & (FIXED | TERMINAL)) != 0)
         d.pos[fixed] += 5.0  # must be ignored by export
-        src = source_def(d)
+        from attar.deffile import same_design
         with tempfile.TemporaryDirectory() as t:
-            d.export(src, t + '/out.def')
-            self.assertTrue(filecmp.cmp(t + '/out.def', src, shallow=False))
+            d.export(t + '/out.def')
+            self.assertEqual(same_design(read_def(source_def(d)), read_def(t + '/out.def')), '')
+            d.export(t + '/out2.def', template=source_def(d))
+            self.assertTrue(filecmp.cmp(t + '/out2.def', source_def(d), shallow=False))
+
+    def test_frame_keeps_the_pdn_and_drops_stale_wiring(self):
+        import gzip
+        d = need(SMALL)
+        with gzip.open(os.path.join(d.path, 'frame.def.gz'), 'rt') as f:
+            frame = f.read()
+        self.assertIn('SPECIALNETS', frame)                           # the PDN is the problem: kept verbatim
+        body = frame[frame.index('\nNETS ') + 1:frame.index('END NETS')].split(';')[1:]
+        self.assertTrue(all('USE POWER' in x or 'USE GROUND' in x for x in body if x.strip().startswith('-')))
+        with open(source_def(d)) as f:
+            src = f.read()
+        sp = src[src.index('SPECIALNETS'):src.index('END SPECIALNETS')]
+        with tempfile.TemporaryDirectory() as t:
+            d.restore('reference').export(t + '/out.def')
+            with open(t + '/out.def') as f:
+                self.assertIn(sp, f.read())                         # byte for byte
 
     def test_export_checks_the_template(self):
         d = need(SMALL).restore('reference')
         other = source_def(need(MEDIUM))                         # a DEF of another design
         with tempfile.TemporaryDirectory() as t:
             with self.assertRaises(ValueError) as e:
-                d.export(other, t + '/x.def')
+                d.export(t + '/x.def', template=other)
             self.assertIn('netlist', str(e.exception))
             self.assertIn('force=True', str(e.exception))
             self.assertFalse(os.path.exists(t + '/x.def'))
@@ -252,10 +281,10 @@ class WritebackTest(unittest.TestCase):
             with open(t + '/units.def', 'w') as f:
                 f.write(src.replace(dbu, 'UNITS DISTANCE MICRONS %d' % (2 * d.dbu)))
             with self.assertRaises(ValueError) as e:
-                d.export(t + '/units.def', t + '/x.def')
+                d.export(t + '/x.def', template=t + '/units.def')
             self.assertIn('units', str(e.exception))
             with self.assertWarns(UserWarning):              # force: written anyway, with a warning
-                d.export(other, t + '/x.def', force=True)
+                d.export(t + '/x.def', template=other, force=True)
             self.assertTrue(os.path.exists(t + '/x.def'))
 
     def test_export_needs_a_cell_library(self):
@@ -265,8 +294,10 @@ class WritebackTest(unittest.TestCase):
         src = source_def(need(SMALL))
         with tempfile.TemporaryDirectory() as t:
             with self.assertRaises(MissingFacts) as e:
-                b.export(src, t + '/x.def')
+                b.export(t + '/x.def', template=src)
             self.assertIn('force=True', str(e.exception))
+            with self.assertRaises(MissingFacts):              # and no frame to write into
+                b.export(t + '/x.def')
 
 class StatusTest(unittest.TestCase):
     def test_status_checklist_and_tiers(self):

@@ -171,9 +171,9 @@ class FloorplanTest(unittest.TestCase):
         d.place(verbose=False)
         self.assertIn('slow_loop', d.facts)                     # ORFS 2_1: the floorplan can be handed off
         self.assertIn('orfs_floorplan_handoff', d.capabilities())
-        src, lefs = source_def(d), source_lefs(d)
+        lefs = source_lefs(d)
         with tempfile.TemporaryDirectory() as t:
-            r = d.export(src, t + '/fp.def')
+            r = d.export(t + '/fp.def')                         # die, rows, IO pins, macros onto the frame
             self.assertEqual((r['pins'], r['die']), (len(d.io), 1))
             attar.distill(t + '/fp.def', lefs, t + '/ir')
             e = attar.load(t + '/ir', DEV, download=False)

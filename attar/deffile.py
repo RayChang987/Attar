@@ -129,8 +129,9 @@ def _read_nets(f, nets):
                 cur[1].append((rest[i + 1], rest[i + 2])); i += 4
             elif tok in ('+', ';'):
                 conn = False
-                if tok == '+' and i + 2 < len(rest) and rest[i + 1] == 'USE':
-                    cur[2] = rest[i + 2]
+                for j in range(i, len(rest) - 2):      # '+ USE x' anywhere among the attributes on this line
+                    if rest[j] == '+' and rest[j + 1] == 'USE':
+                        cur[2] = rest[j + 2]
                 break
             else:
                 i += 1
@@ -232,3 +233,153 @@ def write_def(src, dst, comps=None, pins=None, die=None, rows=None):
                 else:
                     fo.write(line)
     return done
+
+
+# -- the frame: the DEF minus what Attar writes itself ----------------------------------------------------------------
+# Attar owns the components it may move (and, later, resize or add) and every signal net (connectivity, and later
+# buffering and routing). Everything else of the source DEF is the problem around them and is kept verbatim: header,
+# DIEAREA, ROWS, TRACKS, VIAS, PINS (IO pin shapes), SPECIALNETS (PDN), BLOCKAGES, REGIONS, GROUPS, the fixed
+# components (macros, tap cells, ...) and the POWER/GROUND entries of NETS. export = frame + what Attar writes.
+
+_ROUTING = ('ROUTED', 'FIXED', 'COVER', 'NOSHIELD')        # net wiring: stale once cells move, never kept
+
+
+def _groups(tokens):
+    """Split '+ KEY ...' attribute tokens into groups (lists of tokens), each starting at a top-level '+'."""
+    out, cur = [], None
+    for tok in tokens:
+        if tok == '+':
+            cur = []; out.append(cur)
+        elif cur is not None:
+            cur.append(tok)
+    return out
+
+
+def _comp_attrs(stmt):
+    """' + SOURCE TIMING ...' of a component statement: everything but its name, master and placement."""
+    t = stmt.rstrip().rstrip(';').split()
+    return ''.join(' + ' + ' '.join(g) for g in _groups(t[3:] if len(t) > 3 else []) if g and g[0] not in ('PLACED', 'FIXED', 'COVER', 'UNPLACED'))
+
+
+def _net_attrs(stmt):
+    """' + USE CLOCK ...' of a net statement: everything but its name, connections and wiring."""
+    t = stmt.rstrip().rstrip(';').split()
+    i = 2
+    while i < len(t) and t[i] == '(':                     # connections: ( comp pin [+ SYNTHESIZED] )
+        i = t.index(')', i) + 1
+    return ''.join(' + ' + ' '.join(g) for g in _groups(t[i:]) if g and g[0] not in _ROUTING)
+
+
+def _stmt_iter(lines):
+    """(statement text, [its lines]) of a section body, up to and excluding its END line."""
+    buf = []
+    for line in lines:
+        buf.append(line)
+        if line.rstrip().endswith(';'):
+            yield ''.join(buf), buf; buf = []
+    if buf:
+        yield ''.join(buf), buf
+
+
+def split_frame(path, owned):
+    """Split the DEF at path. owned: names of the components Attar writes itself. Returns (frame text, component
+    attributes {name: ' + ...'}, net attributes {name: ' + ...'}) for the owned components and the signal nets."""
+    with open(path, errors='replace') as f:
+        lines = f.readlines()
+    out, comp_attr, net_attr = [], {}, {}
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        key = line.split()[0] if line.strip() else ''
+        if key in ('COMPONENTS', 'NETS') and line.strip().endswith(';'):
+            end = 'END ' + key
+            j = i + 1
+            while j < len(lines) and not lines[j].startswith(end):
+                j += 1
+            out.append(line)
+            for stmt, buf in _stmt_iter(lines[i + 1:j]):
+                t = stmt.split()
+                if len(t) < 2 or t[0] != '-':
+                    out.extend(buf); continue
+                if key == 'COMPONENTS':
+                    if t[1] in owned:
+                        comp_attr[t[1]] = _comp_attrs(stmt)
+                    else:
+                        out.extend(buf)
+                else:
+                    a = _net_attrs(stmt)
+                    if re.search(r'\+\s*USE\s+(POWER|GROUND)\b', stmt):
+                        out.extend(buf)               # PG entries stay with the frame (the IR has no PG nets)
+                    else:
+                        net_attr[t[1]] = a
+            if j < len(lines):
+                out.append(lines[j])
+            i = j + 1
+            continue
+        out.append(line)
+        i += 1
+    return ''.join(out), comp_attr, net_attr
+
+
+def write_framed(frame, dst, comp_lines, net_lines):
+    """Write frame text with Attar's component and net statements appended to COMPONENTS and NETS (counts updated)."""
+    lines = frame.splitlines(True)
+    counts = {}
+    sec = None
+    for line in lines:                                    # statements the frame keeps per section
+        k = line.split()[0] if line.strip() else ''
+        if k in ('COMPONENTS', 'NETS') and line.strip().endswith(';'):
+            sec = k; counts[k] = 0
+        elif sec and line.startswith('END ' + sec):
+            sec = None
+        elif sec and line.lstrip().startswith('- '):
+            counts[sec] += 1
+    add = {'COMPONENTS': comp_lines, 'NETS': net_lines}
+    with open(dst, 'w') as fo:
+        sec = None
+        for line in lines:
+            k = line.split()[0] if line.strip() else ''
+            if k in ('COMPONENTS', 'NETS') and line.strip().endswith(';'):
+                sec = k
+                fo.write('%s %d ;\n' % (k, counts[k] + len(add[k])))
+                continue
+            if sec and line.startswith('END ' + sec):
+                fo.writelines(add[sec]); sec = None
+            fo.write(line)
+    return {k: len(v) for k, v in add.items()}
+
+
+def comp_statement(name, master, status, x, y, orient, attrs=''):
+    place = ' + UNPLACED' if status == 'UNPLACED' else ' + %s ( %d %d ) %s' % (status, x, y, orient)
+    return '    - %s %s%s%s ;\n' % (name, master, attrs, place)
+
+
+def net_statements(net_names, n_ptr, p_cell, p_mpin, cell_names, is_term, mpin_flat, attrs):
+    """NETS statements from CSR arrays: pins of net k are n_ptr[k]:n_ptr[k+1]; an IO terminal cell is '( PIN name )',
+    a cell pin '( cell master_pin )'. attrs(k) -> ' + USE ...' of net k."""
+    out = []
+    for k, name in enumerate(net_names):
+        a, b = int(n_ptr[k]), int(n_ptr[k + 1])
+        conns = ['( PIN %s )' % cell_names[c] if is_term[c] else '( %s %s )' % (cell_names[c], mpin_flat[m])
+                 for c, m in zip(p_cell[a:b].tolist(), p_mpin[a:b].tolist())]
+        body = '\n      '.join(' '.join(conns[i:i + 6]) for i in range(0, len(conns), 6))
+        out.append('    - %s %s%s ;\n' % (name, body, attrs(k)))
+    return out
+
+
+def same_design(a, b):
+    """'' when two parsed DEFs hold the same design (components with placement, IO pins, nets with connections and
+    use, die, rows, tracks), else what differs first."""
+    for key in ('design', 'dbu', 'die', 'rows', 'tracks'):
+        if a[key] != b[key]:
+            return '%s differs' % key
+    for key in ('comps', 'pins'):
+        x, y = sorted(a[key]), sorted(b[key])
+        if x != y:
+            d = sorted(set(x) ^ set(y))
+            return '%s differ (%d vs %d; e.g. %s)' % (key, len(x), len(y), d[:2])
+    na = {n: (sorted(c), u) for n, c, u in a['nets']}; nb = {n: (sorted(c), u) for n, c, u in b['nets']}
+    if na != nb:
+        d = sorted(k for k in set(na) | set(nb) if na.get(k) != nb.get(k))
+        return 'nets differ (%d vs %d; e.g. %s)' % (len(na), len(nb), d[:2])
+    return ''

@@ -187,7 +187,7 @@ def prepare(d, base, rt, ir, mode, dev, stage):
         raise ValueError(mode)
     hp = x.hpwl().item()
     out_def = os.path.join(rt, 'attar_%s_%s.def' % (stage[:3], mode))
-    x.export(os.path.join(rt, stage + '.def'), out_def)
+    x.export(out_def)
     return _inject(d, base, rt, mode, out_def, hp, stage)
 
 

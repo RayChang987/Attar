@@ -71,6 +71,18 @@ class PinDirectionTest(unittest.TestCase):
         self.assertEqual(m.pin_dir, {'o': 'OUTPUT', 'a': 'INPUT', 'VDD': 'INOUT'})   # ISPD 2015 writes them inline
         self.assertEqual(m.pins['VDD'][1], 'POWER')
 
+    def test_net_use_among_other_attributes(self):
+        import io
+        from attar.deffile import _net_attrs, _read_nets
+        for text, use in (('- a ( x A ) ( y B ) + SOURCE TIMING + USE CLOCK ;', 'CLOCK'),   # Innovus writes these inline
+                          ('- a\n  ( x A )\n  + ROUTED M1 ( 1 2 ) ( 3 * )\n  + USE CLOCK\n ;', 'CLOCK'),
+                          ('- a ( x A ) + ROUTED M1 ( 1 2 ) ( 3 * ) ;', 'SIGNAL')):
+            n = []
+            _read_nets(io.StringIO(text + '\nEND NETS\n'), n)
+            self.assertEqual(n[0][2], use, text)
+        self.assertEqual(_net_attrs('- a ( x A ) + SOURCE TIMING + ROUTED M1 ( 1 2 ) NEW M2 ( 1 2 ) + USE CLOCK ;'),
+                         ' + SOURCE TIMING + USE CLOCK')                 # the wiring is dropped, the rest kept
+
     def test_bookshelf_states_directions_and_blocks_do_not(self):
         b = need('ispd2005/adaptec1')
         self.assertEqual(b.facts['pin_direction'], 'bookshelf')

@@ -22,7 +22,7 @@ d.status()                # what it has, what it can do
 d.floorplan()             # IO pins + macros
 d.place()                 # global placement + legalization
 d.plot('cva6.png')
-d.export('2_1_floorplan.def', 'cva6.def')   # stamp onto ORFS's DEF
+d.export('cva6.def')      # DEF for ORFS: PDN, pins as given
 '''
 
 
@@ -45,8 +45,7 @@ def record():
     step('floorplan', lambda: d.floorplan())
     step('place', lambda: d.place())
     step('plot', lambda: d.plot(os.path.join(IMG, 'gallery', 'cva6.png'), dpi=220))    # sharp enough for the GIF pane
-    step('export', lambda: print(d.export(os.path.join(ROOT, 'orfs_runs', 'rt', 'cva6', '2_1_floorplan.def'),
-                                          os.path.join('/tmp', 'attar_demo_cva6.def'))))
+    step('export', lambda: print(d.export(os.path.join('/tmp', 'attar_demo_cva6.def'))))
     json.dump(steps, open(REC, 'w'), indent=1)
 
 

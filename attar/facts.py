@@ -21,6 +21,7 @@ FACTS = {
     'stack': '3D: per-die technology, hybrid bonding terminals',
     'cell_library': 'cells are instances of a real cell library (LEF masters): a DEF of the design means something',
     'tracks': 'routing tracks and the routing layer of every master pin (pin access: macros go on-track)',
+    'def_frame': 'the source DEF minus what Attar writes (movable components, signal nets), kept verbatim: export needs no template',
     'slow_loop': 'the design comes from a slow-loop flow stage it can be handed back to (an ORFS stage on a platform ORFS knows)',
     'placement': 'locations and orientations of all movable cells (solution state)',
 }
@@ -48,6 +49,7 @@ HINTS = {
                     'Design.export(..., force=True) writes one anyway',
     'tracks': 'distill from LEF/DEF (attar-ir >= 0.5): macros then go on the routing tracks, else on the row grid',
     'pin_direction': 'the source states no pin directions (or the IR is older than attar-ir 0.6: distill it again)',
+    'def_frame': 'distill from LEF/DEF (attar-ir >= 0.7), or hand export a template: d.export(out_def, template=...)',
     'slow_loop': 'distill from an ORFS run (tools/distill_orfs.py); designs without a real cell library end in Attar',
     'floorplan.io': 'place the IO pins: attar.naive.place_io (or a source with placed pins; ORFS: GPL_PLACE_IOS=0)',
     'floorplan.macros': 'place the macros: attar.naive.place_macros (or a source with placed macros)',

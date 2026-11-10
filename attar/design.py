@@ -477,7 +477,67 @@ class Design:
         v = next(i for i in range(h + 1, len(names)) if dr[i] == 1)
         return names[h], names[v]
 
-    def export(self, template_def, out_def, force=False):
+    def export(self, out_def, template=None, force=False):
+        """Write this design as a DEF. Two ways:
+
+        export(out_def): the source DEF's frame (fact 'def_frame': everything of the source but the components
+          Attar may move and the signal nets, kept verbatim: header, die, rows, tracks, IO pins with their shapes,
+          PDN, blockages, fixed macros, ...) with the design written into it from the IR: every component Attar owns
+          (PLACED where placed, FIXED where an engine fixed it, UNPLACED otherwise or when set aside) and every
+          signal net (connectivity; any wiring of the source is dropped: it is stale once cells move). What an
+          engine changed of the floorplan (IO pins, die, rows, macros) is stamped onto the frame first.
+        export(out_def, template=def_path): stamp the design onto a DEF of it (see _stamp: checks cell library,
+          units, netlist fingerprint and die; force=True overrides).
+        Returns counts of what was written."""
+        if template is not None:
+            return self._stamp(template, out_def, force)
+        import gzip
+        import tempfile
+        from .deffile import comp_statement, net_statements, write_def, write_framed
+        self.require('export')
+        if 'def_frame' not in self.facts:
+            raise MissingFacts(self.manifest.get('design', self.path), 'export without a template', ['def_frame'])
+        with gzip.open(os.path.join(self.path, 'frame.def.gz'), 'rt') as f:
+            frame = f.read()
+        dbu = self.dbu
+        xy = torch.round(self.pos * dbu).to(torch.int64).cpu().numpy()
+        o = self.orient.cpu().numpy(); fl = self.flags.cpu().numpy(); placed = self.placed.cpu().numpy()
+        a = self.raw; names = self.names; cells = names['cells']
+        n_comp = int(len(cells) - len(self.io)) if self.io is not None else len(cells)
+        raw_fl = a['c_flags']
+        owned = [i for i in range(n_comp) if not (raw_fl[i] & FIXED)]
+        # what an engine changed of the floorplan goes onto the frame first (IO pins, die, rows, fixed macros)
+        site = next((l.split()[2] for l in frame.splitlines() if l.startswith('ROW ')), 'core')
+        comps, pins, die, rows = self._floorplan_changes(dbu, self.tracks(), site)
+        owned_names = {cells[i] for i in owned}
+        comps = {k: v for k, v in comps.items() if k not in owned_names}   # owned macros are written below anyway
+        done = {'pins': 0, 'die': 0, 'rows': 0, 'tracks': 0}
+        if comps or pins or die is not None or rows is not None:
+            with tempfile.TemporaryDirectory() as t:
+                with open(os.path.join(t, 'in.def'), 'w') as fo:
+                    fo.write(frame)
+                done = write_def(os.path.join(t, 'in.def'), os.path.join(t, 'out.def'), comps=comps, pins=pins, die=die, rows=rows)
+                with open(os.path.join(t, 'out.def')) as fi:
+                    frame = fi.read()
+        ca, na = names.get('cell_attrs') or {'default': '', 'except': {}}, names.get('net_attrs') or {'default': '', 'except': {}}
+        masters = names['masters']; cm = a['c_master']
+        lines = []
+        for i in owned:
+            if fl[i] & ASIDE or not placed[i]:
+                st = 'UNPLACED'
+            else:
+                st = 'FIXED' if fl[i] & FIXED else 'PLACED'
+            lines.append(comp_statement(cells[i], masters[cm[i]], st, int(xy[i, 0]), int(xy[i, 1]), ORIENTS[o[i]],
+                                        ca['except'].get(str(i), ca['default'])))
+        mpin_flat = [p for ms in names['master_pins'] for p in ms]
+        is_term = (raw_fl & TERMINAL) != 0
+        nets = net_statements(names['nets'], a['n_ptr'], a['p_cell'], a['p_mpin'], cells, is_term, mpin_flat,
+                              lambda k: na['except'].get(str(k), na['default']))
+        n = write_framed(frame, out_def, lines, nets)
+        done.update({'components': sum(1 for l in lines if '+ UNPLACED' not in l), 'nets': n['NETS']})
+        return done
+
+    def _stamp(self, template_def, out_def, force=False):
         """Stamp this design onto a DEF of it and write the result: template_def is any DEF of this design (the one
         it was distilled from, or one re-exported from the same flow stage); out_def gets a copy of it with the
         design's answers: the movable cells (when placed), the macros (FIXED), and what an engine changed of the
@@ -528,21 +588,29 @@ class Design:
         if 'placement' in self.present:
             comps.update({cells[i]: (int(xy[i, 0]), int(xy[i, 1]), ORIENTS[o[i]], 'PLACED') for i in np.nonzero(mv)[0]})
             comps.update({cells[i]: (0, 0, 'N', 'UNPLACED') for i in np.nonzero((fl & ASIDE) != 0)[0]})
-        mac = np.nonzero((fl & MACRO) != 0)[0]
-        if str(self.facts.get('floorplan.macros', '')).startswith('naive'):     # only what an engine changed
-            comps.update({cells[i]: (int(xy[i, 0]), int(xy[i, 1]), ORIENTS[o[i]], 'FIXED') for i in mac})
         tracks = self.tracks() or {(a, l): (st_, sp) for a, st_, _, sp, l in t['tracks']}
+        mac, pins, die, rows = self._floorplan_changes(dbu, tracks, t['rows'][0][0] if t['rows'] else 'core')
+        comps.update(mac)
+        return write_def(template_def, out_def, comps=comps, pins=pins, die=die, rows=rows)
+
+    def _floorplan_changes(self, dbu, tracks, site):
+        """What an engine changed of the floorplan, as write_def arguments: macros {name: (x, y, orient, 'FIXED')}, IO
+        pins with their shapes, die and rows (None when unchanged)."""
+        xy = torch.round(self.pos * dbu).to(torch.int64).cpu().numpy()
+        o = self.orient.cpu().numpy(); fl = self.flags.cpu().numpy(); cells = self.names['cells']
+        comps = {}
+        if str(self.facts.get('floorplan.macros', '')).startswith('naive'):     # only what an engine changed
+            comps = {cells[i]: (int(xy[i, 0]), int(xy[i, 1]), ORIENTS[o[i]], 'FIXED') for i in np.nonzero((fl & MACRO) != 0)[0]}
         pins = {}
         if str(self.facts.get('floorplan.io', '')).startswith('naive') and self.io is not None and len(self.io):
             pins = self._pin_shapes(xy, dbu, tracks)
         die = rows = None
-        if engine_die:
+        if str(self.facts.get('floorplan.die', '')).startswith('naive'):
             die = [int(round(v * dbu)) for v in self.die_box[0].tolist()]
-            site = t['rows'][0][0] if t['rows'] else 'core'
             r_xy = torch.round(self.row_xy * dbu).long().tolist(); sw = torch.round(self.row_site_w * dbu).long().tolist()
             rows = [('ROW_%d' % k, site, r_xy[k][0], r_xy[k][1], ORIENTS[int(self.row_orient[k])], int(self.row_sites[k]), sw[k])
                     for k in range(len(r_xy))]
-        return write_def(template_def, out_def, comps=comps, pins=pins, die=die, rows=rows)
+        return comps, pins, die, rows
 
     def _netlist_diff(self, t):
         """What differs between a parsed template DEF and this design's netlist, briefly."""

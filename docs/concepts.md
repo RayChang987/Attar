@@ -69,9 +69,22 @@ A distilled design holds everything the fast loop reads, macro pin layers and ro
 its folder works on any machine. Manifests name each source file with its sha256, never a path, and Attar reads no
 environment variables.
 
-A DEF comes back only through `d.export(template_def, out_def, force=False)`: it takes any DEF of the design (for
-ORFS designs, `orfs_runs/rt/<design>/<stage>.def`), and copies it with the design's answers stamped on: movable
-cells, macros and IO pins an engine placed, and a die and rows an engine made. Before writing, it checks:
+A DEF comes back through `d.export(out_def)`. A LEF/DEF design keeps its source DEF's *frame* (`frame.def.gz`,
+fact `def_frame`): the source minus what Attar writes itself. The frame is the problem around the answer and is
+kept verbatim: header, die, rows, tracks, IO pins with their shapes, the PDN (`SPECIALNETS`, `VIAS`), blockages,
+regions, the fixed components (macros, tap cells) and the power entries of `NETS`. Attar writes the rest from the
+IR: every component it may move (`PLACED`, `FIXED` when an engine fixed it, `UNPLACED` otherwise) and every signal
+net (connectivity; wiring of the source is dropped, as it is stale once cells move). What an engine changed of
+the floorplan (IO pins, die, rows) is stamped onto the frame first. At distillation the frame and the IR are put
+back together and compared with the source; the fact is only claimed when that gives the same design.
+
+| in the frame (verbatim) | written from the IR |
+| --- | --- |
+| header, `DIEAREA`, `ROW`, `TRACKS`, `VIAS`, `PINS`, `SPECIALNETS`, `BLOCKAGES`, `REGIONS`, `GROUPS`, fixed components, power nets | components Attar may move, signal nets |
+
+So nets can change later (buffering, routing) without a template. To stamp onto a DEF of your own instead,
+`d.export(out_def, template=def_path, force=False)` copies that DEF with the answers stamped on. Before writing, it
+checks:
 
 1. `cell_library`: the design is made of LEF masters (not Bookshelf, YAL, GSRC);
 2. units: the template's DBU per micron equals the design's;

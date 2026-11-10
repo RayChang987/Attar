@@ -26,7 +26,7 @@ environment variables.
 | `floorplan(utilization=None, aspect_ratio=1.0, **kw)` | `naive.floorplan`: new die if a utilization is given, then IO pins and macros as needed |
 | `place(target_density=None, **kw)` | `naive.place`: global placement + legalization |
 | `plot(path=None, theme='light', dpi=150, **kw)` | die, core, rows, cells (an area-density image above 30k cells), macros, IO pins by direction; warm light theme by default |
-| `export(template_def, out_def, force=False)` | stamp the placement and engine-made floorplan onto a DEF of the design (checks cell library, units, netlist, die; `force` to override) |
+| `export(out_def, template=None, force=False)` | write the design as a DEF: its source frame (PDN, pins, fixed cells, verbatim) with the cells and signal nets from the IR; or stamped onto `template` (checks cell library, units, netlist, die; `force` to override) |
 | `handoff_command(out_def, run_dir=None)` | the command that hands an exported DEF to ORFS |
 | `hpwl(pos=None, per_net=False)` | exact HPWL (0-d tensor) |
 | `wa_wirelength(pos=None, gamma=1.0)` | weighted-average wirelength, differentiable |

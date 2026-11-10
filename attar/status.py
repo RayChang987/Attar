@@ -104,7 +104,7 @@ def status(d, color=True):
         ok = f in have
         L.append('  %s %-*s  %s' % (OK if ok else NO, w, f, '' if ok else (_why_missing(d, f) or HINTS.get(f, DEFAULT_HINT))))
     stage = m.get('orfs', {}).get('stage')
-    ex = 'd.export("<a DEF of this design>", "out.def")'
+    ex = 'd.export("out.def")' if 'def_frame' in d.facts else 'd.export("out.def", template="<a DEF of this design>")'
     if t == 'A':
         if 'placement' in have or stage == '2_1_floorplan':      # 2_1: the floorplan alone goes to ORFS
             L.append('  -> ready: %s, then  %s' % (ex, handoff_command(d, 'out.def')))

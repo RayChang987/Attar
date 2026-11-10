@@ -75,7 +75,7 @@ if __name__ == '__main__':
 
         # 2. unchanged write-back
         out = os.path.join(tmp, d + '.same.def')
-        n = x.export(src, out)
+        n = x.export(out, template=src)['components']
         a, b = components(src), components(out)
         diff = sum(1 for u, v in zip(a, b) if u != v) + abs(len(a) - len(b))
         print('  write-back unchanged: %d lines needed rewriting, %d COMPONENTS lines differ; other sections identical: %s' % (
@@ -91,7 +91,7 @@ if __name__ == '__main__':
         x.update_orient()
         h1 = x.hpwl().item()
         out = os.path.join(tmp, d + '.moved.def')
-        x.export(src, out)
+        x.export(out)
         attar.distill(out, LEFS, ir + '_moved')
         h2 = attar.load(ir + '_moved', dev).hpwl().item()
         print('  write-back perturbed (%d cells): in-memory %.3f um, re-distilled %.3f um, diff %.2e' % (len(pick), h1, h2, abs(h1 - h2) / h1))

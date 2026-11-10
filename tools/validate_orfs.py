@@ -82,13 +82,12 @@ def main(designs):
     for n in designs:
         name = n.split('/')[1]
         base = os.path.join(RUNS, name + '_base')
-        src = os.path.join(RUNS, 'rt', name, '3_3_place_gp.def')     # the DEF it was distilled from: the template
-        d = attar.load(n, 'cuda')
+        d = attar.load(n, 'cuda')                          # exports go through the design's frame: no template
         d.restore('reference')                            # ORFS's own global placement
         hp_attar = d.hpwl().item()
         hp_gpl = gpl_final_hpwl(base, name)
         tmp0 = os.path.join(RUNS, 'check', '%s_ref.def' % name); os.makedirs(os.path.dirname(tmp0), exist_ok=True)
-        d.export(src, tmp0)
+        d.export(tmp0)
         hp_orfs = openroad_hpwl(name, tmp0, base, 'ref')
         os.remove(tmp0)
         # legality: naive place, Attar's checker, OpenROAD's checker
@@ -97,7 +96,7 @@ def main(designs):
             d.place()
         ok_attar = attar.Evaluator(d).legality()['legal']
         tmp = os.path.join(RUNS, 'check', '%s_attar.def' % name); os.makedirs(os.path.dirname(tmp), exist_ok=True)
-        d.export(src, tmp)
+        d.export(tmp)
         ok_or, _ = check_placement(name, tmp, base, 'legal')
         # negative control: 1% of the movable cells half a site to the right
         g = torch.Generator().manual_seed(0)
@@ -105,7 +104,7 @@ def main(designs):
         pick = mv[torch.randperm(len(mv), generator=g)[:max(1, len(mv) // 100)]].to(d.device)
         d.pos[pick, 0] += float(d.row_site_w.min()) / 2
         bad_attar = not attar.Evaluator(d).legality()['legal']
-        d.export(src, tmp)
+        d.export(tmp)
         ok_or_bad, _ = check_placement(name, tmp, base, 'broken')
         os.remove(tmp)
         r = {'design': name, 'cells': d.manifest['counts']['cells'], 'hpwl_attar': hp_attar, 'hpwl_openroad': hp_orfs,

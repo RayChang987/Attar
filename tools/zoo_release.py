@@ -83,10 +83,10 @@ every design with its size and facts.
 ## Self-contained
 
 Loading, evaluating (HPWL, density, legality), placing with `attar.naive` (macros on their routing tracks included)
-and plotting need only this dataset. Manifests name each source file with its sha256, never a path. To get a DEF
-back, hand `Design.export(template_def, out_def)` any DEF of the design (e.g. the benchmark's own): it checks units,
-netlist and die against the design and stamps the result onto it. Bookshelf, YAL and GSRC designs have no cell
-library behind them, so they do not export. `d.status()` shows what a design can do.
+and plotting need only this dataset. Manifests name each source file with its sha256, never a path. A LEF/DEF design
+also keeps its source DEF's frame (`frame.def.gz`: PDN, IO pins, fixed cells), so `d.export('out.def')` writes a
+complete DEF with no raw file at hand. Bookshelf, YAL and GSRC designs have no cell library behind them, so they do
+not export. `d.status()` shows what a design can do.
 
 ## Suites
 
