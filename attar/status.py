@@ -45,6 +45,15 @@ def _detail(d, fact):
         return '%d drivers, %d sinks; %d nets with one driver, %d with none, %d with several' % (
             c.get('drivers', 0), c.get('sinks', 0), c.get('nets_one_driver', 0), c.get('nets_no_driver', 0),
             c.get('nets_multi_driver', 0))
+    if fact == 'pdn':
+        a = d.raw
+        names = d.names['layers']
+        lay = sorted({names[i] for i in a['pg_layer'].tolist()}) if 'pg_layer' in a else []
+        nv = int((a['pg_kind'] == 2).sum()) if 'pg_kind' in a else 0
+        return '%d wire and %d via shapes on %s' % (len(a.get('pg_rect', [])) - nv, nv, ', '.join(lay))
+    if fact == 'def_frame':
+        f = d.manifest.get('def_frame', {})
+        return 'PDN, pins, fixed cells of the source DEF, kept verbatim (%.0f kB)' % (f.get('bytes', 0) / 1e3)
     if fact == 'tracks':
         t = d.tracks()
         return '%d track grids over %d layers' % (len(t), len({k[1] for k in t}))
@@ -77,7 +86,10 @@ def status(d, color=True):
     if t == 'B' and 'slow_loop' in d.facts:
         head += ' (tier A once it has %s)' % ', '.join(sorted(CAPABILITIES['orfs_handoff'] - {'placement'} - set(d.facts)))
     L = ['%s  (%s, fidelity %s)' % (m.get('design'), m.get('suite', m['source'].get('format')), m.get('fidelity', '?')),
-         '  tier %s: %s' % (t, head), '', 'Problem facts']
+         '  tier %s: %s' % (t, head)]
+    if m.get('target_density'):
+        L.append('  placement target density %.3g (%s)' % (m['target_density'], m.get('target_density_source', 'the source')))
+    L += ['', 'Problem facts']
     w = max(len(f) for f in FACTS)
     for f in FACTS:
         if f == 'placement':
@@ -104,7 +116,7 @@ def status(d, color=True):
         ok = f in have
         L.append('  %s %-*s  %s' % (OK if ok else NO, w, f, '' if ok else (_why_missing(d, f) or HINTS.get(f, DEFAULT_HINT))))
     stage = m.get('orfs', {}).get('stage')
-    ex = 'd.export("out.def")' if 'def_frame' in d.facts else 'd.export("out.def", template="<a DEF of this design>")'
+    ex = 'd.export("out.def")'
     if t == 'A':
         if 'placement' in have or stage == '2_1_floorplan':      # 2_1: the floorplan alone goes to ORFS
             L.append('  -> ready: %s, then  %s' % (ex, handoff_command(d, 'out.def')))

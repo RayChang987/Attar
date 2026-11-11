@@ -477,26 +477,18 @@ class Design:
         v = next(i for i in range(h + 1, len(names)) if dr[i] == 1)
         return names[h], names[v]
 
-    def export(self, out_def, template=None, force=False):
-        """Write this design as a DEF. Two ways:
-
-        export(out_def): the source DEF's frame (fact 'def_frame': everything of the source but the components
+    def export(self, out_def):
+        """Write this design as a DEF: the source DEF's frame (fact 'def_frame': everything of the source but the components
           Attar may move and the signal nets, kept verbatim: header, die, rows, tracks, IO pins with their shapes,
           PDN, blockages, fixed macros, ...) with the design written into it from the IR: every component Attar owns
           (PLACED where placed, FIXED where an engine fixed it, UNPLACED otherwise or when set aside) and every
           signal net (connectivity; any wiring of the source is dropped: it is stale once cells move). What an
           engine changed of the floorplan (IO pins, die, rows, macros) is stamped onto the frame first.
-        export(out_def, template=def_path): stamp the design onto a DEF of it (see _stamp: checks cell library,
-          units, netlist fingerprint and die; force=True overrides).
-        Returns counts of what was written."""
-        if template is not None:
-            return self._stamp(template, out_def, force)
+        Needs the facts netlist, cell_library and def_frame (LEF/DEF sources). Returns counts of what was written."""
         import gzip
         import tempfile
         from .deffile import comp_statement, net_statements, write_def, write_framed
         self.require('export')
-        if 'def_frame' not in self.facts:
-            raise MissingFacts(self.manifest.get('design', self.path), 'export without a template', ['def_frame'])
         with gzip.open(os.path.join(self.path, 'frame.def.gz'), 'rt') as f:
             frame = f.read()
         dbu = self.dbu
@@ -537,62 +529,6 @@ class Design:
         done.update({'components': sum(1 for l in lines if '+ UNPLACED' not in l), 'nets': n['NETS']})
         return done
 
-    def _stamp(self, template_def, out_def, force=False):
-        """Stamp this design onto a DEF of it and write the result: template_def is any DEF of this design (the one
-        it was distilled from, or one re-exported from the same flow stage); out_def gets a copy of it with the
-        design's answers: the movable cells (when placed), the macros (FIXED), and what an engine changed of the
-        floorplan: IO pins (with a pin shape on the ORFS IO layers, on their tracks), the die outline, rows and
-        track counts. Everything else is copied byte for byte.
-
-        Checks, each a refusal unless force=True (then a warning):
-          cell_library  the design is made of real library masters (LEF/DEF sources; not Bookshelf, YAL, GSRC)
-          units         the template's DBU per micron equals the design's
-          netlist       the template's netlist fingerprint equals the design's (same cells, masters, IO pins, nets)
-          die           the template's die equals the design's, unless an engine made the die
-        Returns counts of what was rewritten."""
-        import warnings
-        from .deffile import netlist_fingerprint, read_def, write_def
-        if 'cell_library' not in self.facts:
-            if not force:
-                self.require('export')
-            warnings.warn('%s has no cell library (%s source): the DEF is written anyway (force=True), coordinates '
-                          'in its units' % (self.manifest.get('design'), self.manifest.get('source', {}).get('format')))
-        t = read_def(template_def)
-        problems = []
-        if t['dbu'] != self.dbu:
-            problems.append('units: the template has %s DBU per micron, the design %s' % (t['dbu'], self.dbu))
-        fp = self.manifest.get('netlist_sha256')
-        if fp is not None and netlist_fingerprint(t) != fp:
-            problems.append('netlist: ' + self._netlist_diff(t))
-        elif fp is None:                             # no fingerprint (an older IR): at least every cell must be there
-            have = {c[0] for c in t['comps']}
-            n = self.manifest.get('counts', {}).get('cells', 0)
-            miss = [c for c in self.names['cells'][:n] if c not in have]
-            if miss:
-                problems.append('netlist: %d of the design\'s cells are not in the template, e.g. %s' % (len(miss), miss[:3]))
-        engine_die = str(self.facts.get('floorplan.die', '')).startswith('naive')
-        if not engine_die and self.die_box is not None:
-            die = tuple(int(round(v * self.dbu)) for v in self.die_box[0].tolist())
-            if t['die'] is not None and tuple(t['die']) != die:
-                problems.append('die: the template has %s, the design %s (DBU)' % (tuple(t['die']), die))
-        if problems:
-            msg = 'template %s does not match %s:\n  %s' % (template_def, self.manifest.get('design'), '\n  '.join(problems))
-            if not force:
-                raise ValueError(msg + '\n(force=True writes it anyway)')
-            warnings.warn(msg)
-        dbu = t['dbu'] or self.dbu
-        xy = torch.round(self.pos * dbu).to(torch.int64).cpu().numpy()
-        o = self.orient.cpu().numpy(); mv = self.movable.cpu().numpy(); fl = self.flags.cpu().numpy()
-        cells = self.names['cells']
-        comps = {}
-        if 'placement' in self.present:
-            comps.update({cells[i]: (int(xy[i, 0]), int(xy[i, 1]), ORIENTS[o[i]], 'PLACED') for i in np.nonzero(mv)[0]})
-            comps.update({cells[i]: (0, 0, 'N', 'UNPLACED') for i in np.nonzero((fl & ASIDE) != 0)[0]})
-        tracks = self.tracks() or {(a, l): (st_, sp) for a, st_, _, sp, l in t['tracks']}
-        mac, pins, die, rows = self._floorplan_changes(dbu, tracks, t['rows'][0][0] if t['rows'] else 'core')
-        comps.update(mac)
-        return write_def(template_def, out_def, comps=comps, pins=pins, die=die, rows=rows)
-
     def _floorplan_changes(self, dbu, tracks, site):
         """What an engine changed of the floorplan, as write_def arguments: macros {name: (x, y, orient, 'FIXED')}, IO
         pins with their shapes, die and rows (None when unchanged)."""
@@ -611,20 +547,6 @@ class Design:
             rows = [('ROW_%d' % k, site, r_xy[k][0], r_xy[k][1], ORIENTS[int(self.row_orient[k])], int(self.row_sites[k]), sw[k])
                     for k in range(len(r_xy))]
         return comps, pins, die, rows
-
-    def _netlist_diff(self, t):
-        """What differs between a parsed template DEF and this design's netlist, briefly."""
-        n = self.manifest.get('counts', {}).get('cells', 0)
-        mine, theirs = set(self.names['cells'][:n]), {c[0] for c in t['comps']}
-        extra, miss = sorted(theirs - mine), sorted(mine - theirs)
-        parts = []
-        if extra:
-            parts.append('the template has %d cells the design does not (e.g. %s)' % (len(extra), ', '.join(extra[:3])))
-        if miss:
-            parts.append('the design has %d cells the template does not (e.g. %s)' % (len(miss), ', '.join(miss[:3])))
-        if not parts:
-            parts.append('same cells, but masters, IO pins or net connections differ')
-        return '; '.join(parts)
 
     def tracks(self):
         """{(axis 'X' or 'Y', layer name): (start, step)} in DBU: the routing tracks stored in the IR (empty when the

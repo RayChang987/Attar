@@ -55,7 +55,7 @@ def gallery():
     sys.path.insert(0, ROOT)
     import time
     import attar
-    jobs = [('stress/bp_quad', 'bp_quad.png', 'scratch'), ('mcnc/ami49', 'ami49.png', 'floorplan'),
+    jobs = [('stress/bp_quad', 'bp_quad.png', 'place'), ('ns3k/ariane136', 'ariane136.png', 'place'),
             ('ispd2005/bigblue4', 'bigblue4.png', 'place')]
     for name, fn, how in jobs:
         d = attar.load(name, 'cuda'); t = time.time()

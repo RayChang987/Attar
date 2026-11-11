@@ -13,16 +13,15 @@ import time
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 IMG = os.path.join(ROOT, 'docs', 'images')
 REC = os.path.join(IMG, 'demo_run.json')
-DESIGN = 'orfs_asap7_2_1/cva6'
+DESIGN = 'orfs_asap7/cva6'
 CODE = '''import attar
 
-d = attar.load('orfs_asap7_2_1/cva6', device='cuda')
+d = attar.load('orfs_asap7/cva6', device='cuda')
 d.status()                # what it has, what it can do
 
-d.floorplan()             # IO pins + macros
 d.place()                 # global placement + legalization
 d.plot('cva6.png')
-d.export('cva6.def')      # DEF for ORFS: PDN, pins as given
+d.export('cva6.def')      # back to ORFS: route, time
 '''
 
 
@@ -42,7 +41,6 @@ def record():
         return r
     d = step('load', lambda: attar.load(DESIGN, device='cuda'))
     step('status', lambda: d.status())
-    step('floorplan', lambda: d.floorplan())
     step('place', lambda: d.place())
     step('plot', lambda: d.plot(os.path.join(IMG, 'gallery', 'cva6.png'), dpi=220))    # sharp enough for the GIF pane
     step('export', lambda: print(d.export(os.path.join('/tmp', 'attar_demo_cva6.def'))))
@@ -57,26 +55,22 @@ def terminal_lines(steps):
     L = [('$ python quickstart.py', B, None)]
     st = S['status']['out'].splitlines()
     L.append((st[0], W, None))
-    for key in ('netlist', 'cell_geometry', 'floorplan.die', 'floorplan.io', 'rows'):
+    for line in st:
+        if 'placement target density' in line:
+            L.append(('  ' + line.strip().split(' (')[0], W, None))
+    for key in ('netlist', 'cell_geometry', 'floorplan.macros', 'pdn', 'placement'):
         for line in st:
             if line.strip()[2:].strip().startswith(key + ' '):
                 ok = line.strip().startswith('\u2705')
                 body = ' '.join(line.strip()[1:].split())
                 L.append(('  %s %s' % ('\u2713' if ok else '\u2717', body), G if ok else R, None)); break
-    L.append(('  -> missing floorplan.io: d.floorplan() places it', D, None))
-    for line in S['floorplan']['out'].splitlines():
-        if line.strip().startswith(('macros:', 'io:')):
-            t = line.strip()
-            if t.startswith('macros:'):
-                t = t.split('(')[0] + '- ' + t.rsplit(',', 2)[-2].strip()      # "macros: 8 placed - 0 overlapping pairs"
-            L.append(('  ' + t[:88], W, None))
-    L.append(('  floorplan  %.2f s' % S['floorplan']['sec'], Y, None))
+    L.append(('  -> only a placement is missing', D, None))
     p = S['place']['out'].strip().replace('place: ', '')
     L.append(('  ' + p[:88], W, None))
-    L.append(('  place      %.2f s   (108k cells, legal incl. power rails)' % S['place']['sec'], Y, None))
+    L.append(('  place      %.2f s   (121k cells, legal incl. power rails, PDN)' % S['place']['sec'], Y, None))
     L.append(('  plot       %.2f s   -> cva6.png' % S['plot']['sec'], Y, 'plot'))
     ex = eval(S['export']['out'].strip())
-    L.append(('  export     %.2f s   -> cva6.def (%d components, %d IO pins)' % (S['export']['sec'], ex['components'], ex['pins']), Y, None))
+    L.append(('  export     %.2f s   -> cva6.def (%d cells, %d nets)' % (S['export']['sec'], ex['components'], ex['nets']), Y, None))
     return L
 
 

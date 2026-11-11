@@ -1,5 +1,4 @@
 """Design, facts and capabilities, dies, macros, write-back, status, plots."""
-import filecmp  # noqa: F401
 import os  # noqa: F401
 import tempfile  # noqa: F401
 import unittest
@@ -214,13 +213,6 @@ class WritebackTest(unittest.TestCase):
                 d.export(t + '/out.def')
                 self.assertEqual(same_design(read_def(source_def(d)), read_def(t + '/out.def')), '', name)
 
-    def test_template_stamp_of_the_unchanged_reference_is_the_source_byte_for_byte(self):
-        d = need(SMALL).restore('reference')
-        src = source_def(d)
-        with tempfile.TemporaryDirectory() as t:
-            d.export(t + '/out.def', template=src)
-            self.assertTrue(filecmp.cmp(t + '/out.def', src, shallow=False))
-
     def test_moved_and_flipped_cells_survive_a_redistill(self):
         d = need(SMALL).restore('reference')
         g = torch.Generator().manual_seed(1)
@@ -246,8 +238,6 @@ class WritebackTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             d.export(t + '/out.def')
             self.assertEqual(same_design(read_def(source_def(d)), read_def(t + '/out.def')), '')
-            d.export(t + '/out2.def', template=source_def(d))
-            self.assertTrue(filecmp.cmp(t + '/out2.def', source_def(d), shallow=False))
 
     def test_frame_keeps_the_pdn_and_drops_stale_wiring(self):
         import gzip
@@ -265,39 +255,13 @@ class WritebackTest(unittest.TestCase):
             with open(t + '/out.def') as f:
                 self.assertIn(sp, f.read())                         # byte for byte
 
-    def test_export_checks_the_template(self):
-        d = need(SMALL).restore('reference')
-        other = source_def(need(MEDIUM))                         # a DEF of another design
-        with tempfile.TemporaryDirectory() as t:
-            with self.assertRaises(ValueError) as e:
-                d.export(t + '/x.def', template=other)
-            self.assertIn('netlist', str(e.exception))
-            self.assertIn('force=True', str(e.exception))
-            self.assertFalse(os.path.exists(t + '/x.def'))
-            with open(source_def(d)) as f:                     # same design, other units
-                src = f.read()
-            dbu = 'UNITS DISTANCE MICRONS %d' % d.dbu
-            self.assertIn(dbu, src)
-            with open(t + '/units.def', 'w') as f:
-                f.write(src.replace(dbu, 'UNITS DISTANCE MICRONS %d' % (2 * d.dbu)))
-            with self.assertRaises(ValueError) as e:
-                d.export(t + '/x.def', template=t + '/units.def')
-            self.assertIn('units', str(e.exception))
-            with self.assertWarns(UserWarning):              # force: written anyway, with a warning
-                d.export(t + '/x.def', template=other, force=True)
-            self.assertTrue(os.path.exists(t + '/x.def'))
-
-    def test_export_needs_a_cell_library(self):
+    def test_export_needs_a_cell_library_and_a_frame(self):
         b = need(BOOKSHELF)
-        self.assertNotIn('cell_library', b.facts)
-        self.assertIn('cell_library', b.missing('export'))
-        src = source_def(need(SMALL))
+        self.assertEqual(b.missing('export'), ['cell_library', 'def_frame'])
         with tempfile.TemporaryDirectory() as t:
-            with self.assertRaises(MissingFacts) as e:
-                b.export(t + '/x.def', template=src)
-            self.assertIn('force=True', str(e.exception))
-            with self.assertRaises(MissingFacts):              # and no frame to write into
+            with self.assertRaises(MissingFacts):
                 b.export(t + '/x.def')
+            self.assertFalse(os.path.exists(t + '/x.def'))
 
 class StatusTest(unittest.TestCase):
     def test_status_checklist_and_tiers(self):

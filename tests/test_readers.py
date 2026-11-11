@@ -83,6 +83,17 @@ class PinDirectionTest(unittest.TestCase):
         self.assertEqual(_net_attrs('- a ( x A ) + SOURCE TIMING + ROUTED M1 ( 1 2 ) NEW M2 ( 1 2 ) + USE CLOCK ;'),
                          ' + SOURCE TIMING + USE CLOCK')                 # the wiring is dropped, the rest kept
 
+    def test_pg_geometry_from_vias_and_special_nets(self):
+        from attar.deffile import PG_HWIRE, PG_VIA, def_vias, pg_shapes
+        text = ('VIAS 1 ;\n- V01 + VIARULE V01R + CUTSIZE 80 80 + LAYERS M0 VIA0 M1 + CUTSPACING 80 80\n'
+                ' + ENCLOSURE 40 24 40 24 + ROWCOL 1 5 ;\nEND VIAS\n'
+                'SPECIALNETS 1 ;\n- VDD ( * VDD )\n  + ROUTED M0 96 + SHAPE FOLLOWPIN ( 0 1000 ) ( 5000 * )\n'
+                '    NEW M0 96 + SHAPE COREWIRE ( 2000 1000 ) V01\n  + USE POWER ;\nEND SPECIALNETS\n')
+        self.assertEqual(def_vias(text)['V01'], [('M0', (-400, -64, 400, 64)), ('M1', (-400, -64, 400, 64))])
+        sh = pg_shapes(text, {}, 2000)
+        self.assertIn(('M0', (-48, 952, 5048, 1048), PG_HWIRE, 'VDD'), sh)       # square ends: half a width out
+        self.assertIn(('M1', (1600, 936, 2400, 1064), PG_VIA, 'VDD'), sh)
+
     def test_bookshelf_states_directions_and_blocks_do_not(self):
         b = need('ispd2005/adaptec1')
         self.assertEqual(b.facts['pin_direction'], 'bookshelf')

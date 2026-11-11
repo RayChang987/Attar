@@ -2,7 +2,7 @@
 """Validate the distillation on routed pa_pdn runs.
 
 1. HPWL on the GPU from the distilled final DEF vs Innovus' own 'Total net bbox length' before routeDesign.
-2. Write-back of the unchanged placement: COMPONENTS identical to the source.
+2. Export of the unchanged placement: the same design as the source.
 3. Write-back of a perturbed placement (shifts and flips): re-distilled HPWL equals the in-memory HPWL.
 usage: validate_pa_pdn.py <scratch dir> [design ...] [--ns3k ~/i3dPDK_NS3K]"""
 import argparse
@@ -15,6 +15,7 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import attar  # noqa: E402
+from attar.deffile import read_def, same_design  # noqa: E402
 
 
 
@@ -27,15 +28,6 @@ def innovus_bbox(run):
         elif '<CMD> routeDesign' in line:
             break
     return last
-
-
-def components(path):
-    out = []; on = False
-    for line in open(path, errors='replace'):
-        if line.startswith('COMPONENTS'): on = True
-        elif line.startswith('END COMPONENTS'): break
-        elif on: out.append(line)
-    return out
 
 
 def sync(dev):
@@ -73,13 +65,11 @@ if __name__ == '__main__':
             d, os.path.basename(run), len(x.pos), int(x.n_mask.sum()), t_dist, 1e3 * t_hp))
         print('  HPWL attar %.1f um | innovus bbox %.1f um | diff %+.3f%%' % (hv, inv, 100 * (hv - inv) / inv) if inv else '  HPWL attar %.1f' % hv)
 
-        # 2. unchanged write-back
+        # 2. unchanged export: the same design as the source (frame verbatim, cells and nets from the IR)
         out = os.path.join(tmp, d + '.same.def')
-        n = x.export(out, template=src)['components']
-        a, b = components(src), components(out)
-        diff = sum(1 for u, v in zip(a, b) if u != v) + abs(len(a) - len(b))
-        print('  write-back unchanged: %d lines needed rewriting, %d COMPONENTS lines differ; other sections identical: %s' % (
-            n, diff, open(src, errors='replace').read().replace(''.join(a), '') == open(out, errors='replace').read().replace(''.join(b), '')))
+        n = x.export(out)['components']
+        print('  export unchanged: %d components written; same design as the source: %s' % (
+            n, same_design(read_def(src), read_def(out)) or 'yes'))
 
         # 3. perturbed write-back: shift 10% of movable cells by +-3 sites and change orientations, then re-read
         g = torch.Generator(device='cpu').manual_seed(0)

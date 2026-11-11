@@ -21,6 +21,8 @@ A design is a set of *facts*. Each fact has a *provenance*: the source it came f
 | `routing`, `timing`, `stack` | routing resources, Liberty/SDC, 3D stack (not stored yet) |
 | `cell_library` | the cells are instances of a real cell library (LEF macros): the result can go back to DEF |
 | `tracks` | routing tracks per layer and the routing layer of every macro pin (macro pins go on their tracks) |
+| `pdn` | PDN metal (wires, vias) on the three lowest routing layers: signal pins keep clear of it |
+| `def_frame` | the source DEF minus what Attar writes itself, kept verbatim: what `export` writes into |
 | `slow_loop` | the design comes from an ORFS stage, so ORFS can take the result |
 | `placement` | positions of all movable cells (solution state) |
 
@@ -34,8 +36,8 @@ Each *capability* (an engine or a metric) requires a set of facts:
 | `macro_place` | ... + floorplan.io |
 | `global_place` | ... + floorplan.io, floorplan.macros |
 | `legalize` | ... + rows, placement |
-| `export` | netlist, cell_library |
-| `orfs_floorplan_handoff` | cell_library, slow_loop, floorplan.io, floorplan.macros |
+| `export` | netlist, cell_library, def_frame |
+| `orfs_floorplan_handoff` | cell_library, def_frame, slow_loop, floorplan.io, floorplan.macros |
 | `orfs_handoff` | ... + placement |
 
 `d.capabilities()`, `d.missing('global_place')` and `d.require('legalize')` answer the questions; `d.status()`
@@ -47,7 +49,8 @@ A soft-block floorplan has no cell geometry, because the block shapes are the qu
 missing fact will be an explicit operation (a future `attar.derive`) that records its provenance as
 `derived:<method>`.
 
-Engines add facts with their own provenance. After `d.floorplan()` on an ORFS 2_1 design:
+Engines add facts with their own provenance. After `d.floorplan()` on an ORFS 2_1 design (the floorplan engines are
+not open yet; see attar.naive below):
 
 ```text
 floorplan.die     def
@@ -82,17 +85,27 @@ back together and compared with the source; the fact is only claimed when that g
 | --- | --- |
 | header, `DIEAREA`, `ROW`, `TRACKS`, `VIAS`, `PINS`, `SPECIALNETS`, `BLOCKAGES`, `REGIONS`, `GROUPS`, fixed components, power nets | components Attar may move, signal nets |
 
-So nets can change later (buffering, routing) without a template. To stamp onto a DEF of your own instead,
-`d.export(out_def, template=def_path, force=False)` copies that DEF with the answers stamped on. Before writing, it
-checks:
+So nets can change later (buffering, routing), and export needs no raw file. Bookshelf, YAL and GSRC designs have
+no cell library and no frame, so they do not export.
 
-1. `cell_library`: the design is made of LEF masters (not Bookshelf, YAL, GSRC);
-2. units: the template's DBU per micron equals the design's;
-3. netlist: the template's fingerprint (components and masters, IO pins, signal nets) equals the one recorded at
-   distillation;
-4. die: the template's die equals the design's, unless an engine made the die.
+## The PDN as a placement rule
 
-A mismatch is refused with what differs; `force=True` writes anyway, with a warning.
+A LEF/DEF design with special nets also keeps the PDN metal on its three lowest routing layers (fact `pdn`). From it
+come the rules OpenROAD's detailed placer checks (`check_placement`, blocked layers): PG via and fill metal that no
+PG wire of the same layer covers, grown by the layer's spacing, must stay clear of every signal pin on that layer,
+and vertical PG stripes on the second and third layer block the cells with pins there. `Evaluator.legality()`
+counts the cells that break them (`pdn_blocked`). The legalizer fixes them last, in three steps:
+
+1. a row-wise dynamic program on the GPU, after the PDN-aware refinement of pa_pdn (Xplace `pinaccess/dp_refine.py`):
+   every single-row cell may shift by up to 8 sites and be mirrored left to right (N and FN, FS and S share their
+   rails; only where the LEF `SYMMETRY` allows it), at a cost for blocked pins, displacement and mirroring, keeping
+   the order of the cells in every row segment; all segments are solved exactly at once;
+2. every cell still blocked, multi-row ones included, mirrored where it stands if that clears it (one GPU pass);
+3. the few left shifted along their rows, pushing neighbors, or moved to the nearest free spot; every such move is
+   checked against a site occupancy map first.
+ On i3dPDK_NS3K, whose via stacks from the M0
+rails up to M5 cross the M1 pin layer, a few hundred cells per 60k need it, nearly all fixed by mirroring; on ASAP7
+the M1-M2 vias sit inside the M1 rails and nothing is blocked.
 
 ## Design
 
@@ -124,7 +137,7 @@ export writes them as `UNPLACED`.
 ev = attar.Evaluator(d, fast=True)       # fast: CUDA-graph HPWL
 ev.hpwl()                                 # exact pin-to-pin HPWL (0-d tensor, no host sync)
 ev.hpwl_batch(P)                          # (B, N, 2) placements at once
-ev.legality()                             # rows, sites, overlaps, row gaps, power-rail parity
+ev.legality()                             # rows, sites, overlaps, row gaps, power-rail parity, PDN
 ev.evaluate(metrics=('hpwl', 'steiner_wirelength', 'rudy', 'density_overflow', 'legality'))
 ```
 
@@ -136,9 +149,16 @@ The basic set of engines: simple, tensorized and fast, each one a starting point
 
 | engine | method |
 | --- | --- |
+| `global_place` | ePlace/DREAMPlace electrostatics: WA wirelength, DCT Poisson solve, Nesterov with backtracking, CUDA graphs; rolls back to the best solution if it diverges. Optional: a keep-out band around macros (`macro_halo`), and routability (`routability=True`: DREAMPlace's cell inflation from RUDY over the track capacity the slow loop's router uses) |
+| `legalize` | multi-row-height, power-rail aware: bands of rows per (height, rails) class, parallel isotonic packing, a fill step, and parallel displacement improvement; then signal pins clear of the PDN (fact `pdn`, above) |
+| `place` | `global_place` + `legalize`, at the source's own target density (ORFS: the density its global placement used) |
+
+The floorplan engines are in the package but **not open yet**: the zoo holds placement problems, whose floorplan is
+given. Floorplan problems will be a zoo of their own.
+
+| engine | method |
+| --- | --- |
 | `make_die` | core area = cell area / utilization (+ macros), on the rows' site grid, rows regenerated |
 | `place_io` | die boundary as one line; targets from net centroids (or name order); parallel isotonic packing |
 | `place_macros` | mixed-size electrostatic GP, then macro legalization on the *macro grid* (positions that put macro pins on routing tracks): sweep line from the center out, or parallel pairwise push, keeping the better; leftovers to the nearest free grid spot |
-| `global_place` | ePlace/DREAMPlace electrostatics: WA wirelength, DCT Poisson solve, Nesterov with backtracking, CUDA graphs; rolls back to the best solution if it diverges |
-| `legalize` | multi-row-height, power-rail aware: bands of rows per (height, rails) class, parallel isotonic packing, a fill step, and parallel displacement improvement |
-| `floorplan`, `place` | `make_die` + `place_io` + `place_macros`; `global_place` + `legalize` |
+| `floorplan` | `make_die` + `place_io` + `place_macros` |

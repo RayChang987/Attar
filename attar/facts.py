@@ -21,6 +21,7 @@ FACTS = {
     'stack': '3D: per-die technology, hybrid bonding terminals',
     'cell_library': 'cells are instances of a real cell library (LEF masters): a DEF of the design means something',
     'tracks': 'routing tracks and the routing layer of every master pin (pin access: macros go on-track)',
+    'pdn': 'PDN metal (wires, vias) on the lowest routing layers: signal pins must keep clear of it',
     'def_frame': 'the source DEF minus what Attar writes (movable components, signal nets), kept verbatim: export needs no template',
     'slow_loop': 'the design comes from a slow-loop flow stage it can be handed back to (an ORFS stage on a platform ORFS knows)',
     'placement': 'locations and orientations of all movable cells (solution state)',
@@ -37,19 +38,19 @@ CAPABILITIES = {
     'detailed_place': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'rows', 'placement'},
     'global_route': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'routing', 'placement'},
     'sta': {'netlist', 'pin_direction', 'timing'},
-    'export': {'netlist', 'cell_library'},                 # stamped onto a DEF of the design the caller hands over
-    'orfs_handoff': {'cell_library', 'slow_loop', 'floorplan.io', 'floorplan.macros', 'placement'},
-    'orfs_floorplan_handoff': {'cell_library', 'slow_loop', 'floorplan.io', 'floorplan.macros'},   # from ORFS 2_1
+    'export': {'netlist', 'cell_library', 'def_frame'},    # the source DEF's frame + the IR
+    'orfs_handoff': {'cell_library', 'def_frame', 'slow_loop', 'floorplan.io', 'floorplan.macros', 'placement'},
+    'orfs_floorplan_handoff': {'cell_library', 'def_frame', 'slow_loop', 'floorplan.io', 'floorplan.macros'},   # from ORFS 2_1
     'plot': {'cell_geometry', 'floorplan.die'},
 }
 
 HINTS = {
     'placement': "run a placer, assign d.pos, or d.restore('reference') if the design keeps a reference placement",
-    'cell_library': 'this source has no cell library (Bookshelf, YAL, GSRC): a DEF of it would not mean anything; '
-                    'Design.export(..., force=True) writes one anyway',
+    'cell_library': 'this source has no cell library (Bookshelf, YAL, GSRC): a DEF of it would not mean anything',
     'tracks': 'distill from LEF/DEF (attar-ir >= 0.5): macros then go on the routing tracks, else on the row grid',
     'pin_direction': 'the source states no pin directions (or the IR is older than attar-ir 0.6: distill it again)',
-    'def_frame': 'distill from LEF/DEF (attar-ir >= 0.7), or hand export a template: d.export(out_def, template=...)',
+    'pdn': 'the source has no special nets on the pin layers (or the IR is older than attar-ir 0.8: distill it again)',
+    'def_frame': 'distill from LEF/DEF (attar-ir >= 0.7): the frame of the source DEF is what export writes into',
     'slow_loop': 'distill from an ORFS run (tools/distill_orfs.py); designs without a real cell library end in Attar',
     'floorplan.io': 'place the IO pins: attar.naive.place_io (or a source with placed pins; ORFS: GPL_PLACE_IOS=0)',
     'floorplan.macros': 'place the macros: attar.naive.place_macros (or a source with placed macros)',
@@ -59,7 +60,7 @@ HINTS = {
 DESCRIBE = {
     'hpwl': 'evaluate HPWL', 'wirelength_model': 'WA wirelength on given positions',
     'die_size': 'size the die for a utilization', 'io_place': 'IO pin placement', 'macro_place': 'macro placement', 'global_place': 'global placement', 'legalize': 'legalization', 'detailed_place': 'detailed placement',
-    'global_route': 'global routing', 'sta': 'static timing analysis', 'export': 'stamp onto a DEF of the design',
+    'global_route': 'global routing', 'sta': 'static timing analysis', 'export': 'write a DEF (source frame + IR)',
     'orfs_handoff': 'hand off to ORFS for validation', 'orfs_floorplan_handoff': 'hand the floorplan to ORFS (2_1)',
     'plot': 'plot the design',
 }

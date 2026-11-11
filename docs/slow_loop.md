@@ -50,6 +50,24 @@ All 9 agree: HPWL within 0.00002%, 9/9 legal verdicts, and 9/9 broken placements
 `tools/orfs_roundtrip.py ... identity` writes the ORFS placement back unchanged. Downstream metrics are
 bit-identical on gcd, aes, ibex, jpeg and ethmac.
 
+## Designs without an ORFS platform
+
+i3dPDK_NS3K has no ORFS platform, so `tools/validate_openroad.py` takes Attar's DEF straight to OpenROAD (from the
+same docker image) with the design's LEFs:
+
+```bash
+python tools/validate_openroad.py ns3k/aes ns3k/jpeg stress/bp_quad --lef-dir ~/i3dPDK_NS3K/innovus_enablement \
+    --grt --layers M1-M9 --allow-one-site-gaps
+```
+
+`--allow-one-site-gaps`: OpenROAD forbids a one-site gap between cells exactly when the library has no one-site-wide
+master (`-disallow_one_site_gaps` is deprecated; the rule follows the library). NS3K has no fillers at all and its
+own flow (Innovus) leaves such gaps, so the tool reads a dummy one-site spacer on the rows' site, which turns the
+check off; nothing else of `check_placement` changes.
+
+It reads the DEF, compares instance, net and IO counts, runs `check_placement` (violations per category), compares
+OpenROAD's HPWL with Attar's, runs global routing, and checks that a placement broken on purpose is rejected.
+
 ## Noise floor
 
 ORFS is deterministic, so a different seed does not measure noise. Instead, 1% of the cells are moved by one site

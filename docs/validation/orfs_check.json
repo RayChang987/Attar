@@ -72,6 +72,18 @@
   "broken_rejected_openroad": true
  },
  {
+  "design": "jpeg_x20",
+  "cells": 1052787,
+  "hpwl_attar": 5979077.0,
+  "hpwl_openroad": 5979076.935,
+  "hpwl_rel_diff": 1.0871243460996993e-08,
+  "hpwl_gpl_log": 5983525.01,
+  "legal_attar": true,
+  "legal_openroad": true,
+  "broken_rejected_attar": true,
+  "broken_rejected_openroad": true
+ },
+ {
   "design": "riscv32i",
   "cells": 10106,
   "hpwl_attar": 42491.9453125,

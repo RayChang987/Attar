@@ -2,21 +2,24 @@
 
 
 class Macro:
-    __slots__ = ('name', 'cls', 'w', 'h', 'pins', 'pin_layer', 'pin_dir')
+    __slots__ = ('name', 'cls', 'w', 'h', 'pins', 'pin_layer', 'pin_dir', 'sym')
 
     def __init__(self, name):
         self.name, self.cls, self.w, self.h = name, '', 0.0, 0.0
         self.pins = {}  # pin name -> (x0, y0, x1, y1) in microns: bbox of all port shapes; use
         self.pin_layer = {}  # pin name -> layer of its first port shape
         self.pin_dir = {}  # pin name -> DIRECTION (INPUT, OUTPUT, INOUT, FEEDTHRU) when the LEF states it
+        self.sym = set()   # SYMMETRY: 'X', 'Y', 'R90'
 
 
 def read_lef(paths, macros=None, tech=None):
-    """Read LEF files into macros {name: Macro} and tech {'sites': {}, 'layers': [...]} (microns)."""
+    """Read LEF files into macros {name: Macro} and tech {'sites': {}, 'layers': [...], 'vias': {name: [(layer,
+    (x0, y0, x1, y1))]}} (microns)."""
     macros = {} if macros is None else macros
-    tech = {'sites': {}, 'layers': []} if tech is None else tech
+    tech = {'sites': {}, 'layers': [], 'vias': {}} if tech is None else tech
+    tech.setdefault('vias', {})
     for path in paths:
-        mac = pin = layer = site = None
+        mac = pin = layer = site = via = None; via_layer = None
         box = None; use = 'SIGNAL'; props = False
         with open(path) as f:
             for line in f:
@@ -58,12 +61,24 @@ def read_lef(paths, macros=None, tech=None):
                         mac.cls = t[1].rstrip(';')
                     elif k == 'SIZE':
                         mac.w, mac.h = float(t[1]), float(t[3])
+                    elif k == 'SYMMETRY':
+                        mac.sym = {v.rstrip(';') for v in t[1:] if v.rstrip(';')}
                     elif k == 'END' and len(t) > 1 and t[1] == mac.name:
                         macros[mac.name] = mac; mac = None
+                elif via is not None:
+                    if k == 'LAYER' and len(t) > 1:
+                        via_layer = t[1].rstrip(';')
+                    elif k == 'RECT' and via_layer:
+                        v = [float(x) for x in (t[3:7] if t[1] == 'MASK' else t[1:5])]
+                        via[1].append((via_layer, (min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3]))))
+                    elif k == 'END' and len(t) > 1 and t[1] == via[0]:
+                        tech['vias'][via[0]] = via[1]; via = None
                 elif layer is not None:
                     if k in ('DIRECTION', 'PITCH', 'WIDTH', 'OFFSET', 'TYPE'):
                         v = t[1].rstrip(';')
                         layer[k.lower()] = v if k in ('DIRECTION', 'TYPE') else float(v)
+                    elif k == 'SPACING' and 'spacing' not in layer and len(t) > 1:   # the plain minimum spacing
+                        layer['spacing'] = float(t[1].rstrip(';'))
                     elif k == 'END' and len(t) > 1 and t[1] == layer['name']:
                         if layer.get('type') == 'ROUTING':
                             tech['layers'].append(layer)
@@ -75,6 +90,8 @@ def read_lef(paths, macros=None, tech=None):
                         site = None
                 elif k == 'MACRO':
                     mac = Macro(t[1])
+                elif k == 'VIA' and len(t) >= 2:
+                    via = (t[1], []); via_layer = None
                 elif k == 'LAYER' and len(t) == 2:
                     layer = {'name': t[1]}
                 elif k == 'SITE' and len(t) == 2:

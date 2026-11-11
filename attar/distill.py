@@ -14,10 +14,11 @@ import time
 import numpy as np
 
 from . import st
-from .deffile import ORIENT_ID, netlist_fingerprint, read_def, split_frame, write_framed
+from .deffile import ORIENT_ID, netlist_fingerprint, pg_shapes, read_def, split_frame, write_framed
 from .lef import read_lef
 
-SCHEMA = 'attar-ir/0.7'
+SCHEMA = 'attar-ir/0.9'
+PDN_LEVELS = 3      # PDN metal kept on the 3 lowest routing layers (OpenROAD dpl's kMaxPinLevel)
 IO_DIR = {'INPUT': 0, 'OUTPUT': 1, 'INOUT': 2, 'FEEDTHRU': 3}
 # pin direction as seen from the net (p_dir, m_pin_dir): a sink, a driver, both, or not stated by the source. An IO
 # terminal stands for the outside world, so an INPUT port drives its net (D_OUT), as Bookshelf terminals do.
@@ -119,6 +120,9 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     m_size = np.array([[q(macros[m].w), q(macros[m].h)] for m in used], np.int32).reshape(-1, 2)
     cls = lambda c: M_CORE if c == 'CORE' else M_BLOCK if c == 'BLOCK' else M_PAD if c == 'PAD' else M_OTHER
     m_class = np.array([cls(macros[m].cls) for m in used], np.uint8)
+    # LEF SYMMETRY as bits: 1 X (may mirror about the x axis), 2 Y (about the y axis: N <-> FN), 4 R90
+    m_sym = np.array([(1 if 'X' in macros[m].sym else 0) | (2 if 'Y' in macros[m].sym else 0) | (4 if 'R90' in macros[m].sym else 0)
+                      for m in used], np.uint8)
     # routing layers (the tech profile's order); each master pin's layer is an index into them (-1: not a routing layer)
     layers = [l for l in tech['layers'] if 'pitch' in l]
     lid = {l['name']: i for i, l in enumerate(layers)}
@@ -213,7 +217,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     }
     # routing tracks of the DEF (pin access: macro pins must sit on them), one row per (axis, layer)
     trk = [t for t in d['tracks'] if t[4] in lid]
-    core.update({'m_pin_layer': np.array(m_pin_layer, np.int16), 'm_pin_dir': np.array(m_pin_dir, np.uint8),
+    core.update({'m_pin_layer': np.array(m_pin_layer, np.int16), 'm_pin_dir': np.array(m_pin_dir, np.uint8), 'm_sym': m_sym,
                  'p_dir': np.array(p_dir, np.uint8),
                  'tr_axis': np.array([0 if t[0] == 'X' else 1 for t in trk], np.uint8),
                  'tr_start': np.array([t[1] for t in trk], np.int32), 'tr_num': np.array([t[2] for t in trk], np.int32),
@@ -223,7 +227,17 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     tp = {'layer_dir': np.array([0 if l.get('direction') == 'HORIZONTAL' else 1 for l in layers], np.uint8),
           'layer_pitch': np.array([q(l['pitch']) for l in layers], np.int32),
           'layer_width': np.array([q(l.get('width', 0)) for l in layers], np.int32),
-          'layer_offset': np.array([q(l.get('offset', 0)) for l in layers], np.int32)}
+          'layer_offset': np.array([q(l.get('offset', 0)) for l in layers], np.int32),
+          'layer_spacing': np.array([q(l.get('spacing', 0)) for l in layers], np.int32)}
+    # PDN metal on the lowest routing layers (the pin layers OpenROAD's detailed placer checks): wires, vias, fill
+    with open(def_path, errors='replace') as f:
+        text = f.read()
+    pg = [s_ for s_ in pg_shapes(text, tech.get('vias', {}), dbu) if s_[0] in lid and lid[s_[0]] < PDN_LEVELS]
+    pg_nets = sorted({s_[3] for s_ in pg})
+    core.update({'pg_layer': np.array([lid[s_[0]] for s_ in pg], np.int16),
+                 'pg_rect': np.array([s_[1] for s_ in pg], np.int32).reshape(-1, 4),
+                 'pg_kind': np.array([s_[2] for s_ in pg], np.uint8),
+                 'pg_net': np.array([pg_nets.index(s_[3]) for s_ in pg], np.uint8)})
 
     save_arrays(out_dir, core, tp)
     # the frame (deffile.split_frame): the source DEF minus the components Attar may move and the signal nets, kept
@@ -243,7 +257,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     with gzip.open(os.path.join(out_dir, 'names.json.gz'), 'wt') as f:
         json.dump({'design': d['design'], 'cells': cell_names, 'nets': net_names, 'masters': used,
                    'master_pins': mpin_names, 'layers': [l['name'] for l in layers],
-                   'cell_attrs': cell_attrs, 'net_attrs': net_attrs}, f, separators=(',', ':'))
+                   'cell_attrs': cell_attrs, 'net_attrs': net_attrs, 'pg_nets': pg_nets}, f, separators=(',', ':'))
 
     deg = np.diff(core['n_ptr'])
     movable = ((c_flags & (FIXED | TERMINAL)) == 0)
@@ -262,6 +276,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
                       + ([('tracks', 'def+lef')] if trk else [])
                       + ([('pin_direction', 'lef+def')] if any(v != D_UNKNOWN for v in m_pin_dir) else [])
                       + ([('def_frame', 'def')] if not frame_bad else [])
+                      + ([('pdn', 'def')] if pg else [])
                       + ([('floorplan.io', 'def')] if io_unplaced == 0 else [])
                       + ([('floorplan.macros', 'def')] if macros_unplaced == 0 else [])),
         'io_unplaced': io_unplaced,

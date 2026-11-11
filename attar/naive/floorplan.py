@@ -469,12 +469,13 @@ def floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None, v
     return res
 
 
-def place(d, target_density=None, verbose=True, gp_args=None, lg_args=None):
+def place(d, target_density=None, verbose=True, gp_args=None, lg_args=None, macro_halo=0.0):
     """Place the standard cells: attar.naive.global_place (cells spread to at most target_density: default the
-    source's own limit when it has one, e.g. ISPD 2015 maximum_utilization, else 0.9), then attar.naive.legalize.
+    source's own limit when it has one: ISPD 2015 maximum_utilization, the density ORFS's own global placement used;
+    else 0.9), then attar.naive.legalize.
     Returns HPWL, legality, time."""
     if target_density is None:
-        target_density = d.manifest.get('target_density', 0.9)
+        target_density = d.manifest.get('target_density') or 0.9
     from ..evaluator import Evaluator
     from .gp import global_place
     from .lg import legalize
@@ -485,11 +486,12 @@ def place(d, target_density=None, verbose=True, gp_args=None, lg_args=None):
         if verbose:
             print('  place: no movable cells (the floorplan places everything)')
         return {'hpwl': d.hpwl().item(), 'legal': None, 'seconds': time.time() - t0}
-    gp = global_place(d, target_density=target_density, verbose=False, **(gp_args or {}))
-    lg = legalize(d, verbose=False, **(lg_args or {}))
+    gp = global_place(d, target_density=target_density, verbose=False, macro_halo=macro_halo, **(gp_args or {}))
+    lg = legalize(d, verbose=False, macro_halo=macro_halo, **(lg_args or {}))
     ev = Evaluator(d)
     leg = ev.legality()
     res = {'hpwl_gp': gp['hpwl'], 'hpwl': ev.hpwl().item(), 'legal': leg['legal'], 'gp_iterations': gp['iterations'],
+           'target_density': target_density,
            'gp_seconds': gp['seconds'], 'lg_seconds': lg['seconds'], 'mean_disp': lg['mean_disp'], 'seconds': time.time() - t0}
     if verbose:
         print('  place: GP %d it (%.2fs), LG (%.2fs), HPWL %.4g (GP %.4g), legal %s, %.2fs'

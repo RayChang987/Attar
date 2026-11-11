@@ -99,19 +99,21 @@ class Evaluator:
         return torch.where(torch.isfinite(m), m, torch.zeros_like(m)).sum(1) * self.wmask
 
     def _graphed(self, pos):
-        if self._graph is None:
-            self._static = pos.detach().clone()
-            s = torch.cuda.Stream(); s.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(s):
-                for _ in range(3):
-                    self._fn(self._static).sum()
-            torch.cuda.current_stream().wait_stream(s)
-            self._graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(self._graph):
-                self._static_out = self._fn(self._static).sum()
-        self._static.copy_(pos)
-        self._graph.replay()
-        return self._static_out.clone()
+        dev = pos.device                            # capture and replay on the design's GPU
+        with torch.cuda.device(dev):
+            if self._graph is None:
+                self._static = pos.detach().clone()
+                s = torch.cuda.Stream(dev); s.wait_stream(torch.cuda.current_stream(dev))
+                with torch.cuda.stream(s):
+                    for _ in range(3):
+                        self._fn(self._static).sum()
+                torch.cuda.current_stream(dev).wait_stream(s)
+                self._graph = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(self._graph, stream=s):   # not torch's shared default capture stream
+                    self._static_out = self._fn(self._static).sum()
+            self._static.copy_(pos)
+            self._graph.replay()
+            return self._static_out.clone()
 
     def hpwl(self, pos=None):
         """Total weighted HPWL (0-d tensor, no host sync). pos: evaluate these positions instead of the design's."""
@@ -276,7 +278,12 @@ class Evaluator:
         res = {'cells': n_mv, 'wrong_rail': int((mv & wrong_rail).sum()),
                'off_row': int((mv & ~on_row).sum()), 'outside_rows': int((mv & on_row & ~inside).sum()),
                'off_site': int((mv & inside & ~on_site).sum()), 'overlapping': int((mv & bad).sum())}
-        res['legal'] = res['off_row'] == res['outside_rows'] == res['off_site'] == res['overlapping'] == res['wrong_rail'] == 0
+        # PDN: signal pins clear of the PG via metal on the pin layers (fact 'pdn', as OpenROAD's check_placement)
+        if 'pdn' in self.d.facts:
+            from . import pdn
+            res['pdn_blocked'] = int((pdn.conflicts(self.d, pos=p) & mv).sum())
+        res['legal'] = res['off_row'] == res['outside_rows'] == res['off_site'] == res['overlapping'] == res['wrong_rail'] \
+            == res.get('pdn_blocked', 0) == 0
         return res
 
     # -- report -------------------------------------------------------------------------------------------------------

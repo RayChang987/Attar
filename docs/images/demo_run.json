@@ -2,31 +2,26 @@
  {
   "step": "load",
   "out": "",
-  "sec": 0.0281524658203125
+  "sec": 0.036453962326049805
  },
  {
   "step": "status",
-  "out": "cva6  (orfs/asap7, fidelity F1)\n  tier B: can be stamped onto a DEF of it, but cannot be validated in a slow loop (yet) (tier A once it has floorplan.io, floorplan.macros)\n\nProblem facts\n  \u2705 netlist           def        113939 nets, 394794 pins\n  \u2705 cell_geometry     lef        108378 cells (108378 movable, 8 macros), 99 masters\n  \u2705 pin_offsets       lef        \n  \u2705 floorplan.die     def        1 die(s), 151.16 x 151.16 um\n  \u274c floorplan.io      -          962 IO pins unplaced in the source\n  \u274c floorplan.macros  -          8 macros unplaced in the source\n  \u2705 rows              def        544 rows, height 0.27 um\n  \u274c constraints       -          \n  \u274c routing           -          \n  \u274c timing            -          \n  \u274c stack             -          \n  \u2705 cell_library      lef        8 LEF file(s): asap7_tech_1x_201209.lef, asap7sc7p5t_28_R_1x_220121a.lef, asap7sc7p5t_28_L_1x_220121a.lef\n  \u2705 tracks            def+lef    20 track grids over 10 layers\n  \u2705 slow_loop         orfs:asap7 ORFS cva6, stage 2_1_floorplan\n\nSolution state\n  \u274c placement         108378 movable cells unplaced  (snapshots: reference)\n\nCapabilities\n  \u274c evaluate HPWL                     needs placement\n  \u2705 WA wirelength on given positions  \n  \u2705 size the die for a utilization    \n  \u2705 IO pin placement                  \n  \u274c macro placement                   needs floorplan.io\n  \u274c global placement                  needs floorplan.io, floorplan.macros\n  \u274c legalization                      needs placement\n  \u274c detailed placement                needs placement\n  \u274c global routing                    needs placement, routing\n  \u274c static timing analysis            needs timing\n  \u2705 stamp onto a DEF of the design    \n  \u274c hand off to ORFS for validation   needs floorplan.io, floorplan.macros, placement\n  \u274c hand the floorplan to ORFS (2_1)  needs floorplan.io, floorplan.macros\n  \u2705 plot the design                   \n\nHand-off to ORFS needs\n  \u2705 cell_library      \n  \u274c floorplan.io      962 IO pins unplaced in the source\n  \u274c floorplan.macros  8 macros unplaced in the source\n  \u274c placement         run a placer, assign d.pos, or d.restore('reference') if the design keeps a reference placement\n  \u2705 slow_loop         \n  -> missing floorplan.io, floorplan.macros: d.floorplan() places it; then d.export(\"<a DEF of this design>\", \"out.def\") and hand the floorplan to ORFS (tools/orfs_handoff.py)\n",
-  "sec": 0.04809141159057617
- },
- {
-  "step": "floorplan",
-  "out": "  macros: 8 placed (mixed-size GP 499 it, sweep-y (auto: sweep 0 close pairs, HPWL 3.315e+05, push 0 close pairs, HPWL 3.315e+05) legalization, mean move 0.0443), 0 overlapping pairs, 1.83s\n  io: 962 pins on the boundary (nets), pitch 0.216, 0.010s\n  floorplan done in 1.90s: floorplan.die<def>, floorplan.io<naive:place_io(nets)>, floorplan.macros<naive:place_macros>\n",
-  "sec": 1.8993492126464844
+  "out": "cva6  (orfs/asap7, fidelity F1)\n  tier A: can be validated in ORFS (slow loop), given an ORFS run of it\n  placement target density 0.84 (orfs 3_3 global_place (GPL-0023))\n\nProblem facts\n  \u2705 netlist           def        126963 nets, 420842 pins\n  \u2705 cell_geometry     lef        124618 cells (121394 movable, 8 macros), 101 masters\n  \u2705 pin_offsets       lef        \n  \u2705 pin_direction     lef+def    126963 drivers, 293879 sinks; 126255 nets with one driver, 0 with none, 0 with several\n  \u2705 floorplan.die     def        1 die(s), 151.16 x 151.16 um\n  \u2705 floorplan.io      def        962 IO pins placed\n  \u2705 floorplan.macros  def        8 macros placed\n  \u2705 rows              def        1033 rows, height 0.27 um\n  \u274c constraints       -          8 placement blockages in the source, not stored yet\n  \u274c routing           -          \n  \u274c timing            -          \n  \u274c stack             -          \n  \u2705 cell_library      lef        8 LEF file(s): asap7_tech_1x_201209.lef, asap7sc7p5t_28_R_1x_220121a.lef, asap7sc7p5t_28_L_1x_220121a.lef\n  \u2705 tracks            def+lef    20 track grids over 10 layers\n  \u2705 pdn               def        14611 wire and 39697 via shapes on M1, M2, M3\n  \u2705 def_frame         def        PDN, pins, fixed cells of the source DEF, kept verbatim (10793 kB)\n  \u2705 slow_loop         orfs:asap7 ORFS cva6, stage 3_3_place_gp\n\nSolution state\n  \u274c placement         121394 movable cells unplaced  (snapshots: reference)\n\nCapabilities\n  \u274c evaluate HPWL                     needs placement\n  \u2705 WA wirelength on given positions  \n  \u2705 size the die for a utilization    \n  \u2705 IO pin placement                  \n  \u2705 macro placement                   \n  \u2705 global placement                  \n  \u274c legalization                      needs placement\n  \u274c detailed placement                needs placement\n  \u274c global routing                    needs placement, routing\n  \u274c static timing analysis            needs timing\n  \u2705 write a DEF (source frame + IR)   \n  \u274c hand off to ORFS for validation   needs placement\n  \u2705 hand the floorplan to ORFS (2_1)  \n  \u2705 plot the design                   \n\nHand-off to ORFS needs\n  \u2705 cell_library      \n  \u2705 def_frame         \n  \u2705 floorplan.io      \n  \u2705 floorplan.macros  \n  \u274c placement         run a placer, assign d.pos, or d.restore('reference') if the design keeps a reference placement\n  \u2705 slow_loop         \n  -> only a placement is missing: place the design (or restore a snapshot), then export and hand off\n",
+  "sec": 0.07111406326293945
  },
  {
   "step": "place",
-  "out": "  place: GP 516 it (1.24s), LG (0.82s), HPWL 3.548e+05 (GP 3.129e+05), legal True, 2.07s\n",
-  "sec": 2.0712075233459473
+  "out": "  place: GP 476 it (1.37s), LG (1.44s), HPWL 4.933e+05 (GP 4.524e+05), legal True, 3.45s\n",
+  "sec": 3.453502893447876
  },
  {
   "step": "plot",
   "out": "",
-  "sec": 0.9103446006774902
+  "sec": 1.2154185771942139
  },
  {
   "step": "export",
-  "out": "{'components': 108378, 'pins': 962, 'rows': 0, 'die': 0, 'tracks': 0}\n",
-  "sec": 1.494347333908081
+  "out": "{'pins': 0, 'die': 0, 'rows': 0, 'tracks': 0, 'components': 121394, 'nets': 126963}\n",
+  "sec": 1.7995753288269043
  }
 ]

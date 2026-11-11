@@ -218,6 +218,70 @@ class FloorplanTest(unittest.TestCase):
         self.assertTrue(torch.equal(d.io_pos, io0))
         self.assertIn('export', d.capabilities())
 
+    def test_pins_keep_clear_of_the_pdn(self):
+        from attar import naive, pdn
+        d = need('ns3k/aes')                      # NS3K: PG via stacks from the M0 rails cross the M1 pin layer
+        self.assertIn('pdn', d.facts)
+        naive.global_place(d, verbose=False)
+        st = naive.legalize(d, verbose=False)
+        dp = st['pdn_dp']
+        self.assertGreater(dp['blocked_before'] + dp['mirrored_in_place'] + st['pdn']['conflicts'], 0)   # there was work
+        self.assertEqual(st['pdn'].get('left', 0), 0)
+        r = attar.Evaluator(d).legality()
+        self.assertEqual(r['pdn_blocked'], 0)
+        self.assertTrue(r['legal'])
+        a = need(MACRO_DESIGNS[0])               # ASAP7: the M1-M2 vias sit inside the M1 rails, nothing blocks M1
+        self.assertGreater(len(pdn.pin_blockages(a)), 0)
+        a.restore('reference')
+        self.assertEqual(int(pdn.conflicts(a).sum()), 0)
+
+    def test_target_density_is_the_flows_own(self):
+        d = need(SMALL)                                         # ORFS: the density its own global placement used
+        self.assertEqual(d.manifest.get('target_density_source'), 'orfs 3_3 global_place (GPL-0023)')
+        r = d.place(verbose=False)
+        self.assertEqual(r['target_density'], d.manifest['target_density'])
+        self.assertTrue(r['legal'])
+
+    def test_macro_halo_keeps_cells_away(self):
+        d = need(MACRO_DESIGNS[0])
+        r = d.place(macro_halo=3.0, verbose=False)
+        self.assertTrue(r['legal'])
+        m = d.macros
+        c = d.pos[d.movable]; s = d.size[d.movable]
+        m0, m1 = d.pos[m], d.pos[m] + d.size[m]
+        gap_x = torch.maximum(m0[None, :, 0] - (c[:, None, 0] + s[:, None, 0]), c[:, None, 0] - m1[None, :, 0])
+        gap_y = torch.maximum(m0[None, :, 1] - (c[:, None, 1] + s[:, None, 1]), c[:, None, 1] - m1[None, :, 1])
+        self.assertGreaterEqual(float(torch.maximum(gap_x, gap_y).min()), 3.0 - 1e-3)
+
+    def test_routability_driven_global_placement(self):
+        from attar import naive
+        d = need(MEDIUM)
+        gp = naive.global_place(d, routability=True, verbose=False)
+        ra = gp['routability']
+        self.assertGreater(ra['capacity_h'], 0); self.assertGreater(ra['capacity_v'], 0)
+        self.assertGreaterEqual(len(ra['rounds']), 1)               # congestion was looked at
+        naive.legalize(d, verbose=False)
+        self.assertTrue(attar.Evaluator(d).legality()['legal'])
+
+    def test_pdn_repair_mirrors_only_symmetric_masters(self):
+        from attar import naive
+        d = need('ns3k/aes')
+        o0 = d.orient.clone()
+        naive.global_place(d, verbose=False)
+        st = naive.legalize(d, verbose=False)
+        self.assertGreater(st['pdn_dp']['mirrored'] + st['pdn_dp']['mirrored_in_place'] + st['pdn'].get('mirrored', 0), 0)
+        flipped = torch.nonzero(torch.isin(d.orient, torch.tensor([1, 4], device=d.device))).flatten().cpu().numpy()
+        sym = d.raw['m_sym'][d.raw['c_master'][flipped]]
+        self.assertTrue(bool(((sym & 2) != 0).all()))               # FN / S only where the LEF allows SYMMETRY Y
+        del o0
+
+    def test_runs_on_a_second_gpu(self):
+        if torch.cuda.device_count() < 2:
+            raise unittest.SkipTest('one GPU')
+        d = attar.load(MEDIUM, 'cuda:1', download=False)    # CUDA graphs are captured on the design's GPU
+        self.assertTrue(d.place(verbose=False)['legal'])
+        self.assertAlmostEqual(attar.Evaluator(d, fast=True).hpwl().item(), d.hpwl().item(), delta=1e-2)
+
     def test_macro_grid_from_the_ir_alone(self):
         from attar.deffile import read_def
         from attar.lef import read_lef

@@ -50,6 +50,8 @@ Rules every reader follows:
 
 ## The zoo today
 
+Placement problems (the zoo today: floorplan and power grid given, the cells are the answer):
+
 | suite | designs | cells | starts from | Attar result |
 | --- | ---: | --- | --- | --- |
 | ispd2005 | 8 | 211k-2.2M | cells unplaced | legal |
@@ -58,10 +60,15 @@ Rules every reader follows:
 | ispd2024 | 5 | 120k-715k | placed | re-placed legal |
 | iccad2025 | 13 | 2k-298k | placed | re-placed legal |
 | gsrc_place | 4 | 0.8k-28k | cells unplaced | legal |
-| ns3k | 16 | 0.3k-170k | cells unplaced | legal (`tools/distill_pa_pdn.py --ns3k <kit>`) |
-| orfs_asap7 | 9 | 0.4k-125k | cells unplaced | legal; ORFS round trip |
+| ns3k | 16 | 0.3k-170k | cells unplaced | legal, also by OpenROAD `check_placement` (`tools/distill_pa_pdn.py --ns3k <kit>`) |
+| orfs_asap7 | 10 | 0.4k-1.05M | cells unplaced | legal; routed by ORFS with 0 DRC; jpeg_x20 (20 x jpeg, `orfs_runs/designs/`) is the million-cell scaling test |
+| stress/bp_quad | 1 | 1.18M | placed | re-placed legal |
+
+Floorplan problems (not open yet: die, IO pins and macros are the answer; the engines exist):
+
+| suite | designs | cells | starts from | Attar result |
+| --- | ---: | --- | --- | --- |
 | orfs_asap7_2_1, _3_2 | 9 | 9k-108k | IO, macros unplaced | floorplan + legal; ORFS hand-off |
-| stress/bp_quad | 1 | 1.18M | placed | from scratch, legal |
 | mcnc | 5 | 9-49 blocks | blocks unplaced | floorplan, no overlaps |
 | gsrc_hard | 6 | 10-300 blocks | no die | die + floorplan, no overlaps |
 | ispd2006_hb | 28 | 81-8.8k | hard + soft blocks | some overlaps remain |
@@ -77,6 +84,10 @@ Rules every reader follows:
 - Pin directions as the sources state them: superblue (ISPD 2015) has nets with two OUTPUT pins and nets with
   none; ISPD 2018/2019 have a few hundred nets driven by two flops; GSRC ibm05's I/O marks are inconsistent. The
   ORFS, NS3K and other ISPD 2015 designs have exactly one driver per net. MCNC and GSRC blocks state no directions.
+- i3dPDK_NS3K has no one-site filler, so OpenROAD's `check_placement` forbids one-site gaps between cells there; the
+  NS3K reference flow (Innovus) does not (its own placements of gcd and aes have 57 and 2,937 such gaps), and
+  Attar does not enforce it (`tools/validate_openroad.py --allow-one-site-gaps` checks NS3K without it). Its PDN via stacks from the M0 rails cross the M1 pin layer: Attar keeps signal pins
+  clear of them (fact `pdn`).
 
 ## Adding a reader
 

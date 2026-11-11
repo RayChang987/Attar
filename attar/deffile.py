@@ -383,3 +383,104 @@ def same_design(a, b):
         d = sorted(k for k in set(na) | set(nb) if na.get(k) != nb.get(k))
         return 'nets differ (%d vs %d; e.g. %s)' % (len(na), len(nb), d[:2])
     return ''
+
+
+# -- PG geometry: the special nets' metal (wires, vias, rects), in DBU ----------------------------------------------
+PG_HWIRE, PG_VWIRE, PG_VIA, PG_FILL = 0, 1, 2, 3
+
+
+def _section(text, name):
+    """The text of a DEF section, from its header line up to (not including) its END line; '' if absent."""
+    i = 0 if text.startswith(name + ' ') else text.find('\n' + name + ' ') + 1
+    if i <= 0 and not text.startswith(name + ' '):
+        return ''
+    j = text.find('\nEND ' + name, i)
+    return text[i:j if j >= 0 else len(text)]
+
+
+def def_vias(text):
+    """{via name: [(layer, (x0, y0, x1, y1))]} of the VIAS section (DBU): via rules (CUTSIZE, LAYERS, CUTSPACING,
+    ENCLOSURE, ROWCOL, ORIGIN, OFFSET; the two metal layers) and fixed vias (+ RECT)."""
+    out = {}
+    for stmt in _section(text, 'VIAS').split(';'):
+        t = stmt.split()
+        if len(t) < 2 or t[0] != '-':
+            continue
+        name, g = t[1], {}
+        for grp in _groups(t[2:]):
+            if grp:
+                g.setdefault(grp[0], []).append(grp[1:])
+        rects = []
+        if 'VIARULE' in g and 'CUTSIZE' in g and 'LAYERS' in g:
+            cx, cy = (int(v) for v in g['CUTSIZE'][0][:2])
+            bot, _, top = g['LAYERS'][0][:3]
+            sx, sy = (int(v) for v in g.get('CUTSPACING', [[0, 0]])[0][:2])
+            bx, by, tx, ty = (int(v) for v in g.get('ENCLOSURE', [[0, 0, 0, 0]])[0][:4])
+            r, c = (int(v) for v in g.get('ROWCOL', [[1, 1]])[0][:2])
+            ox, oy = (int(v) for v in g.get('ORIGIN', [[0, 0]])[0][:2])
+            obx, oby, otx, oty = (int(v) for v in g.get('OFFSET', [[0, 0, 0, 0]])[0][:4])
+            w, h = c * cx + (c - 1) * sx, r * cy + (r - 1) * sy
+            rects.append((bot, (ox + obx - w // 2 - bx, oy + oby - h // 2 - by, ox + obx + w - w // 2 + bx, oy + oby + h - h // 2 + by)))
+            rects.append((top, (ox + otx - w // 2 - tx, oy + oty - h // 2 - ty, ox + otx + w - w // 2 + tx, oy + oty + h - h // 2 + ty)))
+        for grp in g.get('RECT', []):
+            v = [int(x) for x in grp[1:] if x.lstrip('-').isdigit()][:4]
+            if len(v) == 4:
+                rects.append((grp[0], (min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3]))))
+        out[name] = rects
+    return out
+
+
+def pg_shapes(text, lef_vias, dbu):
+    """The special nets' metal: [(layer, (x0, y0, x1, y1), kind, net)] in DBU. kind: PG_HWIRE / PG_VWIRE (path
+    segments, square ends extended by half the width), PG_VIA (each metal layer of a via), PG_FILL (+ SHAPE DRCFILL).
+    lef_vias: {name: [(layer, rect in microns)]} from read_lef; DEF vias override them."""
+    vias = {k: [(l, tuple(int(round(c * dbu)) for c in r)) for l, r in v] for k, v in lef_vias.items()}
+    vias.update(def_vias(text))
+    out = []
+    for stmt in _section(text, 'SPECIALNETS').split(';'):
+        t = stmt.replace('(', ' ( ').replace(')', ' ) ').split()
+        if len(t) < 2 or t[0] != '-':
+            continue
+        net = t[1]
+        i = 2
+        layer = None; width = 0; shape = None; last = None
+        while i < len(t):
+            tok = t[i]
+            if tok in ('ROUTED', 'FIXED', 'COVER', 'SHIELD', 'NEW'):
+                j = i + 1 + (tok == 'SHIELD')                     # SHIELD <shieldNet> layer width ...
+                if j + 1 < len(t) and t[j] != '+':
+                    layer, width = t[j], int(t[j + 1]) if t[j + 1].lstrip('-').isdigit() else 0
+                    i = j + 2; shape = None; last = None
+                    continue
+                i += 1; continue
+            if tok == '+' and i + 1 < len(t) and t[i + 1] == 'SHAPE':
+                shape = t[i + 2]; i += 3; continue
+            if tok == '+' and i + 1 < len(t) and t[i + 1] == 'RECT':           # + RECT layer ( x y ) ( x y )
+                v = [int(x) for x in t[i + 3:i + 11] if x.lstrip('-').isdigit()][:4]
+                if len(v) == 4:
+                    out.append((t[i + 2], (min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3])),
+                                PG_FILL if shape == 'DRCFILL' else PG_HWIRE, net))
+                i += 11; continue
+            if tok == '+' and i + 1 < len(t) and t[i + 1] == 'MASK':
+                i += 3; continue
+            if tok == '(' and layer is not None:
+                x = t[i + 1]; y = t[i + 2]
+                px = last[0] if x == '*' and last else int(x)
+                py = last[1] if y == '*' and last else int(y)
+                k = t.index(')', i)
+                if last is not None and width:
+                    hw = width // 2
+                    if py == last[1]:      # horizontal segment
+                        out.append((layer, (min(px, last[0]) - hw, py - hw, max(px, last[0]) + hw, py + hw),
+                                    PG_FILL if shape == 'DRCFILL' else PG_HWIRE, net))
+                    elif px == last[0]:    # vertical
+                        out.append((layer, (px - hw, min(py, last[1]) - hw, px + hw, max(py, last[1]) + hw),
+                                    PG_FILL if shape == 'DRCFILL' else PG_VWIRE, net))
+                last = (px, py); i = k + 1
+                continue
+            if last is not None and tok in vias:               # a via at the last point
+                for l, (a, b, c, e) in vias[tok]:
+                    out.append((l, (last[0] + a, last[1] + b, last[0] + c, last[1] + e), PG_VIA, net))
+                i += 1; continue
+            i += 1
+    return out

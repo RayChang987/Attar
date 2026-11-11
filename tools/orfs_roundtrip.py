@@ -7,7 +7,7 @@
    then let ORFS redo 3_4 resize .. 6 finish, and collect the metrics.
 
 usage: orfs_roundtrip.py <design> <finished WORK_HOME under orfs_runs/> [mode ...] [--stage 3_3_place_gp]
-                         [--cores 4] [--par 4] [--keep]
+                         [--cores 4] [--par 4] [--keep] [--until 5_1_grt] [--make-args "LEC_CHECK=0"]
 modes: identity (write back the unchanged placement), perturb (shift 10% of the movable cells by +-3 sites),
 jitter<seed> (1% of the movable cells by +-1 site), def=<path> (a DEF written by attar's Design.export).
 --stage: where to distill from and inject into (3_3_place_gp, or 3_2_place_iop: before ORFS's global placement).
@@ -71,6 +71,34 @@ def suite(stage):
     return 'orfs_asap7' if stage == '3_3_place_gp' else 'orfs_asap7_' + stage[:3]
 
 
+def design_config(d):
+    """The ORFS DESIGN_CONFIG (container path): orfs_runs/designs/<d>/config.mk for a design of our own (e.g. the
+    jpeg_x20 scaling test), else ORFS's designs/asap7/<d>/config.mk."""
+    if os.path.exists(os.path.join(RUNS, 'designs', d, 'config.mk')):
+        return '/work/designs/%s/config.mk' % d
+    return './designs/asap7/%s/config.mk' % d
+
+
+def routing_resources(d):
+    """What ORFS's router may use for this design: {'layers': [lowest, highest] signal layer, 'adjustment': the share
+    of every layer's capacity global routing holds back} (ORFS MIN/MAX_ROUTING_LAYER, ROUTING_LAYER_ADJUSTMENT)."""
+    names = ('MIN_ROUTING_LAYER', 'MAX_ROUTING_LAYER', 'ROUTING_LAYER_ADJUSTMENT')
+    out = orfs('make --no-print-directory DESIGN_CONFIG=%s %s' % (design_config(d), ' '.join('print-' + n for n in names)))
+    v = {k.strip(): val.strip() for k, val in (line.split(':', 1) for line in out.splitlines() if ':' in line)}
+    return {'layers': [v['MIN_ROUTING_LAYER'].strip(), v['MAX_ROUTING_LAYER'].strip()],
+            'adjustment': float(v['ROUTING_LAYER_ADJUSTMENT']), 'source': 'orfs'}
+
+
+def place_density(base, d):
+    """The target density ORFS's global placement used for this design (its 3_3 log, GPL-0023: PLACE_DENSITY or
+    the lower bound plus PLACE_DENSITY_LB_ADDON), or None."""
+    log = os.path.join(base, 'logs/asap7', d, 'base', '3_3_place_gp.log')
+    if not os.path.exists(log):
+        return None
+    v = [line.split()[-1] for line in open(log, errors='replace') if 'GPL-0023' in line]
+    return float(v[-1]) if v else None
+
+
 def rt_dir(d):
     """orfs_runs/rt/<design>: the stage DEFs (distillation sources and export templates) and the run copies."""
     rt = os.path.join(RUNS, 'rt', d)
@@ -91,9 +119,11 @@ def export_and_distill(d, base, rt, stage, reuse=False):
     ir = os.path.join(ROOT, 'zoo', suite(stage), d)
     ref = {'3_3_place_gp': 'orfs 3_3_place_gp (global_place)',
            '3_2_place_iop': 'orfs 3_1_place_gp_skip_io (global_place without IOs)'}.get(stage, 'orfs ' + stage)
-    cfg = './designs/asap7/%s/config.mk' % d
+    cfg = design_config(d)
     m = attar.distill(src, lefs, ir, lib_paths=libs, reference=ref, facts={'slow_loop': 'orfs:asap7'},
-                      extra={'suite': 'orfs/asap7', 'orfs_image': IMAGE, 'orfs_stage': stage,
+                      extra={'suite': 'orfs/asap7', 'orfs_image': IMAGE, 'orfs_stage': stage, 'routing': routing_resources(d),
+                             # the placement target density of the flow: Design.place's default for this design
+                             'target_density': place_density(base, d), 'target_density_source': 'orfs 3_3 global_place (GPL-0023)',
                              'orfs': {'image': IMAGE, 'design': d, 'design_config': cfg, 'stage': stage,
                                       'platform': 'asap7'}})
     return ir, m, lefs
@@ -212,6 +242,13 @@ def _inject(d, base, rt, mode, out_def, hp, stage):
             stale_gp = stage != '3_3_place_gp' and b.startswith('3_3') and not b.endswith('.odb')  # ORFS GP's logs
             if b[:1] in '3456' and not b.startswith(('3_1', '3_2', '3_3')) or b.startswith(('route', 'final', 'cts', 'drt', 'congestion')) or stale_gp:
                 os.remove(f) if os.path.isfile(f) else shutil.rmtree(f)
+    # a run from a given netlist (SYNTH_NETLIST_FILES, e.g. jpeg_x20) has no 1_1_yosys_canonicalize.rtlil: make would
+    # redo synthesis and the whole flow after it (the injection lost); an empty one older than 1_2_yosys.v stops that
+    rtlil, y2 = os.path.join(r, '1_1_yosys_canonicalize.rtlil'), os.path.join(r, '1_2_yosys.v')
+    if not os.path.exists(rtlil) and os.path.exists(y2):
+        open(rtlil, 'w').close()
+        t0 = os.stat(y2).st_mtime_ns - 10**9
+        os.utime(rtlil, ns=(t0, t0))
     # make treats 3_3 as up to date: 3_2_place_iop.odb (not kept by ORFS) is recreated older than it
     p32 = r + '/3_2_place_iop.odb'
     if not os.path.exists(p32):
@@ -223,11 +260,11 @@ def _inject(d, base, rt, mode, out_def, hp, stage):
     return work, hp, t3
 
 
-def finish(d, work, cores):
+def finish(d, work, cores, target='', make_args=''):
     t = time.time()
     try:
-        orfs('make NUM_CORES=%d DESIGN_CONFIG=./designs/asap7/%s/config.mk WORK_HOME=%s > %s 2>&1'
-             % (cores, d, w(work), w(os.path.join(work, 'make.log'))))
+        orfs('make NUM_CORES=%d DESIGN_CONFIG=%s WORK_HOME=%s %s %s > %s 2>&1'
+             % (cores, design_config(d), w(work), make_args, target, w(os.path.join(work, 'make.log'))))
         ok = True
     except RuntimeError:
         ok = False
@@ -243,6 +280,8 @@ if __name__ == '__main__':
     ap.add_argument('--cores', type=int, default=4, help='NUM_CORES per ORFS run')
     ap.add_argument('--par', type=int, default=4, help='ORFS runs at once')
     ap.add_argument('--keep', action='store_true', help='keep the run copies (each a full ORFS run, up to GBs)')
+    ap.add_argument('--until', default='', help='a make target to stop at (e.g. 5_1_grt); default: the whole flow')
+    ap.add_argument('--make-args', default='', help='extra make variables, e.g. LEC_CHECK=0 (use the same as the baseline)')
     a = ap.parse_args()
     d, base, modes, STAGE = a.design, os.path.join(RUNS, a.run), a.modes, a.stage
     rt = rt_dir(d)
@@ -263,7 +302,7 @@ if __name__ == '__main__':
 
     prep = {mode: prepare(d, base, rt, ir, mode, dev, STAGE) for mode in modes}
     with ThreadPoolExecutor(a.par) as P:
-        done = dict(zip(modes, P.map(lambda mo: finish(d, prep[mo][0], a.cores), modes)))
+        done = dict(zip(modes, P.map(lambda mo: finish(d, prep[mo][0], a.cores, a.until, a.make_args), modes)))
     for mode in modes:
         work, hp, now = prep[mode]; ok, sec = done[mode]; mode = _tag(mode)
         # make must not redo global placement: the injected 3_3_place_gp.odb has to be untouched

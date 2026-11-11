@@ -44,7 +44,7 @@ Attar 只做「全域、可張量化、容許估計誤差」的問題；需要�
 2. **資料全程在 GPU 張量**：只有讀檔與寫檔兩端做轉換；內層迴圈不呼叫 `.item()`、`.cpu()`，收斂判斷每 k 次迭代才同步一次。
 3. **零編譯安裝**：核心只依賴 PyTorch 原生運算，不寫自訂 C++/CUDA kernel；Xplace、DREAMPlace 只當選配 adapter。
 4. **每個指標都標保真度與解析度**：使用者永遠知道數字可信到什麼程度，以及差距多大才算數（第 7 節）。低於解析度的差距，報告直接標「無法判斷」。
-5. **單向蒸餾，placement 可回寫**：PDK 只蒸餾、不重建。回到慢迴圈的只有演算法的輸出（cell 座標與方向，以及引擎改過的 floorplan）：`d.export(template_def, out_def)` 把它們「印」在使用者給的一份該設計的 DEF 上，其餘內容原封不動；寫出前檢查 cell library、單位、netlist 指紋與 die，不符就拒絕（`force=True` 才強寫並警告）。只有具 `cell_library` 事實（LEF/DEF 來源）的設計能 export，Bookshelf、YAL、GSRC 沒有。
+5. **單向蒸餾，placement 可回寫**：PDK 只蒸餾、不重建。回到慢迴圈的只有演算法的輸出（cell 座標與方向，以及引擎改過的 floorplan）：`d.export(out_def)` 把它們寫回來源 DEF 的框架（`frame.def.gz`：PDN、IO pin 形狀、固定 cell 等 Attar 不建模的部分，原樣保留），可移動 cell 與 signal net 由 IR 寫出。蒸餾時先把框架和 IR 組回去和來源比對，一致才宣稱 `def_frame`。只有 LEF/DEF 來源的設計能 export，Bookshelf、YAL、GSRC 沒有。
 
 回寫的理由：快迴圈有解析度上限（第 7.1 節：HPWL 差距在 1–2% 以內時，routed WL 同向率只有約 85%），而論文的改進常落在這個範圍。回寫讓使用者在移植演算法到 OpenROAD 之前，就能用 ORFS 驗證；第 7 節的驗證實驗本身也需要這條路。
 

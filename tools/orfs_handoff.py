@@ -26,7 +26,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 from attar.deffile import read_def  # noqa: E402
-from orfs_roundtrip import RUNS, metrics, openroad, orfs, w  # noqa: E402
+from orfs_roundtrip import RUNS, design_config, metrics, openroad, orfs, w  # noqa: E402
 
 PLATFORM = '/OpenROAD-flow-scripts/flow/platforms/asap7'
 SITE = 'asap7sc7p5t'
@@ -117,8 +117,8 @@ def prepare(d, base, out_def, tag):
 def run(d, work, cores, make_args=''):
     t = time.time()
     try:
-        orfs('make NUM_CORES=%d DESIGN_CONFIG=./designs/asap7/%s/config.mk WORK_HOME=%s %s > %s 2>&1'
-             % (cores, d, w(work), make_args, w(os.path.join(work, 'make.log'))))
+        orfs('make NUM_CORES=%d DESIGN_CONFIG=%s WORK_HOME=%s %s > %s 2>&1'
+             % (cores, design_config(d), w(work), make_args, w(os.path.join(work, 'make.log'))))
         ok = True
     except RuntimeError:
         ok = False

@@ -23,10 +23,10 @@ environment variables.
 | --- | --- |
 | `status(show=True)` | facts, solution state, capabilities, what an ORFS hand-off needs |
 | `capabilities()`, `missing(cap)`, `require(cap)`, `has(fact)`, `tier()` | facts and what follows from them |
-| `floorplan(utilization=None, aspect_ratio=1.0, **kw)` | `naive.floorplan`: new die if a utilization is given, then IO pins and macros as needed |
-| `place(target_density=None, **kw)` | `naive.place`: global placement + legalization |
+| `place(target_density=None, macro_halo=0, **kw)` | `naive.place`: global placement + legalization (default density: the source's own, else 0.9) |
+| `floorplan(utilization=None, aspect_ratio=1.0, **kw)` | `naive.floorplan` (not open yet, see below) |
 | `plot(path=None, theme='light', dpi=150, **kw)` | die, core, rows, cells (an area-density image above 30k cells), macros, IO pins by direction; warm light theme by default |
-| `export(out_def, template=None, force=False)` | write the design as a DEF: its source frame (PDN, pins, fixed cells, verbatim) with the cells and signal nets from the IR; or stamped onto `template` (checks cell library, units, netlist, die; `force` to override) |
+| `export(out_def)` | write the design as a DEF: its source frame (PDN, pins, fixed cells, verbatim) with the cells and signal nets from the IR |
 | `handoff_command(out_def, run_dir=None)` | the command that hands an exported DEF to ORFS |
 | `hpwl(pos=None, per_net=False)` | exact HPWL (0-d tensor) |
 | `wa_wirelength(pos=None, gamma=1.0)` | weighted-average wirelength, differentiable |
@@ -48,7 +48,7 @@ environment variables.
 | `hpwl_per_net(pos)` | HPWL of every net |
 | `star_wirelength(pos)`, `steiner_wirelength(pos)` | star model; rectilinear Steiner estimate |
 | `rudy(pos)`, `density_overflow(pos)` | congestion and density maps / scalars |
-| `legality(pos)` | counts: wrong_rail, off_row, outside_rows, off_site, overlapping; `legal` |
+| `legality(pos)` | counts: wrong_rail, off_row, outside_rows, off_site, overlapping, pdn_blocked (fact `pdn`); `legal` |
 | `evaluate(pos, metrics=(...))` | a report dict |
 | `status()`, `available()`, `missing(metric)` | which metrics the design's facts allow |
 
@@ -56,12 +56,18 @@ environment variables.
 
 | function | key arguments |
 | --- | --- |
+| `global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, movable=None, macro_halo=0, routability=False, route_args=None)` | |
+| `legalize(d, max_rounds=5, window=8, improve=True, passes=3, macro_halo=0)` | |
+| `place(d, target_density=None, gp_args=None, lg_args=None, macro_halo=0)` | |
+
+Floorplan engines. **Not open yet**: the zoo holds placement problems, whose floorplan is given; floorplan problems
+(die, IO pins and macros as the answer) will be a zoo of their own. The engines work and stay in the package:
+
+| function | key arguments |
+| --- | --- |
 | `floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None)` | |
 | `make_die(d, utilization, aspect_ratio=1.0)` | |
 | `place_io(d, pitch=None, margin=None, mode='auto' \| 'nets' \| 'order')` | |
 | `place_macros(d, halo=None, target_density=0.9, legalizer='auto' \| 'sweep' \| 'push')` | |
-| `global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, movable=None)` | |
-| `legalize(d, max_rounds=5, window=8, improve=True, passes=3)` | |
-| `place(d, target_density=None, gp_args=None, lg_args=None)` | |
 
 Each engine checks its facts first (`MissingFacts` otherwise) and writes its answer back into the design.
