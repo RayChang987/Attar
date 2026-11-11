@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""ASAP7 + ORFS round trip (spec 7.2 step 3) on a finished ORFS run.
+"""ORFS round trip (spec 7.2 step 3) on a finished ORFS run (asap7, nangate45: any platform in the image).
 
 1. In the ORFS container: 3_3_place_gp.odb -> DEF (the distillation source: netlist after port buffering, IOs placed).
 2. On the host: distill it, change the placement (or not), write it back into a copy of that DEF.
 3. In the ORFS container: apply the DEF to 3_3_place_gp.odb (read_def -incremental) in a copy of the run,
    then let ORFS redo 3_4 resize .. 6 finish, and collect the metrics.
 
-usage: orfs_roundtrip.py <design> <finished WORK_HOME under orfs_runs/> [mode ...] [--stage 3_3_place_gp]
+usage: orfs_roundtrip.py <design | platform/design> <finished WORK_HOME under orfs_runs/> [mode ...] [--stage 3_3_place_gp]
                          [--cores 4] [--par 4] [--keep] [--until 5_1_grt] [--make-args "LEC_CHECK=0"]
 modes: identity (write back the unchanged placement), perturb (shift 10% of the movable cells by +-3 sites),
 jitter<seed> (1% of the movable cells by +-1 site), def=<path> (a DEF written by attar's Design.export).
---stage: where to distill from and inject into (3_3_place_gp, or 3_2_place_iop: before ORFS's global placement).
-The stage's DEF goes to orfs_runs/rt/<design>/<stage>.def (the template Design.export stamps onto).
+The placement is distilled from and injected into 3_3_place_gp (a placement problem of the zoo, after_fp).
+A design is named by its run key: 'aes' (asap7) or 'nangate45/aes'. The stage's DEF goes to
+orfs_runs/rt/<run key>/<stage>.def (the distillation source).
 Summary: orfs_runs/results/<design>/roundtrip.summary.json; --keep keeps the run copies under orfs_runs/rt."""
 import argparse
 import glob
@@ -35,9 +36,39 @@ LEFS = [PLAT + '/lef/asap7_tech_1x_201209.lef', PLAT + '/lef/asap7sc7p5t_28_R_1x
 LIBS = sorted(glob.glob(PLAT + '/lib/NLDM/asap7sc7p5t_*_RVT_FF_nldm_*.lib*'))
 
 
+PLATFORMS = '/OpenROAD-flow-scripts/flow/platforms/'
+
+
+def split(key):
+    """Run key -> (platform, design): 'aes' is asap7's aes, 'nangate45/aes' nangate45's."""
+    return tuple(key.split('/', 1)) if '/' in key else ('asap7', key)
+
+
+def run_key(platform, design):
+    return design if platform == 'asap7' else '%s/%s' % (platform, design)
+
+
+def base_dir(key):
+    """The ORFS run up to 3_3 (orfs_run_to_gp.sh): orfs_runs/<design>_base (asap7), orfs_runs/<platform>/<design>_base."""
+    p, d = split(key)
+    return os.path.join(RUNS, d + '_base') if p == 'asap7' else os.path.join(RUNS, p, d + '_base')
+
+
+def flow_dir(work, kind='results'):
+    """<work>/<kind>/<platform>/<DESIGN_NICKNAME>/base: the one flow variant of a run."""
+    found = glob.glob(os.path.join(work, kind, '*', '*', 'base'))
+    # BLOCKS designs (aes-block) also hold their blocks' runs, as <design>_<block>: keep the top level's
+    nick = [os.path.basename(os.path.dirname(f)) for f in found]
+    found = [f for f, n in zip(found, nick) if not any(n.startswith(o + '_') for o in nick)]
+    if len(found) != 1:
+        raise FileNotFoundError('%s: expected one %s/<platform>/<design>/base, found %s' % (work, kind, found))
+    return found[0]
+
+
 def inputs(base):
     """LEF and Liberty files of an ORFS run (from <base>.vars written by run_to_gp.sh), as host paths.
-    Platform files map to the copy in platform_asap7; anything else is copied out of the image once."""
+    Platform files map to the copy in orfs_runs/platform_<platform>; anything else to orfs_runs/inputs; either is
+    copied out of the image once."""
     vf = base.rstrip('/') + '.vars'
     if not os.path.exists(vf):
         return LEFS, LIBS
@@ -46,9 +77,11 @@ def inputs(base):
         if ':' in line:
             k, val = line.split(':', 1); v[k.strip()] = val.split()
     def host(p):
-        pre = '/OpenROAD-flow-scripts/flow/platforms/asap7/'
-        if p.startswith(pre):
-            h = os.path.join(PLAT, p[len(pre):])
+        if p.startswith('/work/'):                      # made by the run itself (BLOCKS: the blocks' LEFs)
+            return os.path.join(RUNS, p[len('/work/'):])
+        if p.startswith(PLATFORMS):                     # platform files: a copy in orfs_runs/platform_<platform>
+            plat, rest = p[len(PLATFORMS):].split('/', 1)
+            h = os.path.join(RUNS, 'platform_' + plat, rest)
         else:
             h = os.path.join(RUNS, 'inputs', p.lstrip('/'))
         if not os.path.exists(h):
@@ -58,25 +91,33 @@ def inputs(base):
     lefs = [host(p) for k in ('TECH_LEF', 'SC_LEF', 'ADDITIONAL_LEFS') for p in v.get(k, [])]
     libs = [host(p) for k in ('LIB_FILES',) for p in v.get(k, [])]
     # AUTO_MEMORIES designs generate their memory macro views during the flow
-    mem = sorted(glob.glob(os.path.join(base, 'results/asap7/*/base/memories/*')))
+    mem = sorted(glob.glob(os.path.join(base, 'results/*/*/base/memories/*')))
     lefs += [f for f in mem if f.endswith('.lef')]
     libs += [f for f in mem if f.endswith('.lib') and not f.endswith('_pre_layout.lib')]
     return lefs, libs
 
 
-STAGES = ('3_3_place_gp', '3_2_place_iop', '2_1_floorplan')
+STAGES = ('3_3_place_gp', '2_1_floorplan')   # after_fp, before_fp
 
 
-def suite(stage):
-    return 'orfs_asap7' if stage == '3_3_place_gp' else 'orfs_asap7_' + stage[:3]
+def suite(stage, platform='asap7'):
+    """The zoo folder (<mode>/<suite>) of a stage: 3_3 is a placement problem (after_fp: the floorplan and PDN made,
+    ORFS's global placement kept as the reference), 2_1 a floorplan problem (before_fp: IO pins and macros unplaced,
+    no PDN yet). Other stages are neither and go to no zoo."""
+    if stage == '3_3_place_gp':
+        return 'after_fp/orfs_' + platform
+    if stage == '2_1_floorplan':
+        return 'before_fp/orfs_' + platform
+    raise ValueError('stage %s is neither a floorplan (2_1) nor a placement (3_3) problem' % stage)
 
 
-def design_config(d):
-    """The ORFS DESIGN_CONFIG (container path): orfs_runs/designs/<d>/config.mk for a design of our own (e.g. the
-    jpeg_x20 scaling test), else ORFS's designs/asap7/<d>/config.mk."""
-    if os.path.exists(os.path.join(RUNS, 'designs', d, 'config.mk')):
+def design_config(key):
+    """The ORFS DESIGN_CONFIG (container path): orfs_runs/designs/<d>/config.mk for an asap7 design of our own (e.g.
+    the jpeg_x20 scaling test), else ORFS's designs/<platform>/<d>/config.mk."""
+    p, d = split(key)
+    if p == 'asap7' and os.path.exists(os.path.join(RUNS, 'designs', d, 'config.mk')):
         return '/work/designs/%s/config.mk' % d
-    return './designs/asap7/%s/config.mk' % d
+    return './designs/%s/%s/config.mk' % (p, d)
 
 
 def routing_resources(d):
@@ -89,43 +130,42 @@ def routing_resources(d):
             'adjustment': float(v['ROUTING_LAYER_ADJUSTMENT']), 'source': 'orfs'}
 
 
-def place_density(base, d):
+def place_density(base):
     """The target density ORFS's global placement used for this design (its 3_3 log, GPL-0023: PLACE_DENSITY or
     the lower bound plus PLACE_DENSITY_LB_ADDON), or None."""
-    log = os.path.join(base, 'logs/asap7', d, 'base', '3_3_place_gp.log')
+    log = os.path.join(flow_dir(base, 'logs'), '3_3_place_gp.log')
     if not os.path.exists(log):
         return None
     v = [line.split()[-1] for line in open(log, errors='replace') if 'GPL-0023' in line]
     return float(v[-1]) if v else None
 
 
-def rt_dir(d):
-    """orfs_runs/rt/<design>: the stage DEFs (distillation sources and export templates) and the run copies."""
-    rt = os.path.join(RUNS, 'rt', d)
+def rt_dir(key):
+    """orfs_runs/rt/<run key>: the stage DEFs (distillation sources) and the run copies."""
+    rt = os.path.join(RUNS, 'rt', key)
     os.makedirs(rt, exist_ok=True)
     return rt
 
 
-def export_and_distill(d, base, rt, stage, reuse=False):
-    """<stage>.odb -> DEF -> zoo/<suite>/<d> (movable cells unplaced, the stage's own placement kept as 'reference').
+def export_and_distill(key, base, rt, stage, reuse=False):
+    """<stage>.odb -> DEF -> zoo/<suite>/<design> (movable cells unplaced, the stage's own placement kept as 'reference').
     3_3_place_gp: after ORFS global placement (its netlist includes the buffers ORFS's GP inserted).
-    3_2_place_iop: before it (cells at the 3_1 skip-IO GP positions; IOs placed only if GPL_PLACE_IOS=0).
     2_1_floorplan: the floorplan (IO pins and macros unplaced). reuse: distill an existing <stage>.def again."""
-    res = os.path.join(base, 'results/asap7', d, 'base')
+    plat, d = split(key)
+    res = flow_dir(base)
     src = os.path.join(rt, stage + '.def')
     if not (reuse and os.path.exists(src)):
-        openroad('read_db %s\nwrite_def %s' % (w(res + '/%s.odb' % stage), w(src)), d + '_export')
+        openroad('read_db %s\nwrite_def %s' % (w(res + '/%s.odb' % stage), w(src)), key.replace('/', '_') + '_export')
     lefs, libs = inputs(base)
-    ir = os.path.join(ROOT, 'zoo', suite(stage), d)
-    ref = {'3_3_place_gp': 'orfs 3_3_place_gp (global_place)',
-           '3_2_place_iop': 'orfs 3_1_place_gp_skip_io (global_place without IOs)'}.get(stage, 'orfs ' + stage)
-    cfg = design_config(d)
-    m = attar.distill(src, lefs, ir, lib_paths=libs, reference=ref, facts={'slow_loop': 'orfs:asap7'},
-                      extra={'suite': 'orfs/asap7', 'orfs_image': IMAGE, 'orfs_stage': stage, 'routing': routing_resources(d),
+    ir = os.path.join(attar.paths.zoo_dir(), suite(stage, plat), d)
+    ref = {'3_3_place_gp': 'orfs 3_3_place_gp (global_place)'}.get(stage, 'orfs ' + stage)
+    cfg = design_config(key)
+    m = attar.distill(src, lefs, ir, lib_paths=libs, reference=ref, facts={'slow_loop': 'orfs:' + plat},
+                      extra={'suite': 'orfs/' + plat, 'orfs_image': IMAGE, 'orfs_stage': stage, 'routing': routing_resources(key),
                              # the placement target density of the flow: Design.place's default for this design
-                             'target_density': place_density(base, d), 'target_density_source': 'orfs 3_3 global_place (GPL-0023)',
+                             'target_density': place_density(base), 'target_density_source': 'orfs 3_3 global_place (GPL-0023)',
                              'orfs': {'image': IMAGE, 'design': d, 'design_config': cfg, 'stage': stage,
-                                      'platform': 'asap7'}})
+                                      'platform': plat}})
     return ir, m, lefs
 
 
@@ -171,8 +211,8 @@ def components_only(src, dst):
         fo.write('END DESIGN\n')
 
 
-def metrics(work, d):
-    L = os.path.join(work, 'logs/asap7', d, 'base')
+def metrics(work, d=None):
+    L = flow_dir(work, 'logs')
     j = lambda s: json.load(open(os.path.join(L, s + '.json'))) if os.path.exists(os.path.join(L, s + '.json')) else {}
     dp, grt, rt, fin = j('3_5_place_dp'), j('5_1_grt'), j('5_2_route'), j('6_report')
     return {'dp_hpwl_est': dp.get('detailedplace__dpl__route__wirelength__estimated'),
@@ -182,8 +222,8 @@ def metrics(work, d):
             'wns': fin.get('finish__timing__setup__ws'), 'tns': fin.get('finish__timing__setup__tns')}
 
 
-def gpl_final_hpwl(work, d):
-    for line in open(os.path.join(work, 'logs/asap7', d, 'base', '3_3_place_gp.log')):
+def gpl_final_hpwl(work, d=None):
+    for line in open(os.path.join(flow_dir(work, 'logs'), '3_3_place_gp.log')):
         if 'Final HPWL' in line:
             return float(line.split()[-1])
 
@@ -231,13 +271,13 @@ def _inject(d, base, rt, mode, out_def, hp, stage):
     work = os.path.join(rt, mode if stage == '3_3_place_gp' else '%s_%s' % (stage[:3], mode))
     shutil.rmtree(work, ignore_errors=True)
     shutil.copytree(base, work, symlinks=True)
-    r = os.path.join(work, 'results/asap7', d, 'base')
+    r = flow_dir(work)
     comp_def = os.path.join(rt, mode + '.components.def')
     components_only(out_def, comp_def)
     openroad('read_db %s\nread_def -incremental %s\nwrite_db %s' % (w(r + '/%s.odb' % stage), w(comp_def), w(r + '/3_3_place_gp.odb')),
-             d + '_' + mode)
+             d.replace('/', '_') + '_' + mode)
     for sub in ('results', 'logs', 'reports'):
-        for f in glob.glob(os.path.join(work, sub, 'asap7', d, 'base', '*')):
+        for f in glob.glob(os.path.join(work, sub, '*', '*', 'base', '*')):
             b = os.path.basename(f)
             stale_gp = stage != '3_3_place_gp' and b.startswith('3_3') and not b.endswith('.odb')  # ORFS GP's logs
             if b[:1] in '3456' and not b.startswith(('3_1', '3_2', '3_3')) or b.startswith(('route', 'final', 'cts', 'drt', 'congestion')) or stale_gp:
@@ -276,7 +316,7 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('design'); ap.add_argument('run', help='finished WORK_HOME under orfs_runs/')
     ap.add_argument('modes', nargs='*', default=['identity', 'perturb'])
-    ap.add_argument('--stage', default='3_3_place_gp', choices=STAGES[:2])
+    ap.add_argument('--stage', default='3_3_place_gp', choices=STAGES[:1])
     ap.add_argument('--cores', type=int, default=4, help='NUM_CORES per ORFS run')
     ap.add_argument('--par', type=int, default=4, help='ORFS runs at once')
     ap.add_argument('--keep', action='store_true', help='keep the run copies (each a full ORFS run, up to GBs)')
@@ -306,7 +346,7 @@ if __name__ == '__main__':
     for mode in modes:
         work, hp, now = prep[mode]; ok, sec = done[mode]; mode = _tag(mode)
         # make must not redo global placement: the injected 3_3_place_gp.odb has to be untouched
-        rerun = os.stat(os.path.join(work, 'results/asap7', d, 'base', '3_3_place_gp.odb')).st_mtime_ns != now
+        rerun = os.stat(os.path.join(flow_dir(work), '3_3_place_gp.odb')).st_mtime_ns != now
         ok = ok and not rerun  # make redid global placement: the injected placement was overwritten
         mm = metrics(work, d) if ok else {}; mm['hpwl_attar'] = hp; mm['flow_s'] = sec; mm['ok'] = ok
         print('%s: %s, 3_4..finish in %ds (global placement redone by make: %s)' % (mode, 'ok' if ok else 'FAILED', sec, rerun))
@@ -316,7 +356,7 @@ if __name__ == '__main__':
     print('\n%-16s' % 'run' + ''.join('%13s' % k for k in keys))
     for name, mm in rows:
         print('%-16s' % name + ''.join('%13s' % ('%.2f' % mm[k] if isinstance(mm.get(k), float) else mm.get(k)) for k in keys))
-    res = os.path.join(RUNS, 'results', d); os.makedirs(res, exist_ok=True)
+    res = os.path.join(RUNS, 'results', d); os.makedirs(res, exist_ok=True)   # d: the run key
     with open(os.path.join(res, 'roundtrip.summary.json'), 'w') as f:
         json.dump(rows, f, indent=1)
     if not a.keep:                                     # each mode's run copy is a full ORFS run (up to GBs)

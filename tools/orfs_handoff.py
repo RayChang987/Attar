@@ -9,8 +9,11 @@ skips ORFS's macro placer. place_pin leaves the pins FIXED, so ORFS's place_pins
 -place_ios (3_3) find nothing to place; kept() checks the final DEF. ORFS continues with tapcells, PDN, global
 placement, resizing, CTS and routing; Attar's cell placement, if any, is not used.
 
-usage: orfs_handoff.py <design> <run dir under orfs_runs/, e.g. riscv32i_base> <exported DEF> [tag]
-                       [--cores 5] [--make-args "LEC_CHECK=0"] [--keep]
+usage: orfs_handoff.py <design> <run dir under orfs_runs/, e.g. riscv32i_base> <exported DEF | baseline> [tag]
+                       [--cores 5] [--make-args "LEC_CHECK=0"] [--keep] [--until 3_5_place_dp]
+       baseline: no Attar floorplan, ORFS makes its own (the reference to compare with).
+       --until: stop at a make target and check the result there (check_placement, max slew / cap / fanout
+       violations, the ERROR and WARNING messages of every stage, macros and pins kept) instead of finishing.
        --make-args: extra make variables (use the same as the baseline); --keep keeps the ORFS run copy
        (orfs_runs/rt/<design>_fp/<tag>). The summary and the DEF go to orfs_runs/results/<design>/handoff_<tag>.*"""
 import argparse
@@ -89,6 +92,7 @@ def apply_tcl(src_def, out_def, odb_in, odb_out):
 
 
 def prepare(d, base, out_def, tag):
+    """A copy of the run from 2_1, with Attar's floorplan applied (out_def None: ORFS's own floorplan)."""
     work = os.path.join(RUNS, 'rt', '%s_fp' % d, tag)
     shutil.rmtree(work, ignore_errors=True)
     shutil.copytree(base, work, symlinks=True)
@@ -98,6 +102,8 @@ def prepare(d, base, out_def, tag):
             b = os.path.basename(f)
             if b[:1] in '3456' or b.startswith(('2_2', '2_3', '2_4', '2_floorplan', 'route', 'final', 'cts', 'drt', 'congestion', 'rtlmp')):
                 os.remove(f) if os.path.isfile(f) or os.path.islink(f) else shutil.rmtree(f)
+    if out_def is None:
+        return work, {'baseline': True}
     src_def = os.path.join(RUNS, 'rt', d, '2_1_floorplan.def')
     od = os.path.join(work, 'attar_floorplan.def'); shutil.copy(out_def, od)
     tcl, info = apply_tcl(src_def, od, w(os.path.join(base, 'results/asap7', d, 'base', '2_1_floorplan.odb')),
@@ -114,20 +120,63 @@ def prepare(d, base, out_def, tag):
     return work, info
 
 
-def run(d, work, cores, make_args=''):
+def run(d, work, cores, make_args='', target=''):
     t = time.time()
     try:
-        orfs('make NUM_CORES=%d DESIGN_CONFIG=%s WORK_HOME=%s %s > %s 2>&1'
-             % (cores, design_config(d), w(work), make_args, w(os.path.join(work, 'make.log'))))
+        orfs('make NUM_CORES=%d DESIGN_CONFIG=%s WORK_HOME=%s %s %s > %s 2>&1'
+             % (cores, design_config(d), w(work), make_args, target, w(os.path.join(work, 'make.log'))))
         ok = True
     except RuntimeError:
         ok = False
     return ok, round(time.time() - t)
 
 
+CHECK_TCL = """source $::env(SCRIPTS_DIR)/load.tcl
+load_design %(odb)s %(sdc)s
+if {[catch {check_placement -verbose} err]} { puts "ATTAR_CHECK FAIL $err" } else { puts "ATTAR_CHECK PASS" }
+estimate_parasitics -placement
+puts "ATTAR_DRV [sta::max_slew_violation_count] [sta::max_capacitance_violation_count] [sta::max_fanout_violation_count]"
+puts "ATTAR_COUNTS [llength [[ord::get_db_block] getInsts]] [llength [[ord::get_db_block] getBTerms]]"
+write_def $::env(RESULTS_DIR)/attar_check.def
+"""
+
+
+def checks(d, work, stage, make_args=''):
+    """Check the run at `stage` (an .odb in its results) in the flow's own environment (Liberty, SDC, RC):
+    check_placement, max slew / capacitance / fanout violations (estimated parasitics), and the ERROR and WARNING
+    messages of every stage log (by code)."""
+    res = os.path.join(work, 'results/asap7', d, 'base')
+    sdc = next((f for f in ('3_place.sdc', '2_floorplan.sdc', '2_1_floorplan.sdc') if os.path.exists(os.path.join(res, f))), None)
+    script = os.path.join(work, 'attar_check.tcl')
+    open(script, 'w').write(CHECK_TCL % {'odb': stage + '.odb', 'sdc': sdc})
+    try:
+        log = orfs('make DESIGN_CONFIG=%s WORK_HOME=%s %s run RUN_SCRIPT=%s 2>&1'
+                   % (design_config(d), w(work), make_args, w(script)))
+    except RuntimeError as e:
+        log = str(e)
+    out = {'stage': stage, 'check_placement': 'ATTAR_CHECK PASS' in log}
+    m = re.search(r'ATTAR_DRV (\d+) (\d+) (\d+)', log)
+    out['drv'] = dict(zip(('max_slew', 'max_cap', 'max_fanout'), map(int, m.groups()))) if m else None
+    m = re.search(r'ATTAR_COUNTS (\d+) (\d+)', log)
+    out['insts'], out['io_pins'] = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    if not out['check_placement']:
+        out['check_log'] = [l for l in log.splitlines() if 'ATTAR_CHECK' in l or 'DPL-' in l][:10]
+    msgs = {}
+    for f in sorted(glob.glob(os.path.join(work, 'logs/asap7', d, 'base', '[23]_*.log'))):
+        for line in open(f, errors='replace'):
+            m = re.match(r'\[(ERROR|WARNING) (\w+-\d+)\]', line)
+            if m:
+                k = '%s %s %s' % (os.path.basename(f)[:3], m.group(1), m.group(2))
+                msgs[k] = msgs.get(k, 0) + 1
+    out['messages'] = msgs
+    return out
+
+
 def kept(d, work, out_def):
-    """Did ORFS keep Attar's macros and IO pins? Compare the final DEF with the hand-off DEF."""
+    """Did ORFS keep Attar's macros and IO pins? Compare the final DEF (or the checked stage's) with the hand-off DEF."""
     fin = os.path.join(work, 'results/asap7', d, 'base', '6_final.def')
+    if not os.path.exists(fin):
+        fin = os.path.join(work, 'results/asap7', d, 'base', 'attar_check.def')
     if not os.path.exists(fin):
         return None
     f, o = read_def(fin), read_def(out_def)
@@ -155,12 +204,27 @@ if __name__ == '__main__':
     ap.add_argument('--cores', type=int, default=5)
     ap.add_argument('--make-args', default='', help='extra make variables, e.g. LEC_CHECK=0')
     ap.add_argument('--keep', action='store_true', help='keep the ORFS run copy (a full ORFS run, up to GBs)')
+    ap.add_argument('--until', default='', help='stop at this make target (e.g. 3_5_place_dp) and check the result there')
     a = ap.parse_args()
-    d, base, out_def = a.design, os.path.join(RUNS, a.run), os.path.abspath(a.out_def)
-    tag = a.tag or os.path.splitext(os.path.basename(out_def))[0]
+    d, base = a.design, os.path.join(RUNS, a.run)
+    out_def = None if a.out_def == 'baseline' else os.path.abspath(a.out_def)
+    tag = a.tag or ('baseline' if out_def is None else os.path.splitext(os.path.basename(out_def))[0])
     work, info = prepare(d, base, out_def, tag)
     print('prepared %s: %s' % (work, info), flush=True)
-    ok, sec = run(d, work, a.cores, a.make_args)
+    ok, sec = run(d, work, a.cores, a.make_args, a.until)
+    if a.until:
+        c = checks(d, work, a.until, a.make_args) if ok else {}
+        c.update(ok=ok, flow_s=sec, apply=info, kept=kept(d, work, out_def) if ok and out_def else None)
+        if not ok:
+            c['make_tail'] = open(os.path.join(work, 'make.log'), errors='replace').read()[-2000:]
+        print(json.dumps(c, indent=1))
+        res = os.path.join(RUNS, 'results', d); os.makedirs(res, exist_ok=True)
+        json.dump(c, open(os.path.join(res, 'handoff_%s_%s.json' % (tag, a.until)), 'w'), indent=1)
+        if out_def:
+            shutil.copy(out_def, os.path.join(res, 'handoff_%s.def' % tag))
+        if not a.keep:
+            shutil.rmtree(work, ignore_errors=True)
+        sys.exit(0 if ok else 1)
     rows = [('orfs floorplan', dict(metrics(base, d), gp_hpwl=gpl_hpwl(base, d))),
             ('attar floorplan', dict(metrics(work, d), gp_hpwl=gpl_hpwl(work, d), ok=ok, flow_s=sec, kept=kept(d, work, out_def)))]
     keys = ['gp_hpwl', 'dp_hpwl_est', 'grt_wl', 'routed_wl', 'drc', 'wns', 'tns']

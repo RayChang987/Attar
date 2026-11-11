@@ -19,13 +19,13 @@ def _overlaps(d):
 
 class LefDefTest(unittest.TestCase):
     def test_fence_regions_are_counted_not_claimed(self):
-        d = need('ispd2015/mgc_des_perf_a')
+        d = need('after_fp/ispd2015/mgc_des_perf_a')
         self.assertEqual(d.manifest['not_stored'].get('fence_regions'), 4)
         self.assertNotIn('constraints', d.facts)
         self.assertAlmostEqual(d.manifest['target_density'], 0.429)      # placement.constraints: 42.9%
 
     def test_placed_macros_are_frozen(self):
-        d = need('ispd2024/ariane133_51')                                  # macros + PLACED in the DEF
+        d = need('after_fp/ispd2024/ariane133_51')                                  # macros + PLACED in the DEF
         m = d.macros
         self.assertGreater(len(m), 0)
         self.assertTrue(bool(((d.flags[m] & FIXED) != 0).all()))
@@ -33,20 +33,20 @@ class LefDefTest(unittest.TestCase):
         self.assertIn('hpwl', d.capabilities())                            # the routing benchmark comes placed
 
     def test_asap7_contest_design_has_libraries_but_no_timing_yet(self):
-        d = need('iccad2025/aes')
+        d = need('after_fp/iccad2025/aes')
         self.assertEqual(d.manifest['fidelity'], 'F1')
         self.assertNotIn('timing', d.facts)
         self.assertIn('sdc', d.manifest['unread_sources'])
         # the contest's aes input has every cell in N, also in FS rows: the rail check sees it
         self.assertGreater(attar.Evaluator(d).legality()['wrong_rail'], 0)
-        self.assertTrue(attar.Evaluator(need('iccad2025/des')).legality()['legal'])
+        self.assertTrue(attar.Evaluator(need('after_fp/iccad2025/des')).legality()['legal'])
 
 
 class PinDirectionTest(unittest.TestCase):
     def test_lef_def_every_net_has_one_driver(self):
         import torch
         from attar.distill import D_IN, D_OUT
-        d = need('orfs_asap7/gcd')
+        d = need('after_fp/orfs_asap7/gcd')
         self.assertEqual(d.facts['pin_direction'], 'lef+def')
         drv = torch.zeros(len(d.n_weight), dtype=torch.int64, device=d.device)
         drv.index_add_(0, d.p_net, (d.pin_dir == D_OUT).long())
@@ -95,10 +95,10 @@ class PinDirectionTest(unittest.TestCase):
         self.assertIn(('M1', (1600, 936, 2400, 1064), PG_VIA, 'VDD'), sh)
 
     def test_bookshelf_states_directions_and_blocks_do_not(self):
-        b = need('ispd2005/adaptec1')
+        b = need('after_fp/ispd2005/adaptec1')
         self.assertEqual(b.facts['pin_direction'], 'bookshelf')
         self.assertGreater(b.manifest['pin_direction']['drivers'], 0)
-        for name in ('mcnc/ami33', 'gsrc_hard/n10'):                     # every pin 'B': no direction stated
+        for name in ('before_fp/mcnc/ami33', 'before_fp/gsrc_hard/n10'):                     # every pin 'B': no direction stated
             m = need(name)
             self.assertNotIn('pin_direction', m.facts)
             self.assertIn('pin_direction', m.missing('sta'))
@@ -106,21 +106,21 @@ class PinDirectionTest(unittest.TestCase):
 
 class BookshelfTest(unittest.TestCase):
     def test_old_scl_and_irrational_block_sizes(self):
-        d = need('ispd2006_hb/ibm01')                                     # Siteorient : N; sqrt(area) soft blocks
+        d = need('before_fp/ispd2006_hb/ibm01')                                     # Siteorient : N; sqrt(area) soft blocks
         self.assertEqual(d.dbu, 1000)
         self.assertGreater(d.manifest['not_stored']['soft_blocks'], 0)
         self.assertNotIn('floorplan.macros', d.facts)                      # movable hard blocks: macro placement
         self.assertIn('macro_place', d.capabilities())
 
     def test_pads_outside_the_rows_are_io(self):
-        d = need('gsrc_place/p1Unit_AR1.0_WS02')
+        d = need('after_fp/gsrc_place/p1Unit_AR1.0_WS02')
         self.assertGreater(len(d.io), 0)
         self.assertLess(float(d.utilization()[0]), 1.0)
 
 
 class FloorplanFormatTest(unittest.TestCase):
     def test_yal_blocks_get_placed_inside_the_outline(self):
-        d = need('mcnc/ami33')
+        d = need('before_fp/mcnc/ami33')
         self.assertEqual(d.missing('global_place'), ['floorplan.macros'])
         b = d.die_box[0]; p = d.io_pos
         edge = torch.stack([p[:, 0] - b[0], b[2] - p[:, 0], p[:, 1] - b[1], b[3] - p[:, 1]], 1).min(1).values
@@ -131,7 +131,7 @@ class FloorplanFormatTest(unittest.TestCase):
         self.assertTrue(bool((d.pos[m] >= b[:2] - 1e-3).all() and (d.pos[m] + d.size[m] <= b[2:] + 1e-3).all()))
 
     def test_hard_blocks_without_a_die_get_one(self):
-        d = need('gsrc_hard/n100')
+        d = need('before_fp/gsrc_hard/n100')
         self.assertNotIn('floorplan.die', d.facts)
         self.assertEqual(d.capabilities(), ['die_size', 'wirelength_model'])
         d.floorplan(utilization=0.8, verbose=False)
@@ -139,7 +139,7 @@ class FloorplanFormatTest(unittest.TestCase):
         self.assertIn('hpwl', d.capabilities())
 
     def test_soft_blocks_have_no_geometry(self):
-        d = need('gsrc_soft/n10')
+        d = need('before_fp/gsrc_soft/n10')
         self.assertNotIn('cell_geometry', d.facts)
         self.assertEqual(d.manifest['not_stored']['soft_blocks'], 10)
         self.assertEqual(d.raw['soft_area'].shape[0], len(d.flags))

@@ -49,8 +49,7 @@ A soft-block floorplan has no cell geometry, because the block shapes are the qu
 missing fact will be an explicit operation (a future `attar.derive`) that records its provenance as
 `derived:<method>`.
 
-Engines add facts with their own provenance. After `d.floorplan()` on an ORFS 2_1 design (the floorplan engines are
-not open yet; see attar.naive below):
+Engines add facts with their own provenance. After `d.floorplan()` on a `before_fp` design from ORFS 2_1:
 
 ```text
 floorplan.die     def
@@ -58,9 +57,16 @@ floorplan.io      naive:place_io(nets)
 floorplan.macros  naive:place_macros
 ```
 
-## Tiers
+## Modes and tiers
 
-What happens to a result depends on where the design came from:
+The zoo has two modes, by what the user solves (zoo names are `<mode>/<suite>/<design>`):
+
+- **`before_fp`, a floorplan problem:** the netlist and cell library are given; the die (utilization), IO pins and
+  macros are the answer. Attar draws no power grid: the floorplan is exported and handed to a flow that draws it
+  (ORFS: `tools/orfs_handoff.py`, which applies the die, rows, tracks, pins and macros and lets ORFS go on).
+- **`after_fp`, a placement problem:** the die, IO pins, macros and power grid are given; the cells are the answer.
+
+What happens to a result depends on where the design came from (the same in both modes):
 
 - **A**: can be validated in the slow loop (it comes from an ORFS stage and the floorplan is complete).
 - **B**: has a cell library, so the result can be stamped onto a DEF, but there is no slow loop for it.
@@ -153,8 +159,7 @@ The basic set of engines: simple, tensorized and fast, each one a starting point
 | `legalize` | multi-row-height, power-rail aware: bands of rows per (height, rails) class, parallel isotonic packing, a fill step, and parallel displacement improvement; then signal pins clear of the PDN (fact `pdn`, above) |
 | `place` | `global_place` + `legalize`, at the source's own target density (ORFS: the density its global placement used) |
 
-The floorplan engines are in the package but **not open yet**: the zoo holds placement problems, whose floorplan is
-given. Floorplan problems will be a zoo of their own.
+For `before_fp` problems:
 
 | engine | method |
 | --- | --- |

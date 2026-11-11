@@ -19,11 +19,12 @@ in a few lines of Python. Then hand the result back to OpenROAD and route it.
 
 <br>
 
-<img src="docs/images/demo.gif" alt="Seven lines of Python: load cva6, place, plot, export" width="920">
+<img src="docs/images/demo.gif" alt="Eight lines of Python run on cva6 and ariane136: load, plot the floorplan, place, plot the placement, export" width="920">
 
-<sub>A real run on an RTX 3080 Ti: cva6 at ORFS's global placement stage, its floorplan, 8 SRAM macros and PDN as ORFS
-made them, 121k cells to place. A legal placement in 3.5 seconds; handed back to ORFS it routes with 0 DRC and 7.4% less
-wire than ORFS's own placement.</sub>
+<sub>Real runs on an RTX 3080 Ti, the same code on two designs. The floorplan comes as the flow made it; only the cells
+are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs, legal in 2.9 s; handed back
+to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own placement. <b>ariane136</b> (NS3K): 170k cells around
+136 SRAMs, legal in 6.8 s.</sub>
 
 </div>
 
@@ -33,8 +34,13 @@ wire than ORFS's own placement.</sub>
 
 Placement research lives in a loop: change an idea, place, look at the numbers, change again. The slow loop
 (synthesis, place and route, signoff) takes minutes to hours per run. Attar is the other half: everything you need
-to iterate on placement, **fast to run and fast to write**. A problem is a design whose floorplan and power grid are
-given; the cells are the answer, and the answer goes back to the slow loop.
+to iterate on placement, **fast to run and fast to write**. The zoo holds two kinds of problems, and every answer goes
+back to the slow loop:
+
+- **`after_fp`, placement:** the floorplan and power grid are given, the cells are the answer (timing optimization and
+  global routing later).
+- **`before_fp`, floorplan:** the netlist is given; the die (utilization), the IO pins and the macros are the answer.
+  Attar draws no power grid: the floorplan goes to a flow that does (ORFS).
 
 <table>
 <tr>
@@ -55,12 +61,13 @@ pip install -e .                # torch (a CUDA build), numpy, matplotlib
 ```python
 import attar
 
-d = attar.load('orfs_asap7/cva6', device='cuda')
-d.status()                # what it has, what it can do
+d = attar.load('after_fp/orfs_asap7/cva6', device='cuda')
+d.status()                   # what it has, what it can do
+d.plot('floorplan.png')      # die, macros, IO pins, PDN: given
 
-d.place()                 # global placement + legalization
-d.plot('cva6.png')
-d.export('cva6.def')      # back to ORFS: route, time
+d.place()                    # global placement + legalization
+d.plot('placed.png')
+d.export('placed.def')       # a DEF, back to the slow loop
 ```
 
 `examples/quickstart.py` is this program with a design name argument. The designs come from a local *zoo* that you
@@ -74,7 +81,7 @@ Your own algorithm takes the same few lines, because every engine is a function 
 import torch, attar
 from attar import naive
 
-d = attar.load('ispd2005/adaptec1', device='cuda').restore('dreamplace_lg')
+d = attar.load('after_fp/ispd2005/adaptec1', device='cuda').restore('dreamplace_lg')
 ev = attar.Evaluator(d)
 
 pos = d.pos.clone().requires_grad_(True)              # (N, 2) lower-left corners
@@ -101,14 +108,15 @@ d.pos = pos.detach(); naive.legalize(d)               # ... so legalize (multi-r
      slow loop itself uses for the design; optionally routability-driven (DREAMPlace's cell inflation)
    - a multi-row-height legalizer that keeps power-rail parity and signal pins clear of the PDN's via metal
 
-   Floorplan engines (die sizing, IO pins, macros on their routing tracks) are there too; floorplan problems become a
-   zoo of their own later ([roadmap](#roadmap)).
+   For `before_fp` problems: die sizing for a utilization, IO pins, and macros on their routing tracks
+   (`d.floorplan(utilization=...)`).
 4. **Measure.** `attar.Evaluator` computes HPWL (exact, batched), Steiner wirelength, RUDY, density overflow and
    legality, on the current placement or on any positions you pass.
 5. **Hand off.** `d.export(out_def)` writes the design back into its source DEF's frame: the PDN, IO pin shapes and
-   fixed cells as they were, the cells and nets from the IR. For ORFS designs, `tools/orfs_roundtrip.py` takes the DEF
-   into the ORFS run, and ORFS routes and times it; designs without an ORFS platform (i3dPDK_NS3K) go to OpenROAD with
-   `tools/validate_openroad.py`.
+   fixed cells as they were, the cells and nets from the IR (a changed die, IO pins and macros included). For ORFS
+   designs, `tools/orfs_roundtrip.py` takes a placement into the ORFS run, and ORFS routes and times it;
+   `tools/orfs_handoff.py` takes a floorplan, and ORFS draws the PDN and goes on. Designs without an ORFS platform
+   (i3dPDK_NS3K) go to OpenROAD with `tools/validate_openroad.py`.
 
 More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [slow loop](docs/slow_loop.md) ·
 [API](docs/api.md)
@@ -155,16 +163,17 @@ in a few seconds; the 1.5k multi-row cells left take about a minute in a Python 
 
 ## Does the fast loop agree with the slow loop?
 
-A fast loop is only useful if its numbers mean the same thing as the slow loop's. Five checks, each reproducible with
-the tools in this repo (ORFS on ASAP7; OpenROAD alone on i3dPDK_NS3K, which has no ORFS platform):
+A fast loop is only useful if its numbers mean the same thing as the slow loop's. Six checks, each reproducible with
+the tools in this repo (ORFS on ASAP7 and Nangate45; OpenROAD alone on i3dPDK_NS3K, which has no ORFS platform):
 
 | | check | result |
 | --- | --- | --- |
-| **1** | Attar's HPWL vs the HPWL OpenROAD computes from its own database, same DEF, 10 ASAP7 designs up to 1.05M cells | equal to within **0.00002%** |
-| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ASAP7 **10 / 10**, NS3K **17 / 17** (with bp_quad, 1.18M cells): legal on both, broken rejected by both |
+| **1** | Attar's HPWL vs the HPWL OpenROAD computes from its own database, same DEF, 51 ORFS designs (33 ASAP7, 18 Nangate45) up to 1.48M cells | equal to within **0.00005%** |
+| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ORFS **51 / 51**, NS3K **17 / 17** (with bp_quad, 1.18M cells): legal on both, broken rejected by both |
 | **3** | ORFS's own placement written back unchanged, then ORFS resize, DP, CTS, routing | routed WL, DRC, WNS, TNS **bit-identical**, **9 / 9** designs |
 | **4** | Attar's own placement, at the design's target density, then ORFS to the end | **9 / 9** route with **0 DRC**; routed WL **0.2% to 7.4% shorter** than with ORFS's own placement |
 | **5** | HPWL vs routed wirelength, 951 routed runs of 16 designs (NS3K + Innovus) | same order at **≥ 2%** HPWL difference; a coin flip below 0.25% |
+| **6** | `before_fp`: Attar's floorplan (a new die at a looser or tighter utilization, IO pins, macros) handed to ORFS, which draws the PDN and places, up to detailed placement | **12 / 14** pass `check_placement` with no more slew / cap / fanout violations than ORFS's own floorplan, every macro and pin kept. The 2 that fail (tight cva6, tight swerv_wrapper: [why](docs/validation/fp_handoff.md)) are not in the zoo until the floorplan engines handle them<a id="before_fp-hand-off"></a> |
 
 <p align="center"><img src="docs/images/proxy_agreement.png" alt="Agreement of routed wirelength with HPWL rises from 55% for HPWL differences under 0.1% to 99.8% above 5%" width="760"></p>
 
@@ -193,6 +202,8 @@ HPWL does *not* predict timing: WNS and TNS move independently of it, and Attar'
 jpeg_x20 is 20 copies of the synthesized jpeg run through ORFS as one design: a million-cell scaling test.
 The legality check covers rows, sites, overlaps, row segments cut around macros, power-rail parity, and signal pins
 clear of the PDN's via metal (as OpenROAD's `check_placement` checks it).
+All 51 ORFS designs, ASAP7 and Nangate45: [docs/validation/orfs_check.md](docs/validation/orfs_check.md).
+
 </details>
 
 <details>
@@ -220,12 +231,13 @@ cannot read its generated memory macro. Attar's placements are not timing-driven
 ## Benchmarks
 
 The zoo is built locally from public benchmarks by `tools/distill_benchmarks.py` and the ORFS tools. Each reader hands
-over only the facts its format has. **156 designs in 17 suites.** The placement problems, floorplan and power grid
-given, are the zoo today: **97 designs in 10 suites, all placed legally.**
+over only the facts its format has. **193 designs in 17 suites, in two modes** (`attar.load('<mode>/<suite>/<design>')`).
 
 <details open>
-<summary><b>Placement problems</b></summary>
+<summary><b><code>after_fp</code>: placement problems (138 designs, 11 suites)</b></summary>
 <br>
+
+The floorplan and power grid are given; the cells are the answer.
 
 | suite | format | designs | cells | starts from | status |
 | --- | --- | ---: | --- | --- | --- |
@@ -236,22 +248,28 @@ given, are the zoo today: **97 designs in 10 suites, all placed legally.**
 | iccad2025 | LEF/DEF (ASAP7) | 13 | 2k-298k | placed | re-placed legally |
 | gsrc_place | Bookshelf | 4 | 0.8k-28k | cells unplaced | placed legally |
 | ns3k | LEF/DEF (3nm-class) | 16 | 0.3k-170k | cells unplaced | placed legally; OpenROAD `check_placement` passes |
-| orfs_asap7 | LEF/DEF from ORFS 3_3 | 10 | 0.4k-1.05M | cells unplaced | placed legally; routed by ORFS with 0 DRC |
-| stress/bp_quad | LEF/DEF (3nm-class) | 1 | 1.18M | placed | re-placed legally |
+| orfs_asap7 | LEF/DEF from ORFS 3_3 | 33 | 0.4k-1.48M | cells unplaced | placed legally; `check_placement` passes; 9 routed by ORFS with 0 DRC |
+| orfs_nangate45 | LEF/DEF from ORFS 3_3 | 18 | 0.7k-209k | cells unplaced | placed legally; `check_placement` passes |
+| stress | LEF/DEF (3nm-class) | 1 | 1.18M | placed | bp_quad: re-placed legally; `check_placement` passes |
+
+orfs_asap7 holds ORFS's asap7 designs, eight nangate45 designs ported to ASAP7 with the RTL unmodified (ariane133/136,
+black_parrot, bp_be/fe/multi_top, bp_quad, swerv, dynamic_node; `tools/orfs_port_asap7.py`) and jpeg_x20 (20 x jpeg).
 
 </details>
 
 <details>
-<summary><b>Floorplan problems (not open yet: a zoo of their own, later)</b></summary>
+<summary><b><code>before_fp</code>: floorplan problems (55 designs, 6 suites)</b></summary>
 <br>
+
+The netlist is given; the die (utilization), IO pins and macros are the answer.
 
 | suite | format | designs | starts from | status today |
 | --- | --- | ---: | --- | --- |
-| orfs_asap7_2_1 / _3_2 | LEF/DEF from ORFS 2_1 / 3_2 | 7 + 2 | IO pins, macros unplaced | floorplanned + placed legally |
-| mcnc | YAL | 5 | blocks unplaced | floorplanned, no overlaps |
+| orfs_asap7 | LEF/DEF from ORFS 2_1 | 5 | die initialized, IO pins and macros unplaced, no PDN | floorplanned at a looser and a tighter utilization than ORFS's; handed to ORFS, which draws the PDN and places: all pass ([checked](#before_fp-hand-off)) |
+| mcnc | YAL | 5 | blocks unplaced | floorplanned, no overlaps (no cell library: Attar is the end point) |
 | gsrc_hard | GSRC blocks | 6 | no die | die sized, floorplanned, no overlaps |
 | ispd2006_hb | Bookshelf | 28 | hard + soft blocks | runs; some block overlaps remain |
-| gsrc_soft, mcnc_soft | GSRC blocks | 11 | soft blocks only | no geometry: nothing to place yet |
+| gsrc_soft, mcnc_soft | GSRC blocks | 11 | soft blocks only | block shapes are part of the answer: no engine yet |
 
 </details>
 
@@ -260,7 +278,7 @@ Details, data quirks and how to add a reader: [docs/benchmarks.md](docs/benchmar
 ## A design is a state
 
 ```text
->>> d = attar.load('orfs_asap7/aes'); d.status()
+>>> d = attar.load('after_fp/orfs_asap7/aes'); d.status()
 aes_cipher_top  (orfs/asap7, fidelity F1)
   placement target density 0.71 (orfs 3_3 global_place (GPL-0023))
 Problem facts
@@ -301,9 +319,10 @@ A proxy is lit once it is fast in Attar **and** shown to agree with the slow loo
 | **Timing evaluation** | not yet | Liberty and SDC paths recorded with each design | a GPU timing proxy, checked against ORFS STA |
 
 Also on the list:
-- **floorplan problems** as a zoo of their own: die, IO pins and macros are the answer there. The engines exist
-  (`attar.naive`: die sizing, IO pins, macros on their routing tracks), and an Attar floorplan handed to ORFS from
-  synthesis (`FLOORPLAN_DEF`) already routes with 0 DRC on riscv32i;
+- **`before_fp`**: a macro legalizer that leaves no channel narrower than the flow allows (ORFS:
+  `RTLMP_MIN_CHANNEL_SIZE`), and utilization with headroom for the flow's own netlist growth (both behind the two
+  failed hand-offs above); then ORFS up to its PDN (2_4) distilled back as an `after_fp` problem, so a floorplan
+  and a placement can be solved one after the other; `before_fp` designs of the other ORFS designs;
 - routability: DREAMPlace's cell inflation (RUDY branch) is in global placement (`routability=True`), with the track
   capacity ORFS's router itself uses; the pin-density branch is next;
 - libraries without a one-site filler (i3dPDK_NS3K): OpenROAD forbids one-site gaps there, the NS3K flow does not;

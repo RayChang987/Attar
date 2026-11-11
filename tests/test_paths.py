@@ -22,10 +22,10 @@ class SelfContainedTest(unittest.TestCase):
             self.assertEqual(paths.zoo_dir(t), os.path.abspath(t))
             self.assertEqual(attar.zoo(root=t), [])
             with self.assertRaises(FileNotFoundError):
-                attar.load('orfs_asap7/gcd', DEV, download=False, root=t)
+                attar.load('after_fp/orfs_asap7/gcd', DEV, download=False, root=t)
 
     def test_manifests_hold_no_paths(self):
-        ms = glob.glob(os.path.join(paths.zoo_dir(), '*', '*', 'manifest.json'))
+        ms = glob.glob(os.path.join(paths.zoo_dir(), '*', '*', '*', 'manifest.json'))     # <mode>/<suite>/<design>
         if not ms:
             raise unittest.SkipTest('no local zoo')
         for m in ms:

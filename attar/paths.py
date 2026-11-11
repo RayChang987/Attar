@@ -7,6 +7,11 @@ reads or writes the zoo takes `root=` to use another folder.
 """
 import os
 
+# The zoo is split by what the user solves: before_fp, a floorplan problem (the die / utilization, IO pins and macros
+# are the answer; the result goes to a flow that draws the power grid), and after_fp, a placement problem (die, IO
+# pins, macros and the power grid given; the cells are the answer). Zoo names are <mode>/<suite>/<design>.
+MODES = ('before_fp', 'after_fp')
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHECKOUT = os.path.exists(os.path.join(REPO, 'pyproject.toml'))      # running from a source checkout, not site-packages
 

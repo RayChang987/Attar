@@ -13,37 +13,41 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from attar import paths  # noqa: E402
 
-# suite -> (what it is, where the raw files come from, terms)
+# <mode>/<suite> -> (what it is, where the raw files come from, terms)
 SUITES = {
-    'ispd2005': ('ISPD 2005 placement contest (adaptec1-4, bigblue1-4), with a DREAMPlace legalized placement as '
+    'after_fp/ispd2005': ('ISPD 2005 placement contest (adaptec1-4, bigblue1-4), with a DREAMPlace legalized placement as '
                  'the dreamplace_lg snapshot', 'ISPD 2005 contest (Bookshelf)', 'academic benchmark'),
-    'ispd2006_hb': ('IBM-HB+ (ibm01-18) and Calypto hierarchical floorplanning benchmarks',
+    'before_fp/ispd2006_hb': ('IBM-HB+ (ibm01-18) and Calypto hierarchical floorplanning benchmarks',
                     'vlsicad.eecs.umich.edu/BK/ISPD06bench (Bookshelf, *_capo.aux)', 'academic benchmark'),
-    'ispd2015': ('ISPD 2015 blockage-aware detailed-routing-driven placement contest (20 mgc_* designs)',
+    'after_fp/ispd2015': ('ISPD 2015 blockage-aware detailed-routing-driven placement contest (20 mgc_* designs)',
                  'ISPD 2015 contest (LEF/DEF)', 'academic benchmark'),
-    'ispd2018': ('ISPD 2018 initial detailed routing contest, test1-10', 'ISPD 2018 contest (LEF/DEF)', 'academic benchmark'),
-    'ispd2019': ('ISPD 2019 initial detailed routing contest, test1-10 (test4 from the ICCAD 2019 problem C copy)',
+    'after_fp/ispd2018': ('ISPD 2018 initial detailed routing contest, test1-10', 'ISPD 2018 contest (LEF/DEF)', 'academic benchmark'),
+    'after_fp/ispd2019': ('ISPD 2019 initial detailed routing contest, test1-10 (test4 from the ICCAD 2019 problem C copy)',
                  'ISPD 2019 contest (LEF/DEF)', 'academic benchmark'),
-    'ispd2024': ('ISPD 2024 GPU/ML-enhanced global routing contest, the smaller designs (ariane133_51/68, nvdla, '
+    'after_fp/ispd2024': ('ISPD 2024 GPU/ML-enhanced global routing contest, the smaller designs (ariane133_51/68, nvdla, '
                  'mempool_tile, bsg_chip) on Nangate45', 'ISPD 2024 contest (LEF/DEF)', 'academic benchmark'),
-    'iccad2025': ('ICCAD 2025 CAD Contest problem C (incremental placement on ASAP7), public and hidden cases',
+    'after_fp/iccad2025': ('ICCAD 2025 CAD Contest problem C (incremental placement on ASAP7), public and hidden cases',
                   'ICCAD 2025 contest (LEF/DEF)', 'academic benchmark'),
-    'gsrc_place': ('GSRC Bookshelf placement examples (ibm05, p1Unit)', 'vlsicad.ucsd.edu GSRC Bookshelf',
+    'after_fp/gsrc_place': ('GSRC Bookshelf placement examples (ibm05, p1Unit)', 'vlsicad.ucsd.edu GSRC Bookshelf',
                    'academic benchmark'),
-    'gsrc_hard': ('GSRC floorplanning n10-n300, hard blocks', 'vlsicad.eecs.umich.edu/BK/GSRCbench', 'academic benchmark'),
-    'gsrc_soft': ('GSRC floorplanning n10-n300, soft blocks (at their .blocks shape)',
+    'before_fp/gsrc_hard': ('GSRC floorplanning n10-n300, hard blocks', 'vlsicad.eecs.umich.edu/BK/GSRCbench', 'academic benchmark'),
+    'before_fp/gsrc_soft': ('GSRC floorplanning n10-n300, soft blocks (at their .blocks shape)',
                   'vlsicad.eecs.umich.edu/BK/GSRCbench', 'academic benchmark'),
-    'mcnc': ('MCNC floorplanning apte, xerox, hp, ami33, ami49 (YAL)', 'MCNC benchmarks (YAL)', 'academic benchmark'),
-    'mcnc_soft': ('MCNC floorplanning, soft-block variants', 'MCNC benchmarks (blocks)', 'academic benchmark'),
-    'orfs_asap7': ('OpenROAD-flow-scripts designs on ASAP7 at global placement (3_3), with ORFS\'s placement as '
-                   'the reference snapshot', 'ORFS runs (docker image in each manifest)',
-                   'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
-    'orfs_asap7_2_1': ('The same ORFS designs at the floorplan stage (2_1): IO pins and macros unplaced',
-                       'ORFS runs', 'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
-    'orfs_asap7_3_2': ('ORFS designs before IO placement (3_2)', 'ORFS runs', 'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
-    'ns3k': ('Open designs placed on the i3dPDK_NS3K v1.1 generic GAAFET kit (Innovus enablement)',
+    'before_fp/mcnc': ('MCNC floorplanning apte, xerox, hp, ami33, ami49 (YAL)', 'MCNC benchmarks (YAL)', 'academic benchmark'),
+    'before_fp/mcnc_soft': ('MCNC floorplanning, soft-block variants', 'MCNC benchmarks (blocks)', 'academic benchmark'),
+    'after_fp/orfs_asap7': ('OpenROAD-flow-scripts designs on ASAP7 at global placement (3_3), with ORFS\'s placement as '
+                   'the reference snapshot; ORFS\'s asap7 designs, plus nangate45 designs ported to ASAP7 with the '
+                   'RTL unmodified (tools/orfs_port_asap7.py: FakeRAM2.0 asap7 views of their fakeram45 memories)',
+                   'ORFS runs (docker image in each manifest)', 'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
+    'after_fp/orfs_nangate45': ('OpenROAD-flow-scripts designs on Nangate45 (FreePDK45) at global placement (3_3), with '
+                       'ORFS\'s placement as the reference snapshot', 'ORFS runs (docker image in each manifest)',
+                       'Nangate45 (ORFS platform): Apache-2.0; designs: their ORFS licenses'),
+    'before_fp/orfs_asap7': ('ORFS designs on ASAP7 at the floorplan stage (2_1): the die, IO pins and macros are the '
+                             'answer; d.export + tools/orfs_handoff.py hand the floorplan to ORFS, which draws the PDN '
+                             'and goes on', 'ORFS runs', 'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
+    'after_fp/ns3k': ('Open designs placed on the i3dPDK_NS3K v1.1 generic GAAFET kit (Innovus enablement)',
              'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)'),
-    'stress': ('bp_quad on i3dPDK_NS3K: a 1.2M-cell routed DEF, for scaling tests',
+    'after_fp/stress': ('bp_quad on i3dPDK_NS3K: a 1.2M-cell routed DEF, for scaling tests',
                'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)'),
 }
 
@@ -69,14 +73,16 @@ as safetensors arrays, ready to load onto a GPU in a second or two.
 
 ```python
 import attar                                   # pip install attar
-d = attar.load('ispd2005/adaptec1')           # downloads this design on first use
+d = attar.load('after_fp/ispd2005/adaptec1')  # downloads this design on first use
 attar.zoo(remote=True)                         # every design here
-attar.fetch('ispd2015')                        # a whole suite
+attar.fetch('after_fp/ispd2015')               # a whole suite
 ```
 
 ## Layout
 
-`<suite>/<design>/` holds `core.safetensors` (the arrays), `names.json.gz` (cell, net, master and layer names),
+Two modes. `before_fp/`: floorplan problems, the die (utilization), IO pins and macros are the answer.
+`after_fp/`: placement problems, the floorplan and power grid are given and the cells are the answer.
+`<mode>/<suite>/<design>/` holds `core.safetensors` (the arrays), `names.json.gz` (cell, net, master and layer names),
 `manifest.json` (source, facts, counts) and, for LEF/DEF sources, `tech_profile.safetensors`. `index.json` lists
 every design with its size and facts.
 
@@ -108,9 +114,12 @@ def main(root=None):
     zoo = paths.zoo_dir(root)
     designs, per = {}, {}
     bad = []
-    for m in sorted(glob.glob(os.path.join(zoo, '*', '*', 'manifest.json'))):
+    for m in sorted(glob.glob(os.path.join(zoo, '*', '*', '*', 'manifest.json'))):
         folder = os.path.dirname(m)
-        suite, name = folder.split(os.sep)[-2:]
+        mode, s, name = folder.split(os.sep)[-3:]
+        if mode not in paths.MODES:
+            continue
+        suite = '%s/%s' % (mode, s)
         with open(m) as f:
             man = json.load(f)
         if any('/' in v for v in _strings(man.get('source', {}))) or 'run' in man.get('orfs', {}):

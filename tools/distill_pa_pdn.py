@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Distill the pa_pdn designs (i3dPDK_NS3K, Innovus floorplans) into zoo/ns3k/<design>, and the routed bp_quad DEF
-into zoo/stress/bp_quad.
+"""Distill the pa_pdn designs (i3dPDK_NS3K, Innovus floorplans) into zoo/after_fp/ns3k/<design>, and the routed
+bp_quad DEF into zoo/after_fp/stress/bp_quad (placement problems: the floorplan and PDN are Innovus's).
 
 Source per design: the Xplace input DEF of one run (floorplan + netlist, cells unplaced, macros fixed), with the LEF
 list that run used. usage: distill_pa_pdn.py [design ...] [--ns3k ~/i3dPDK_NS3K] [--no-stress]"""
@@ -63,7 +63,7 @@ if __name__ == '__main__':
             print('%-14s no in.def with NETS' % d); continue
         lb = libs(kit, lefs)
         t = time.time()
-        ir = os.path.join(zoo_dir(), 'ns3k', d)
+        ir = os.path.join(zoo_dir(), 'after_fp', 'ns3k', d)
         m = attar.distill(f, lefs, ir, lib_paths=lb,
                           extra={'suite': 'pa_pdn/ns3k', 'geometry_scale': 4, 'flow': 'innovus 21.13 (pa_pdn flow_fast.tcl)'})
         report(d, m, t, [f] + lefs + lb, glob.glob(ir + '/*'))
@@ -72,6 +72,6 @@ if __name__ == '__main__':
         ena = os.path.join(kit, 'innovus_enablement/lef_x4')
         lefs = [ena + '/i3dPDK_NS3K_5T_tech_unidir_dir.lef', ena + '/NS3K_5T_cells.lef'] + sorted(glob.glob(ena + '/fakeram*.lef'))
         t = time.time()
-        ir = os.path.join(zoo_dir(), 'stress', 'bp_quad')
+        ir = os.path.join(zoo_dir(), 'after_fp', 'stress', 'bp_quad')
         m = attar.distill(f, lefs, ir, extra={'suite': 'stress (pa_pdn routed DEF)', 'geometry_scale': 4})
         report('bp_quad', m, t, [f] + lefs, glob.glob(ir + '/*'))

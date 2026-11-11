@@ -1,8 +1,16 @@
 # Benchmarks
 
 The pip package ships readers, not data. The zoo of distilled designs lives on the Hugging Face Hub
-(`RayChang987/attar-zoo`) and is downloaded on first use, or built locally from the raw benchmarks. Each design is a
-folder `<suite>/<design>` with `core.safetensors` (integer arrays), `names.json.gz`, `tech_profile.safetensors` and
+(`RayChang987/attar-zoo`) and is downloaded on first use, or built locally from the raw benchmarks. It has two modes,
+by what the user solves:
+
+- **`before_fp`, floorplan problems.** The netlist and the cell library are given; the die (utilization), the IO
+  pins and the macros are the answer. A result with a cell library is written back as a DEF and handed to a flow
+  that draws the power grid (ORFS: `tools/orfs_handoff.py`); Attar draws no power grid itself.
+- **`after_fp`, placement problems.** The die, IO pins, macros and the power grid are given; the cells are the
+  answer (timing optimization and global routing later).
+
+Each design is a folder `<mode>/<suite>/<design>` with `core.safetensors` (integer arrays), `names.json.gz`, `tech_profile.safetensors` and
 `manifest.json` (facts, provenance, counts, source hashes).
 
 ## Where Attar looks
@@ -10,7 +18,7 @@ folder `<suite>/<design>` with `core.safetensors` (integer arrays), `names.json.
 The zoo is `zoo/` in a source checkout, else `~/.cache/attar/zoo`; every function that reads it takes `root=`.
 There are no environment variables. A design is self-contained: loading, evaluating, placing (macros on their
 routing tracks included) and plotting read only its folder. Manifests record each source file by name and sha256,
-never by path. To get a DEF back, hand `Design.export` a DEF of the design (see [concepts](concepts.md#self-contained-designs-and-export)).
+never by path. `d.export(out_def)` writes a DEF from the design's own frame (see [concepts](concepts.md#self-contained-designs-and-export)).
 
 ## Publishing the zoo
 
@@ -26,7 +34,9 @@ hf upload-large-folder RayChang987/attar-zoo zoo/ --repo-type dataset
 | ISPD 2005/2015, GSRC placement, ICCAD 2025 | `benchmarks/placement/<suite>/` | `python tools/distill_benchmarks.py <suite>` |
 | ISPD 2018/2019/2024 routing benchmarks | `benchmarks/routing/<suite>/` | `python tools/distill_benchmarks.py <suite>` |
 | MCNC (YAL), GSRC blocks, IBM-HB+ | `benchmarks/floorplan/...` | `python tools/distill_benchmarks.py mcnc gsrc_hard ...` |
-| ORFS asap7 designs | `orfs_runs/<design>_base` (`tools/orfs_run_to_gp.sh`) | `python tools/distill_orfs.py <design>`; `--stage 2_1_floorplan` for the floorplan stage |
+| ORFS designs (asap7, nangate45) | `orfs_runs/<design>_base`, `orfs_runs/nangate45/<design>_base` (`tools/orfs_run_to_gp.sh <key>`) | `python tools/distill_orfs.py <key>` (after_fp, from 3_3); `--stage 2_1_floorplan` (before_fp) |
+| nangate45 designs on ASAP7 | `python tools/orfs_port_asap7.py`, then as above | as above |
+| i3dPDK_NS3K (pa_pdn runs) | the kit and its Innovus runs | `python tools/distill_pa_pdn.py --ns3k <kit>` |
 
 `python tools/distill_benchmarks.py --list` shows what each suite expects. The ORFS tools use the docker image
 `openroad/orfs:26Q4-368-g9ca2a9e76`.
@@ -50,7 +60,7 @@ Rules every reader follows:
 
 ## The zoo today
 
-Placement problems (the zoo today: floorplan and power grid given, the cells are the answer):
+**`after_fp`**: placement problems (floorplan and power grid given, the cells are the answer):
 
 | suite | designs | cells | starts from | Attar result |
 | --- | ---: | --- | --- | --- |
@@ -61,18 +71,19 @@ Placement problems (the zoo today: floorplan and power grid given, the cells are
 | iccad2025 | 13 | 2k-298k | placed | re-placed legal |
 | gsrc_place | 4 | 0.8k-28k | cells unplaced | legal |
 | ns3k | 16 | 0.3k-170k | cells unplaced | legal, also by OpenROAD `check_placement` (`tools/distill_pa_pdn.py --ns3k <kit>`) |
-| orfs_asap7 | 10 | 0.4k-1.05M | cells unplaced | legal; routed by ORFS with 0 DRC; jpeg_x20 (20 x jpeg, `orfs_runs/designs/`) is the million-cell scaling test |
-| stress/bp_quad | 1 | 1.18M | placed | re-placed legal |
+| orfs_asap7 | 32 | 0.4k-1.05M | cells unplaced | legal, also by OpenROAD `check_placement`; 9 routed by ORFS with 0 DRC. ORFS's asap7 designs, 8 nangate45 designs ported to ASAP7 (ariane133/136, black_parrot, bp_*, swerv, dynamic_node) and jpeg_x20 (20 x jpeg, the million-cell scaling test) |
+| orfs_nangate45 | 18 | 0.7k-209k | cells unplaced | legal, also by OpenROAD `check_placement` |
+| stress | 1 | 1.18M | placed | bp_quad on NS3K: re-placed legal, also by OpenROAD `check_placement` |
 
-Floorplan problems (not open yet: die, IO pins and macros are the answer; the engines exist):
+**`before_fp`**: floorplan problems (the die, IO pins and macros are the answer):
 
 | suite | designs | cells | starts from | Attar result |
 | --- | ---: | --- | --- | --- |
-| orfs_asap7_2_1, _3_2 | 9 | 9k-108k | IO, macros unplaced | floorplan + legal; ORFS hand-off |
-| mcnc | 5 | 9-49 blocks | blocks unplaced | floorplan, no overlaps |
+| orfs_asap7 | 5 | 9k-52k | ORFS 2_1: die, rows, tracks initialized; IO pins, macros unplaced; no PDN | die for a looser and a tighter utilization than ORFS's, IO pins, macros; handed to ORFS, which draws the PDN: `check_placement` passes, no more DRV than ORFS's own floorplan ([validation](validation/fp_handoff.md)). cva6 and swerv_wrapper are left out: their tight floorplans fail in ORFS |
+| mcnc | 5 | 9-49 blocks | blocks unplaced, pads placed | floorplan, no overlaps; no cell library: Attar is the end point |
 | gsrc_hard | 6 | 10-300 blocks | no die | die + floorplan, no overlaps |
 | ispd2006_hb | 28 | 81-8.8k | hard + soft blocks | some overlaps remain |
-| gsrc_soft, mcnc_soft | 11 | 9-300 blocks | soft blocks | no geometry |
+| gsrc_soft, mcnc_soft | 11 | 9-300 blocks | soft blocks | no geometry: block shapes are part of the answer, no engine yet |
 
 ## Data quirks worth knowing
 
@@ -80,6 +91,8 @@ Floorplan problems (not open yet: die, IO pins and macros are the answer; the en
 - ISPD 2018/2019: the DEFs contain FILLCELLs (`unplace()` sets them aside); ispd19_test3 has placed pads.
 - ISPD 2019 test7-10 run at about 96% utilization; GP raises its target density to the utilization.
 - ORFS 3_3 DEFs have rows cut around macros; the gaps are obstacles (OpenROAD DPL-0004 otherwise).
+- ORFS's own nangate45 bp_quad config stops in its PDN step (PDN-0179, channels between macros), so it is not in the
+  zoo; bp_quad is there on NS3K (stress) and ported to ASAP7.
 - mcnc/xerox has no signal pads; IBM-HB+ blocks are often smaller than a row.
 - Pin directions as the sources state them: superblue (ISPD 2015) has nets with two OUTPUT pins and nets with
   none; ISPD 2018/2019 have a few hundred nets driven by two flops; GSRC ibm05's I/O marks are inconsistent. The

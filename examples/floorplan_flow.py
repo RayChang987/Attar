@@ -2,7 +2,7 @@
 """From an ORFS floorplan (IO pins and macros unplaced) to a legal placement with the Naive engines only.
 Each step's answer becomes a fact that unlocks the next step.
 
-usage: python3 examples/floorplan_flow.py [zoo name, default orfs_asap7_2_1/swerv_wrapper]"""
+usage: python3 examples/floorplan_flow.py [zoo name, default before_fp/orfs_asap7/tinyRocket]"""
 import os
 import sys
 import time
@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(HERE, '..'))
 import attar  # noqa: E402
 from attar import naive  # noqa: E402
 
-name = sys.argv[1] if len(sys.argv) > 1 else 'orfs_asap7_2_1/swerv_wrapper'
+name = sys.argv[1] if len(sys.argv) > 1 else 'before_fp/orfs_asap7/tinyRocket'
 dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 d = attar.load(name, dev)
 t0 = time.time()

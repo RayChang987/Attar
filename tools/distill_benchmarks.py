@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Distill the downloaded benchmarks (benchmarks/, see benchmarks/BENCHMARKS.md) into zoo/<suite>/<design>.
+"""Distill the downloaded benchmarks (benchmarks/, see benchmarks/BENCHMARKS.md) into zoo/<mode>/<suite>/<design>:
+after_fp for placement problems (die, IO pins, macros given), before_fp for floorplan problems (blocks unplaced).
 
 usage: distill_benchmarks.py [suite ...] [--only design,...]     (no suite: all)  |  --list
 Each suite says where its files are and which reader takes them; every reader hands over only the facts its
@@ -110,10 +111,17 @@ SUITES = {
     'gsrc_place': gsrc_place, 'ispd2006_hb': ispd2006_hb,
     'mcnc': mcnc, 'gsrc_hard': blocks('gsrc/hard'), 'gsrc_soft': blocks('gsrc/soft'), 'mcnc_soft': blocks('mcnc/soft_modified'),
 }
+# floorplan problems: the blocks (macros) are unplaced, and the die too where the format has none
+BEFORE_FP = {'ispd2006_hb', 'mcnc', 'gsrc_hard', 'gsrc_soft', 'mcnc_soft'}
+
+
+def mode(suite):
+    return 'before_fp' if suite in BEFORE_FP else 'after_fp'
+
 
 
 def run(suite, name, kind, kw):
-    out = os.path.join(zoo_dir(), suite, name)
+    out = os.path.join(zoo_dir(), mode(suite), suite, name)
     extra = dict(kw.pop('extra', {}) or {}, suite=suite)
     if 'unread_sources' in extra:                 # by name + sha256, like every source
         extra['unread_sources'] = {k: source_ref(v) for k, v in extra['unread_sources'].items()}

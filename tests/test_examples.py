@@ -10,7 +10,7 @@ from common import need
 class ExampleTest(unittest.TestCase):
     def test_quickstart_runs(self):
         import subprocess
-        name = 'orfs_asap7/aes'
+        name = 'after_fp/orfs_asap7/aes'
         need(name)
         here = os.path.join(os.path.dirname(__file__), '..', 'examples')
         r = subprocess.run([sys.executable, os.path.join(here, 'quickstart.py'), name], capture_output=True, text=True, timeout=300)

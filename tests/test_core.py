@@ -45,7 +45,7 @@ class OrientationTest(unittest.TestCase):
 
 class DesignTest(unittest.TestCase):
     def test_zoo_listing_and_load(self):
-        names = attar.zoo('orfs_asap7')
+        names = attar.zoo('after_fp/orfs_asap7')
         self.assertIn(SMALL, names)
         d = need(SMALL)
         self.assertTrue(d.has('netlist') and d.has('rows') and d.has('cell_library') and d.has('tracks'))
@@ -279,7 +279,7 @@ class StatusTest(unittest.TestCase):
 
     def test_tier_b_and_the_gap_to_a(self):
         try:
-            n = attar.load('ns3k/aes', DEV, download=False)            # NS3K: DEF write-back, no slow loop here
+            n = attar.load('after_fp/ns3k/aes', DEV, download=False)            # NS3K: DEF write-back, no slow loop here
         except FileNotFoundError:
             raise unittest.SkipTest('no ns3k zoo')
         self.assertEqual(n.tier(), 'B')

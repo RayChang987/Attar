@@ -147,8 +147,9 @@ def handoff_command(d, out_def, run_dir=None):
     if not o:
         raise RuntimeError('%s does not come from an ORFS stage (tier %s)' % (d.manifest.get('design', d.path), tier(d)))
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    run = run_dir or '<ORFS WORK_HOME of %s>' % o['design']
+    key = o['design'] if o.get('platform', 'asap7') == 'asap7' else '%s/%s' % (o['platform'], o['design'])
+    run = run_dir or '<ORFS WORK_HOME of %s>' % key
     if o['stage'] == '2_1_floorplan':      # the floorplan goes to ORFS, which places and routes from there
-        return 'python3 %s %s %s %s' % (os.path.relpath(os.path.join(root, 'tools', 'orfs_handoff.py')), o['design'], run, out_def)
+        return 'python3 %s %s %s %s' % (os.path.relpath(os.path.join(root, 'tools', 'orfs_handoff.py')), key, run, out_def)
     return 'python3 %s %s %s def=%s --stage %s' % (os.path.relpath(os.path.join(root, 'tools', 'orfs_roundtrip.py')),
-                                                  o['design'], run, out_def, o['stage'])
+                                                  key, run, out_def, o['stage'])

@@ -9,7 +9,7 @@ from attar import naive
 
 | call | returns |
 | --- | --- |
-| `attar.zoo(suite=None, remote=False, root=None)` | names of the distilled designs (`'ispd2005/adaptec1'`, ...) in the local zoo, or on the Hugging Face Hub |
+| `attar.zoo(suite=None, remote=False, root=None)` | names `<mode>/<suite>/<design>` of the distilled designs (`'after_fp/ispd2005/adaptec1'`, ...; `suite`: a prefix such as `'before_fp'` or `'after_fp/ns3k'`) in the local zoo, or on the Hugging Face Hub |
 | `attar.load(name_or_path, device='cpu', download=True, root=None)` | a `Design`; a zoo name missing locally is downloaded first |
 | `attar.fetch(*names, root=None)` | download designs or whole suites (`'ispd2015'`) into the local zoo; everything when no name is given |
 
@@ -24,7 +24,7 @@ environment variables.
 | `status(show=True)` | facts, solution state, capabilities, what an ORFS hand-off needs |
 | `capabilities()`, `missing(cap)`, `require(cap)`, `has(fact)`, `tier()` | facts and what follows from them |
 | `place(target_density=None, macro_halo=0, **kw)` | `naive.place`: global placement + legalization (default density: the source's own, else 0.9) |
-| `floorplan(utilization=None, aspect_ratio=1.0, **kw)` | `naive.floorplan` (not open yet, see below) |
+| `floorplan(utilization=None, aspect_ratio=1.0, **kw)` | `naive.floorplan`, for `before_fp` problems (see below) |
 | `plot(path=None, theme='light', dpi=150, **kw)` | die, core, rows, cells (an area-density image above 30k cells), macros, IO pins by direction; warm light theme by default |
 | `export(out_def)` | write the design as a DEF: its source frame (PDN, pins, fixed cells, verbatim) with the cells and signal nets from the IR |
 | `handoff_command(out_def, run_dir=None)` | the command that hands an exported DEF to ORFS |
@@ -60,8 +60,8 @@ environment variables.
 | `legalize(d, max_rounds=5, window=8, improve=True, passes=3, macro_halo=0)` | |
 | `place(d, target_density=None, gp_args=None, lg_args=None, macro_halo=0)` | |
 
-Floorplan engines. **Not open yet**: the zoo holds placement problems, whose floorplan is given; floorplan problems
-(die, IO pins and macros as the answer) will be a zoo of their own. The engines work and stay in the package:
+Floorplan engines, for the `before_fp` problems (the die, IO pins and macros are the answer; the result is exported
+and handed to a flow that draws the power grid):
 
 | function | key arguments |
 | --- | --- |

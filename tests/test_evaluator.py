@@ -151,7 +151,7 @@ class MetricsTest(unittest.TestCase):
 class RowGapTest(unittest.TestCase):
     def test_a_cell_in_a_row_gap_is_outside_the_rows(self):
         from attar.rails import base_rows, row_gaps
-        d = need('orfs_asap7/cva6')                    # rows cut around the macros: gaps between row segments
+        d = need('after_fp/orfs_asap7/cva6')                    # rows cut around the macros: gaps between row segments
         _, ys, *_ = base_rows(d)
         g_r, g_x0, g_x1 = row_gaps(d, ys)
         self.assertGreater(len(g_r), 0)

@@ -250,7 +250,7 @@ Floorplanning benchmark 是 block 層級。硬模組直接放進 Core 層（每�
 
 Dataset 目錄結構：`<suite>/<design>/` 下放 `core.safetensors.zst`、`names.zst`、`tech_profile.safetensors`、`manifest.json`。每個 suite 一份 dataset card，寫明原始出處、引用格式與授權。
 
-載入流程：`attar.load("ispd2005/adaptec1")` 先查本地快取，沒有就經 `huggingface_hub` 下載並驗證雜湊；若該子集只允許本地蒸餾，回傳明確訊息，告訴使用者去哪下載原始檔、執行哪個指令。
+載入流程：`attar.load("after_fp/ispd2005/adaptec1")` 先查本地快取，沒有就經 `huggingface_hub` 下載並驗證雜湊；若該子集只允許本地蒸餾，回傳明確訊息，告訴使用者去哪下載原始檔、執行哪個指令。
 
 版本管理：每個 Attar 版本釘住一個 dataset revision；manifest 記錄 schema 版本與原始檔雜湊；所有蒸餾結果都能由 repo 內腳本重現。
 

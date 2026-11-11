@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Does Attar's Evaluator agree with OpenROAD? Two checks on the ORFS asap7 designs (zoo/orfs_asap7, from 3_3):
+"""Does Attar's Evaluator agree with OpenROAD? Two checks on the ORFS placement problems (zoo after_fp/orfs_<platform>, from 3_3):
 
 hpwl      Attar's HPWL of ORFS's own global placement (the 'reference' snapshot) vs the HPWL OpenROAD computes from its
           database for the same DEF (pin shape centers, signal nets). The 'Final HPWL' that global_placement prints in
@@ -7,7 +7,8 @@ hpwl      Attar's HPWL of ORFS's own global placement (the 'reference' snapshot)
 legality  Attar places the design (naive GP + LG), its checker says legal; the DEF it writes back goes to OpenROAD's
           check_placement. Negative control: 1% of the cells moved by half a site; both must reject it.
 
-usage: validate_orfs.py [design ...]   (default: all of zoo/orfs_asap7) -> docs/validation/orfs_check.{json,md}"""
+usage: validate_orfs.py [zoo design ...]   (default: all of after_fp/orfs_asap7 and after_fp/orfs_nangate45)
+       -> docs/validation/orfs_check.{json,md}: the rows of the designs checked replace their old rows."""
 import io
 import contextlib
 import json
@@ -20,7 +21,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import torch  # noqa: E402
 import attar  # noqa: E402
-from orfs_roundtrip import RUNS, gpl_final_hpwl, inputs, openroad, w  # noqa: E402
+from orfs_roundtrip import RUNS, base_dir, gpl_final_hpwl, inputs, openroad, run_key, w  # noqa: E402
 
 OUT = os.path.join(ROOT, 'docs', 'validation')
 
@@ -80,12 +81,13 @@ def openroad_hpwl(design, def_path, base, tag):
 def main(designs):
     rows = []
     for n in designs:
-        name = n.split('/')[1]
-        base = os.path.join(RUNS, name + '_base')
         d = attar.load(n, 'cuda')                          # exports go through the design's frame: no template
+        o = d.manifest['orfs']
+        base = base_dir(run_key(o['platform'], o['design']))
+        name = n.replace('/', '_')
         d.restore('reference')                            # ORFS's own global placement
         hp_attar = d.hpwl().item()
-        hp_gpl = gpl_final_hpwl(base, name)
+        hp_gpl = gpl_final_hpwl(base)
         tmp0 = os.path.join(RUNS, 'check', '%s_ref.def' % name); os.makedirs(os.path.dirname(tmp0), exist_ok=True)
         d.export(tmp0)
         hp_orfs = openroad_hpwl(name, tmp0, base, 'ref')
@@ -107,15 +109,22 @@ def main(designs):
         d.export(tmp)
         ok_or_bad, _ = check_placement(name, tmp, base, 'broken')
         os.remove(tmp)
-        r = {'design': name, 'cells': d.manifest['counts']['cells'], 'hpwl_attar': hp_attar, 'hpwl_openroad': hp_orfs,
+        r = {'design': n, 'cells': d.manifest['counts']['cells'], 'hpwl_attar': hp_attar, 'hpwl_openroad': hp_orfs,
              'hpwl_rel_diff': hp_attar / hp_orfs - 1, 'hpwl_gpl_log': hp_gpl,
              'legal_attar': ok_attar, 'legal_openroad': ok_or,
              'broken_rejected_attar': bad_attar, 'broken_rejected_openroad': not ok_or_bad}
         rows.append(r)
-        print('%-14s %7d cells  HPWL attar %.3f openroad-db %.3f (%+.5f%%; gpl log %s)  legal: attar %s openroad %s  broken rejected: attar %s openroad %s'
-              % (name, r['cells'], hp_attar, hp_orfs, 100 * r['hpwl_rel_diff'], hp_gpl, ok_attar, ok_or, bad_attar, not ok_or_bad), flush=True)
+        print('%-28s %7d cells  HPWL attar %.3f openroad-db %.3f (%+.5f%%; gpl log %s)  legal: attar %s openroad %s  broken rejected: attar %s openroad %s'
+              % (n, r['cells'], hp_attar, hp_orfs, 100 * r['hpwl_rel_diff'], hp_gpl, ok_attar, ok_or, bad_attar, not ok_or_bad), flush=True)
     os.makedirs(OUT, exist_ok=True)
-    json.dump(rows, open(os.path.join(OUT, 'orfs_check.json'), 'w'), indent=1)
+    path = os.path.join(OUT, 'orfs_check.json')
+    old = json.load(open(path)) if os.path.exists(path) else []
+    for r in old:                                         # rows of earlier runs, named before the zoo had modes
+        n = r['design']
+        r['design'] = n if n.split('/')[0] in attar.paths.MODES else 'after_fp/' + (n if '/' in n else 'orfs_asap7/' + n)
+    new = {r['design'] for r in rows}
+    rows = sorted([r for r in old if r['design'] not in new] + rows, key=lambda r: (r['design'].split('/')[1], r['cells']))
+    json.dump(rows, open(path, 'w'), indent=1)
     with open(os.path.join(OUT, 'orfs_check.md'), 'w') as f:
         f.write('| design | cells | HPWL, Attar (um) | HPWL, OpenROAD database (um) | difference | Attar: legal | OpenROAD check_placement | broken placement rejected (Attar / OpenROAD) |\n')
         f.write('| --- | ---: | ---: | ---: | ---: | :---: | :---: | :---: |\n')
@@ -127,4 +136,4 @@ def main(designs):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:] or attar.zoo('orfs_asap7'))
+    main(sys.argv[1:] or attar.zoo('after_fp/orfs_asap7') + attar.zoo('after_fp/orfs_nangate45'))

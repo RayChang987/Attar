@@ -47,7 +47,7 @@ class NaiveTest(unittest.TestCase):
     def test_multi_row_height_cells_are_legalized(self):
         from attar import naive
         try:
-            d = attar.load('ns3k/serv', DEV, download=False)               # NS3K: 2-row flip-flops among 1-row cells
+            d = attar.load('after_fp/ns3k/serv', DEV, download=False)               # NS3K: 2-row flip-flops among 1-row cells
         except FileNotFoundError:
             raise unittest.SkipTest('no ns3k zoo')
         naive.global_place(d, verbose=False)
@@ -80,7 +80,7 @@ class RailTest(unittest.TestCase):
     def test_checker_catches_wrong_parity_and_lg_respects_it(self):
         from attar import naive
         try:
-            d = attar.load('ns3k/aes', DEV, download=False)
+            d = attar.load('after_fp/ns3k/aes', DEV, download=False)
         except FileNotFoundError:
             raise unittest.SkipTest('no ns3k zoo')
         naive.global_place(d, verbose=False)
@@ -107,14 +107,13 @@ class FloorplanTest(unittest.TestCase):
     def test_io_placement_unlocks_global_placement(self):
         from attar import naive
         try:
-            d = attar.load('orfs_asap7_3_2/aes', DEV, download=False)              # ORFS before its IO placement
+            d = attar.load('before_fp/orfs_asap7/aes', DEV, download=False)        # ORFS floorplan: IO pins unplaced
         except FileNotFoundError:
-            raise unittest.SkipTest('no 3_2 zoo')
-        self.assertEqual(d.missing('global_place'), ['floorplan.io'])
+            raise unittest.SkipTest('no before_fp zoo')
+        self.assertEqual(d.missing('global_place'), ['floorplan.io'])  # aes has no macros: only the IO pins are missing
         naive.place_io(d, verbose=False)
         self.assertIn('global_place', d.capabilities())
         self.assertIn('export', d.capabilities())                # export writes the IO pins
-        self.assertNotIn('slow_loop', d.facts)                   # but ORFS 3_2 has built taps/PDN already
         b = d.die_box[0]
         p = d.io_pos
         edge = torch.stack([p[:, 0] - b[0], b[2] - p[:, 0], p[:, 1] - b[1], b[3] - p[:, 1]], 1).min(1).values
@@ -127,7 +126,7 @@ class FloorplanTest(unittest.TestCase):
     def test_macro_placement_then_cells_is_legal(self):
         from attar import naive
         try:
-            d = attar.load('orfs_asap7_2_1/riscv32i', DEV, download=False)         # ORFS floorplan: IO pins and macros unplaced
+            d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)         # ORFS floorplan: IO pins and macros unplaced
         except FileNotFoundError:
             raise unittest.SkipTest('no 2_1 zoo')
         self.assertEqual(d.capabilities(), ['die_size', 'export', 'io_place', 'plot', 'wirelength_model'])
@@ -164,7 +163,7 @@ class FloorplanTest(unittest.TestCase):
 
     def test_naive_floorplan_writes_back_and_redistills(self):
         try:
-            d = attar.load('orfs_asap7_2_1/riscv32i', DEV, download=False)
+            d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)
         except FileNotFoundError:
             raise unittest.SkipTest('no 2_1 zoo')
         d.floorplan(utilization=0.5, verbose=False)
@@ -187,7 +186,7 @@ class FloorplanTest(unittest.TestCase):
         from attar import naive
         from attar.lef import read_lef
         try:
-            d = attar.load('orfs_asap7_2_1/riscv32i', DEV, download=False)
+            d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)
         except FileNotFoundError:
             raise unittest.SkipTest('no 2_1 zoo')
         naive.place_io(d, verbose=False)
@@ -204,7 +203,7 @@ class FloorplanTest(unittest.TestCase):
 
     def test_sweep_line_macro_legalization(self):
         from attar import naive
-        d = need('mcnc/ami49')
+        d = need('before_fp/mcnc/ami49')
         r = naive.place_macros(d, legalizer='sweep', verbose=False)
         self.assertEqual(r['overlapping_pairs'], 0)
         self.assertTrue(r['legalizer'].startswith('sweep'))
@@ -220,7 +219,7 @@ class FloorplanTest(unittest.TestCase):
 
     def test_pins_keep_clear_of_the_pdn(self):
         from attar import naive, pdn
-        d = need('ns3k/aes')                      # NS3K: PG via stacks from the M0 rails cross the M1 pin layer
+        d = need('after_fp/ns3k/aes')                      # NS3K: PG via stacks from the M0 rails cross the M1 pin layer
         self.assertIn('pdn', d.facts)
         naive.global_place(d, verbose=False)
         st = naive.legalize(d, verbose=False)
@@ -265,7 +264,7 @@ class FloorplanTest(unittest.TestCase):
 
     def test_pdn_repair_mirrors_only_symmetric_masters(self):
         from attar import naive
-        d = need('ns3k/aes')
+        d = need('after_fp/ns3k/aes')
         o0 = d.orient.clone()
         naive.global_place(d, verbose=False)
         st = naive.legalize(d, verbose=False)
@@ -286,7 +285,7 @@ class FloorplanTest(unittest.TestCase):
         from attar.deffile import read_def
         from attar.lef import read_lef
         done = 0
-        for name in ('orfs_asap7_2_1/riscv32i', 'orfs_asap7_2_1/cva6'):
+        for name in ('before_fp/orfs_asap7/riscv32i', 'before_fp/orfs_asap7/tinyRocket'):
             try:
                 d = attar.load(name, DEV, download=False)
             except FileNotFoundError:

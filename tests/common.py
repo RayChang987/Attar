@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import attar  # noqa: E402
 
 DEV = 'cuda' if torch.cuda.is_available() else 'cpu'
-SMALL, MEDIUM = 'orfs_asap7/gcd', 'orfs_asap7/aes'
+SMALL, MEDIUM = 'after_fp/orfs_asap7/gcd', 'after_fp/orfs_asap7/aes'
 
 
 def need(name):
@@ -20,11 +20,11 @@ def need(name):
         return attar.load(name, DEV, download=False)
     except FileNotFoundError as e:
         raise unittest.SkipTest(str(e))
-MACRO_DESIGNS = ['orfs_asap7/riscv32i', 'orfs_asap7/tinyRocket', 'orfs_asap7/swerv_wrapper', 'orfs_asap7/cva6']
+MACRO_DESIGNS = ['after_fp/orfs_asap7/riscv32i', 'after_fp/orfs_asap7/tinyRocket', 'after_fp/orfs_asap7/swerv_wrapper', 'after_fp/orfs_asap7/cva6']
 RUNS = os.path.join(os.path.dirname(__file__), '..', 'orfs_runs')
 
 def gpl_final_hpwl(name):
-    d = name.split('/')[1]
+    d = name.split('/')[-1]
     log = os.path.join(RUNS, d + '_base', 'logs', 'asap7', d, 'base', '3_3_place_gp.log')
     if not os.path.exists(log):
         return None
@@ -32,7 +32,7 @@ def gpl_final_hpwl(name):
         for line in f:
             if 'Final HPWL' in line:
                 return float(line.split()[-1])
-BOOKSHELF = 'ispd2005/adaptec1'
+BOOKSHELF = 'after_fp/ispd2005/adaptec1'
 
 def bookshelf_hpwl_numpy(aux, pl):
     """Independent HPWL straight from the Bookshelf files (pin offsets from the node center), no Attar code."""

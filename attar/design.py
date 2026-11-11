@@ -657,7 +657,8 @@ class Design:
 
 
 def load(name, device='cpu', download=True, root=None):
-    """Load a distilled design: a folder path, or a zoo name such as 'orfs_asap7/aes' looked up in the zoo (`root`,
+    """Load a distilled design: a folder path, or a zoo name <mode>/<suite>/<design> such as 'after_fp/orfs_asap7/aes'
+    (paths.MODES: before_fp, a floorplan problem; after_fp, a placement problem) looked up in the zoo (`root`,
     default paths.zoo_dir()). A zoo name that is not there is downloaded from the Hugging Face Hub first
     (attar.hub), unless download=False."""
     if os.path.isdir(name):
@@ -674,16 +675,21 @@ def load(name, device='cpu', download=True, root=None):
 
 
 def zoo(suite=None, remote=False, root=None):
-    """Names of the distilled designs: in the local zoo (`root`, default paths.zoo_dir()), or (remote=True) on the
-    Hugging Face Hub."""
+    """Names <mode>/<suite>/<design> of the distilled designs: in the local zoo (`root`, default paths.zoo_dir()), or
+    (remote=True) on the Hugging Face Hub. `suite` filters by a prefix: a mode ('after_fp') or a mode and suite
+    ('after_fp/ispd2005')."""
+    keep = lambda n: suite is None or n == suite.strip('/') or n.startswith(suite.strip('/') + '/')
     if remote:
         from .hub import index
-        return sorted(n for n in index() if suite is None or n.split('/')[0] == suite)
+        return sorted(n for n in index() if keep(n))
     root = paths.zoo_dir(root)
     out = []
-    for s in sorted(os.listdir(root)) if os.path.isdir(root) else []:
-        if (suite and s != suite) or s.startswith('.') or not os.path.isdir(os.path.join(root, s)):
-            continue
-        out += ['%s/%s' % (s, d) for d in sorted(os.listdir(os.path.join(root, s)))
-                if os.path.exists(os.path.join(root, s, d, 'manifest.json'))]
+    for mode in paths.MODES:
+        mdir = os.path.join(root, mode)
+        for s in sorted(os.listdir(mdir)) if os.path.isdir(mdir) else []:
+            sdir = os.path.join(mdir, s)
+            if s.startswith('.') or not os.path.isdir(sdir):
+                continue
+            out += [n for n in ('%s/%s/%s' % (mode, s, d) for d in sorted(os.listdir(sdir))
+                                if os.path.exists(os.path.join(sdir, d, 'manifest.json'))) if keep(n)]
     return out
