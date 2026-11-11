@@ -161,7 +161,7 @@ the tools in this repo (ORFS on ASAP7; OpenROAD alone on i3dPDK_NS3K, which has 
 | | check | result |
 | --- | --- | --- |
 | **1** | Attar's HPWL vs the HPWL OpenROAD computes from its own database, same DEF, 10 ASAP7 designs up to 1.05M cells | equal to within **0.00002%** |
-| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ASAP7 **10 / 10**, NS3K **16 / 16**: legal on both, broken rejected by both |
+| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ASAP7 **10 / 10**, NS3K **17 / 17** (with bp_quad, 1.18M cells): legal on both, broken rejected by both |
 | **3** | ORFS's own placement written back unchanged, then ORFS resize, DP, CTS, routing | routed WL, DRC, WNS, TNS **bit-identical**, **9 / 9** designs |
 | **4** | Attar's own placement, at the design's target density, then ORFS to the end | **9 / 9** route with **0 DRC**; routed WL **0.2% to 7.4% shorter** than with ORFS's own placement |
 | **5** | HPWL vs routed wirelength, 951 routed runs of 16 designs (NS3K + Innovus) | same order at **≥ 2%** HPWL difference; a coin flip below 0.25% |
