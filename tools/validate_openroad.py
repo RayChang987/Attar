@@ -150,8 +150,10 @@ def main():
         tag = name.replace('/', '_')
         t = time.time(); d.export(os.path.join(WORK, tag + '.def')); r['export_s'] = round(time.time() - t, 1)
         r.update(check(d, os.path.join(WORK, tag + '.def'), lefs, a.lef_dir, tag, a.cores, a.layers if a.grt else None))
+        # OpenROAD counts the PG pins of the DEF's PINS too (ORFS DEFs have VDD/VSS there); the IR skips them
+        pg = d.manifest['counts'].get('pg_pins_skipped', 0)
         r['counts_match'] = r['counts'] is not None and r['counts'][0] == len(d.pos) - (len(d.io) if d.io is not None else 0) \
-            and r['counts'][2] == r['terminals']
+            and r['counts'][2] == r['terminals'] + pg
         r['hpwl_rel_diff'] = r['attar_hpwl'] / r['hpwl'] - 1 if r.get('hpwl') else None
         # negative control: 1% of the movable cells half a site to the right
         g = torch.Generator().manual_seed(0)

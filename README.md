@@ -179,8 +179,8 @@ the tools in this repo (ORFS on ASAP7 and Nangate45; OpenROAD alone on i3dPDK_NS
 
 | | check | result |
 | --- | --- | --- |
-| **1** | Attar's HPWL vs the HPWL OpenROAD computes from its own database, same DEF, 51 ORFS designs (33 ASAP7, 18 Nangate45) up to 1.48M cells | equal to within **0.00005%** |
-| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ORFS **51 / 51**, NS3K **11 / 17** (with bp_quad, 1.18M cells): legal on both, broken rejected by both. On the other 6 NS3K designs OpenROAD's `check_placement` crashes on the floorplan DEF itself ([which](docs/benchmarks.md#the-zoo-today)); Attar finds them legal |
+| **1** | Attar's HPWL vs the HPWL OpenROAD computes from its own database, same DEF, 23 ORFS designs (15 ASAP7, 8 Nangate45) up to 1.05M cells | equal to within **0.00002%** |
+| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ORFS **23 / 23**; NS3K at 60/70/80% density **62 / 84** (Attar legal on all 84): legal on both, broken rejected by both. On the other 22, all with macros, OpenROAD's `check_placement` crashes on the floorplan DEF itself ([which](docs/benchmarks.md#the-zoo-today)) |
 | **3** | ORFS's own placement written back unchanged, then ORFS resize, DP, CTS, routing | routed WL, DRC, WNS, TNS **bit-identical**, **9 / 9** designs |
 | **4** | Attar's own placement, at the design's target density, then ORFS to the end | **9 / 9** route with **0 DRC**; routed WL **0.2% to 7.4% shorter** than with ORFS's own placement |
 | **5** | HPWL vs routed wirelength, 951 routed runs of 16 designs (NS3K + Innovus) | same order at **≥ 2%** HPWL difference; a coin flip below 0.25% |
@@ -213,7 +213,7 @@ HPWL does *not* predict timing: WNS and TNS move independently of it, and Attar'
 jpeg_x20 is 20 copies of the synthesized jpeg run through ORFS as one design: a million-cell scaling test.
 The legality check covers rows, sites, overlaps, row segments cut around macros, power-rail parity, and signal pins
 clear of the PDN's via metal (as OpenROAD's `check_placement` checks it).
-All 51 ORFS designs, ASAP7 and Nangate45: [docs/validation/orfs_check.md](docs/validation/orfs_check.md).
+All 23 ORFS designs, ASAP7 and Nangate45: [docs/validation/orfs_check.md](docs/validation/orfs_check.md).
 
 </details>
 
@@ -242,10 +242,10 @@ cannot read its generated memory macro. Attar's placements are not timing-driven
 ## Benchmarks
 
 The zoo is distilled from public benchmarks, ORFS runs and Innovus runs on i3dPDK_NS3K, and published on the
-Hugging Face Hub. Each reader hands over only the facts its format has. **193 designs in 17 suites, in two modes** (`attar.load('<mode>/<suite>/<design>')`).
+Hugging Face Hub. Each reader hands over only the facts its format has. **247 designs in 23 suites, in two modes** (`attar.load('<mode>/<suite>/<design>')`).
 
 <details open>
-<summary><b><code>after_fp</code>: placement problems (138 designs, 11 suites)</b></summary>
+<summary><b><code>after_fp</code>: placement problems (192 designs, 17 suites)</b></summary>
 <br>
 
 The floorplan and power grid are given; the cells are the answer.
@@ -258,13 +258,15 @@ The floorplan and power grid are given; the cells are the answer.
 | ispd2024 | LEF/DEF (Nangate45) | 5 | 120k-715k | placed | re-placed legally |
 | iccad2025 | LEF/DEF (ASAP7) | 13 | 2k-298k | placed | re-placed legally |
 | gsrc_place | Bookshelf | 4 | 0.8k-28k | cells unplaced | placed legally |
-| ns3k | LEF/DEF (3nm-class) | 16 | 0.3k-170k | cells unplaced | placed legally; OpenROAD `check_placement` passes |
-| orfs_asap7 | LEF/DEF from ORFS 3_3 | 33 | 0.4k-1.48M | cells unplaced | placed legally; `check_placement` passes; 9 routed by ORFS with 0 DRC |
-| orfs_nangate45 | LEF/DEF from ORFS 3_3 | 18 | 0.7k-209k | cells unplaced | placed legally; `check_placement` passes |
+| ns3k | LEF/DEF (3nm-class) | 14 | 0.3k-170k | cells unplaced | placed legally; OpenROAD `check_placement` passes |
+| ns3k_{pl,st}_u{60,70,80} | LEF/DEF (3nm-class) | 6 x 14 | 0.9k-1.18M | cells unplaced | Innovus floorplans at 60/70/80% std-cell density, M5 pillar or M3 stripe PDN: placed legally; `check_placement` + global routing pass on 62 |
+| orfs_asap7 | LEF/DEF from ORFS 3_3 | 15 | 0.4k-1.05M | cells unplaced | placed legally; `check_placement` passes; 6 routed by ORFS with 0 DRC |
+| orfs_nangate45 | LEF/DEF from ORFS 3_3 | 8 | 0.7k-109k | cells unplaced | placed legally; `check_placement` passes |
 | stress | LEF/DEF (3nm-class) | 1 | 1.18M | placed | bp_quad: re-placed legally; `check_placement` passes |
 
-orfs_asap7 holds ORFS's asap7 designs, eight nangate45 designs ported to ASAP7 with the RTL unmodified (ariane133/136,
-black_parrot, bp_be/fe/multi_top, bp_quad, swerv, dynamic_node; `tools/orfs_port_asap7.py`) and jpeg_x20 (20 x jpeg).
+orfs_asap7 holds ORFS's asap7 designs, two nangate45 designs ported to ASAP7 with the RTL unmodified (swerv,
+dynamic_node; `tools/orfs_port_asap7.py`) and jpeg_x20 (20 x jpeg). Designs whose flow floorplan leaves the std cells
+under 50% of the row area are left out of the ORFS and NS3K suites: too sparse to be a placement problem.
 
 </details>
 

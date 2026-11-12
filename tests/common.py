@@ -20,7 +20,7 @@ def need(name):
         return attar.load(name, DEV, download=False)
     except FileNotFoundError as e:
         raise unittest.SkipTest(str(e))
-MACRO_DESIGNS = ['after_fp/orfs_asap7/riscv32i', 'after_fp/orfs_asap7/tinyRocket', 'after_fp/orfs_asap7/swerv_wrapper', 'after_fp/orfs_asap7/cva6']
+MACRO_DESIGNS = ['after_fp/orfs_asap7/riscv32i', 'after_fp/orfs_asap7/riscv32i-mock-sram', 'after_fp/orfs_asap7/coralnpu', 'after_fp/orfs_asap7/cva6']
 RUNS = os.path.join(os.path.dirname(__file__), '..', 'orfs_runs')
 
 def gpl_final_hpwl(name):

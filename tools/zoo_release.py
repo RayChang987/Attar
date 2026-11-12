@@ -47,6 +47,11 @@ SUITES = {
                              'and goes on', 'ORFS runs', 'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
     'after_fp/ns3k': ('Open designs placed on the i3dPDK_NS3K v1.1 generic GAAFET kit (Innovus enablement)',
              'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)'),
+    **{'after_fp/ns3k_%s_u%d' % (p, u): (
+        'The same open designs on i3dPDK_NS3K at %d%% std-cell density over the rows (Innovus strip-cut floorplan, %s PDN)'
+        % (u, {'pl': 'M5 pillar', 'st': 'M3 stripe'}[p]),
+        'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)')
+       for u in (60, 70, 80) for p in ('pl', 'st')},
     'after_fp/stress': ('bp_quad on i3dPDK_NS3K: a 1.2M-cell routed DEF, for scaling tests',
                'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)'),
 }

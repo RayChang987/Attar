@@ -60,7 +60,7 @@ zoo designs named) and writes `docs/validation/orfs_check.{md,json}` (the design
 - **HPWL:** Attar against OpenROAD's database computation on the same DEF.
 - **Legality:** Attar's checker against `check_placement`, plus a broken-placement control.
 
-All 51 agree (33 ASAP7, 18 Nangate45, up to 1.48M cells): HPWL within 0.00005%, 51/51 legal verdicts, and 51/51 broken placements rejected by both.
+All 23 agree (15 ASAP7, 8 Nangate45, up to 1.05M cells): HPWL within 0.00002%, 23/23 legal verdicts, and 23/23 broken placements rejected by both.
 
 `tools/orfs_roundtrip.py ... identity` writes the ORFS placement back unchanged. Downstream metrics are
 bit-identical on gcd, aes, ibex, jpeg and ethmac.

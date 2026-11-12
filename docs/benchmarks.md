@@ -79,9 +79,10 @@ Rules every reader follows:
 | ispd2024 | 5 | 120k-715k | placed | re-placed legal |
 | iccad2025 | 13 | 2k-298k | placed | re-placed legal |
 | gsrc_place | 4 | 0.8k-28k | cells unplaced | legal |
-| ns3k | 16 | 0.3k-170k | cells unplaced | legal. OpenROAD `check_placement` passes and global routing has no overflow on 9 of the 15 new floorplans (the 6 designs without macros, ariane133, bp_multi_top, riscv32i); on ariane136, black_parrot, bp_be_top, bp_fe_top, swerv_wrapper and tinyRocket `check_placement` crashes (signal 11) on the floorplan DEF itself, with no cells placed |
-| orfs_asap7 | 32 | 0.4k-1.05M | cells unplaced | legal, also by OpenROAD `check_placement`; 9 routed by ORFS with 0 DRC. ORFS's asap7 designs, 8 nangate45 designs ported to ASAP7 (ariane133/136, black_parrot, bp_*, swerv, dynamic_node) and jpeg_x20 (20 x jpeg, the million-cell scaling test) |
-| orfs_nangate45 | 18 | 0.7k-209k | cells unplaced | legal, also by OpenROAD `check_placement` |
+| ns3k | 14 | 0.3k-170k | cells unplaced | legal. OpenROAD `check_placement` passes and global routing has no overflow on the 6 designs without macros, ariane133, bp_multi_top and riscv32i; on ariane136, black_parrot, swerv_wrapper and tinyRocket `check_placement` crashes (signal 11) on the floorplan DEF itself, with no cells placed |
+| ns3k_{pl,st}_u{60,70,80} | 6 x 14 | 0.9k-1.18M | cells unplaced | Innovus strip-cut floorplans at 60/70/80% std-cell density over the rows, M5 pillar (pl) or M3 stripe (st) PDN. Attar: all 84 legal. OpenROAD `check_placement` + global routing (no overflow) pass on 62; it crashes on the floorplan DEF itself for black_parrot, bp_multi_top and bp_quad at every setting, swerv_wrapper at 70% and tinyRocket at 80% |
+| orfs_asap7 | 15 | 0.4k-1.05M | cells unplaced | legal, also by OpenROAD `check_placement`; 6 routed by ORFS with 0 DRC. ORFS's asap7 designs, swerv and dynamic_node ported from nangate45, and jpeg_x20 (20 x jpeg, the million-cell scaling test) |
+| orfs_nangate45 | 8 | 0.7k-109k | cells unplaced | legal, also by OpenROAD `check_placement` |
 | stress | 1 | 1.18M | placed | bp_quad on NS3K: re-placed legal, also by OpenROAD `check_placement` |
 
 **`before_fp`**: floorplan problems (the die, IO pins and macros are the answer):
@@ -101,7 +102,11 @@ Rules every reader follows:
 - ISPD 2019 test7-10 run at about 96% utilization; GP raises its target density to the utilization.
 - ORFS 3_3 DEFs have rows cut around macros; the gaps are obstacles (OpenROAD DPL-0004 otherwise).
 - ORFS's own nangate45 bp_quad config stops in its PDN step (PDN-0179, channels between macros), so it is not in the
-  zoo; bp_quad is there on NS3K (stress) and ported to ASAP7.
+  zoo; bp_quad is there on NS3K (stress, ns3k_*).
+- Designs whose flow floorplan (ORFS or Innovus) leaves the std cells under 50% of the row area are left out: too
+  sparse to be a placement problem. Among them are most macro-heavy ORFS configs (BlackParrot, ariane, swerv_wrapper,
+  mempool) and the NS3K bp_be_top and bp_fe_top, whose die the IO pins set. Raising their ORFS CORE_UTILIZATION to
+  70-80% stops in ORFS's macro placer (MPL-0065 with the platform's 20 um channels).
 - mcnc/xerox has no signal pads; IBM-HB+ blocks are often smaller than a row.
 - Pin directions as the sources state them: superblue (ISPD 2015) has nets with two OUTPUT pins and nets with
   none; ISPD 2018/2019 have a few hundred nets driven by two flops; GSRC ibm05's I/O marks are inconsistent. The

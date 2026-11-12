@@ -8,7 +8,8 @@ width that keeps the fakeram45 macro's name and pins (clk, ce_in, we_in, addr_in
 RTL that instantiates fakeram45_<D>x<W> links to it as is. The memories are abstract (size, pins, timing defaults),
 as fakeram45 is.
 
-usage: orfs_port_asap7.py [design ...]   (default: all of PORTS); then tools/orfs_run_to_gp.sh <design>"""
+usage: orfs_port_asap7.py [design ...] [--util 50]   (default: all of PORTS); then tools/orfs_run_to_gp.sh <design>
+--util: ORFS's CORE_UTILIZATION (std-cell + macro area over the core area), the same for the designs given."""
 import json
 import math
 import os
@@ -90,7 +91,7 @@ def sdc(clocks, period):
     return '\n'.join(L) + '\n'
 
 
-def port(d):
+def port(d, util=UTIL):
     p = PORTS[d]
     out = os.path.join(RUNS, 'designs', d)
     os.makedirs(out, exist_ok=True)
@@ -102,7 +103,7 @@ def port(d):
          'export PLATFORM = asap7', 'export DESIGN_NAME = %s' % p['name'], 'export DESIGN_NICKNAME = %s' % d,
          'export VERILOG_FILES = %s' % ' '.join(p['files']),
          'export SDC_FILE = /work/designs/%s/constraint.sdc' % d,
-         'export CORE_UTILIZATION = %d' % UTIL, 'export PLACE_DENSITY_LB_ADDON = %.2f' % LB_ADDON,
+         'export CORE_UTILIZATION = %d' % util, 'export PLACE_DENSITY_LB_ADDON = %.2f' % LB_ADDON,
          'export SYNTH_HIERARCHICAL = %d' % p['hier']]
     if p['hier']:
         L.append('export SYNTH_MINIMUM_KEEP_SIZE = %d' % p.get('keep', 10000))
@@ -112,9 +113,14 @@ def port(d):
               '# kepler-formal (LEC) cannot load the memory macros', 'export LEC_CHECK = 0']
     with open(os.path.join(out, 'config.mk'), 'w') as f:
         f.write('\n'.join(L) + '\n')
-    print('%-14s -> %s (%d memories)' % (d, os.path.relpath(out, ROOT), len(mem)))
+    print('%-14s -> %s (%d memories, CORE_UTILIZATION %d)' % (d, os.path.relpath(out, ROOT), len(mem), util))
 
 
 if __name__ == '__main__':
-    for d in sys.argv[1:] or PORTS:
-        port(d)
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    ap.add_argument('designs', nargs='*')
+    ap.add_argument('--util', type=int, default=UTIL)
+    a = ap.parse_args()
+    for d in a.designs or PORTS:
+        port(d, a.util)
