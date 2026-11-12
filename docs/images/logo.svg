@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="75%">
+      <stop offset="0" stop-color="#3A2117"/><stop offset="1" stop-color="#1F110C"/>
+    </radialGradient>
+    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="150" y1="0" x2="850" y2="0">
+      <stop offset="0" stop-color="#FFC857"/><stop offset="0.55" stop-color="#FF9A3C"/><stop offset="1" stop-color="#F0593A"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#FFB070" stroke-opacity="0.07" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+
+  <g transform="translate(120 20)" fill="none" stroke="url(#ink)" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" style="stroke:url(#ink)">
+    <!-- a -->
+    <circle cx="230" cy="320" r="60"/><path d="M290 240V400"/>
+    <!-- t t : stems with hooks -->
+    <path d="M380 170V360Q380 400 420 400"/>
+    <path d="M500 170V360Q500 400 540 400"/>
+    <!-- a -->
+    <circle cx="620" cy="320" r="60"/><path d="M680 240V400"/>
+    <!-- r -->
+    <path d="M760 240V400"/><path d="M760 310Q760 250 830 250"/>
+  </g>
+  <!-- shared crossbar of the two t's: one macro block bridging them -->
+  <rect x="460" y="252" width="180" height="44" rx="22" fill="#FFE2A8"/>
+
+  <!-- placement cells -->
+  <g fill="none" stroke="#FFB070" stroke-width="3" stroke-opacity="0.8">
+    <rect x="1010" y="222" width="36" height="36" rx="6" stroke-dasharray="6 6"/>
+  </g>
+  <rect x="1060" y="222" width="36" height="36" rx="6" fill="#FF9A3C"/>
+  <rect x="1060" y="268" width="36" height="36" rx="6" fill="#F0593A" opacity="0.85"/>
+  <rect x="1014" y="268" width="28" height="36" rx="6" fill="#FFC857" opacity="0.7"/>
+
+  <text x="640" y="520" text-anchor="middle" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="30" letter-spacing="6" fill="#E8C9A8">The Fast Loop For Physical Design</text>
+</svg>
