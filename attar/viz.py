@@ -3,13 +3,14 @@
 Two themes share one set of roles; 'light' (the default) is warm: standard cells in terracotta (rectangles, or an
 area-density image from the paper surface to deep brick for large designs), macros in a neutral sand fill so the
 cells stand out, IO pins by direction (input amber, output crimson, inout plum), thin outlines for die / core / rows, no axes: a scale
-bar and a title block with the design's numbers instead."""
+bar and a title block with the design's numbers instead. Block-level floorplans also show the connections between
+macros and IO pins: one ink, width and opacity by connection strength (nets between the two, clique model)."""
 import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
-from matplotlib.collections import PolyCollection  # noqa: E402
+from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Patch, Rectangle  # noqa: E402
@@ -20,10 +21,12 @@ THEMES = {
     # warm light: paper surface, terracotta cells, sand macros
     'light': dict(surface='#fbf8f3', text='#2b211c', text2='#6b5d52', muted='#a39486', die='#4a3b32', core='#cdbfae',
                   row='#efe7dc', cell='#d9622b', density=('#fbf8f3', '#f4c3a3', '#e07a45', '#c2501f'), fixed='#c9bba8', macro='#ecdfc8',
-                  macro_edge='#a8946f', io=('#d99a1e', '#b8323f', '#7a4e8c', '#a39486'), ok='#4f7a28', bad='#b8323f'),
+                  macro_edge='#a8946f', io=('#d99a1e', '#b8323f', '#7a4e8c', '#a39486'), ok='#4f7a28', bad='#b8323f',
+                  net='#4a3b32'),
     'dark': dict(surface='#141413', text='#f0efec', text2='#c3c2b7', muted='#8a8984', die='#d6d4cc', core='#5c5b56',
                  row='#232321', cell='#3987e5', density=('#141413', '#3987e5', '#9cc7ff'), fixed='#5c5b56', macro='#3a3833',
-                 macro_edge='#8f8a7d', io=('#199e70', '#d95926', '#9085e9', '#8a8984'), ok='#3fb07f', bad='#e5603a'),
+                 macro_edge='#8f8a7d', io=('#199e70', '#d95926', '#9085e9', '#8a8984'), ok='#3fb07f', bad='#e5603a',
+                 net='#d6d4cc'),
 }
 IO_NAMES = ('input', 'output', 'inout', 'feedthru')
 
@@ -52,6 +55,33 @@ def _legal_status(d, pos, own):
     return (None if not judged else not issues), issues, out
 
 
+def _connections(d, pos, size, nodes, max_lines, max_degree=32):
+    """The strongest connections between the cells in `nodes` (macros, IO pins): for every net, each pair of its
+    nodes gets 1 / (k - 1), k its number of nodes (clique model); nets of more than max_degree nodes are left out.
+    -> (segments (L, 2, 2), strengths (L,) in (0, 1]), strongest last."""
+    pc = d.p_cell.cpu().numpy(); pn = d.p_net.cpu().numpy()
+    keep = nodes[pc]
+    N = len(nodes)
+    key = np.unique(pn[keep].astype(np.int64) * N + pc[keep])         # (net, node) once each, sorted by net
+    net, cell = key // N, key % N
+    cut = np.flatnonzero(np.r_[True, net[1:] != net[:-1], True])
+    w = {}
+    for a, b in zip(cut[:-1], cut[1:]):
+        k = b - a
+        if 2 <= k <= max_degree:
+            c = cell[a:b]
+            for i in range(k):
+                for j in range(i + 1, k):
+                    e = (int(c[i]), int(c[j]))
+                    w[e] = w.get(e, 0.0) + 1.0 / (k - 1)
+    if not w:
+        return np.zeros((0, 2, 2)), np.zeros(0)
+    E = sorted(w.items(), key=lambda kv: kv[1])[-max_lines:]
+    ij = np.array([e for e, _ in E]); s = np.array([v for _, v in E])
+    ctr = pos + size / 2
+    return np.stack([ctr[ij[:, 0]], ctr[ij[:, 1]]], 1), s / s.max()
+
+
 def _scale_bar(ax, box, unit, t):
     """A scale bar of a round length about a fifth of the die width, under the die."""
     W = box[2] - box[0]
@@ -64,11 +94,13 @@ def _scale_bar(ax, box, unit, t):
 
 
 def plot(d, path=None, die=0, pos=None, max_cells=30_000, rows=None, labels=None, title=None, ax=None, dpi=150,
-         theme='light'):
+         theme='light', nets=None, max_nets=None):
     """Draw one die of design d. pos: positions to draw (default d.pos). Above max_cells standard cells, the cells are
     drawn as an area-density image instead of rectangles. rows: draw the row outlines (default: when <= 300 rows).
-    labels: macro names (default: when <= 40 macros). theme: 'light' or 'dark'. Returns the matplotlib figure; saved
-    to path if given."""
+    labels: macro names (default: when <= 40 macros). theme: 'light' or 'dark'. nets: draw the connections between
+    macros and IO pins (default: block-level designs, i.e. no standard cells), the max_nets strongest (default: 2 per
+    macro, 40 to 400). Returns the
+    matplotlib figure; saved to path if given."""
     d.require('plot')
     t = THEMES[theme]
     own = pos is None                                    # drawing the design's own placement (HPWL applies)
@@ -143,6 +175,18 @@ def plot(d, path=None, die=0, pos=None, max_cells=30_000, rows=None, labels=None
                                          zorder=2))
         legend.append(Patch(fc=t['fixed'], ec='none', label='fixed cells'))
     msel = on & macro & placed
+    n_std_on = int((on & ~term & ~macro).sum())
+    if (nets if nets is not None else n_std_on == 0) and msel.any():
+        io_nodes = np.zeros(len(flags), bool)
+        if d.io is not None and len(d.io):
+            io_nodes[d.io.cpu().numpy()] = True
+        cap = max_nets or int(min(400, max(40, 2 * msel.sum())))
+        seg, st = _connections(d, pos, size, (msel | (io_nodes & placed & on)), cap)
+        if len(seg):
+            from matplotlib.colors import to_rgba
+            rgba = np.array([to_rgba(t['net'], 0.12 + 0.55 * v) for v in st])
+            ax.add_collection(LineCollection(seg, colors=rgba, linewidths=0.35 + 1.6 * st, capstyle='round', zorder=3.5))
+            legend.append(Line2D([], [], color=t['net'], lw=1.2, alpha=0.6, label='connections'))
     if msel.any():
         ax.add_collection(PolyCollection(_rects(pos[msel], size[msel]), facecolors=t['macro'],
                                          edgecolors=[t['bad'] if o else t['macro_edge'] for o in outside[msel]],

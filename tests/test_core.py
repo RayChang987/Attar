@@ -204,6 +204,24 @@ class VizTest(unittest.TestCase):
         fig = plot(d)
         self.assertTrue(any('unplaced' in x.get_text() for x in fig.axes[0].texts))
 
+    def test_block_level_floorplan_shows_connections_and_legality(self):
+        from matplotlib.collections import LineCollection
+        from attar.viz import _connections, plot
+        import numpy as np
+        d = need('before_fp/mcnc/ami33')
+        d.floorplan(verbose=False)
+        fig = plot(d)
+        lines = [c for c in fig.axes[0].collections if isinstance(c, LineCollection)]
+        self.assertEqual(len(lines), 1)
+        self.assertLessEqual(len(lines[0].get_segments()), 2 * len(d.macros) if 2 * len(d.macros) > 40 else 40)
+        self.assertTrue(any(x.get_text() == 'legal' for x in fig.texts))
+        fig = plot(d, nets=False)
+        self.assertFalse(any(isinstance(c, LineCollection) for c in fig.axes[0].collections))
+        nodes = np.zeros(len(d.size), bool); nodes[d.macros.cpu().numpy()] = True
+        seg, st = _connections(d, d.pos.cpu().numpy(), d.size.cpu().numpy(), nodes, 10)
+        self.assertEqual((len(seg), float(st.max())), (10, 1.0))
+        self.assertTrue((np.diff(st) >= 0).all())                     # strongest last
+
 class WritebackTest(unittest.TestCase):
     def test_unchanged_reference_exports_the_source_design(self):
         from attar.deffile import same_design

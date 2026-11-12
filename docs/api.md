@@ -26,7 +26,7 @@ environment variables.
 | `place(target_density=None, macro_halo=0, **kw)` | `naive.place`: global placement + legalization (default density: the source's own, else 0.9) |
 | `floorplan(utilization=None, aspect_ratio=1.0, packing=False, **kw)` | `naive.floorplan`, for `before_fp` problems (see below) |
 | `floorplan_legal(pos=None)` | `(legal, problems)`: macros in their region and apart, IO pins in the die, all placed; checked from the positions on every call, not stored |
-| `plot(path=None, theme='light', dpi=150, **kw)` | die, core, rows, cells (an area-density image above 30k cells), macros, IO pins by direction; warm light theme by default |
+| `plot(path=None, theme='light', dpi=150, nets=None, max_nets=None, **kw)` | die, core, rows, cells (an area-density image above 30k cells), macros, IO pins by direction; the whole floorplan, also what sticks out of the die (in red); 'legal' / 'not legal' with the problems; block-level designs also show the strongest connections between macros and IO pins (`nets`, default 2 per macro); warm light theme by default |
 | `export(out_def)` | write the design as a DEF: its source frame (PDN, pins, fixed cells, verbatim) with the cells and signal nets from the IR |
 | `handoff_command(out_def, run_dir=None)` | the command that hands an exported DEF to ORFS |
 | `hpwl(pos=None, per_net=False)` | exact HPWL (0-d tensor) |
