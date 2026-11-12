@@ -15,8 +15,7 @@ Place and evaluate a 100k-cell design in seconds, then hand it back to the full 
 
 [Why Attar](#why-attar) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp; [Built-in engines](#built-in-engines) &nbsp;·&nbsp;
 [Quickstart](#quickstart) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery) &nbsp;·&nbsp;
-[Speed](#speed) &nbsp;·&nbsp; [Validation](#does-the-fast-loop-agree-with-the-slow-loop) &nbsp;·&nbsp;
-[Benchmarks](#benchmarks) &nbsp;·&nbsp; [Roadmap](#roadmap)
+[Validation](#does-the-fast-loop-agree-with-the-slow-loop) &nbsp;·&nbsp; [Roadmap](#roadmap)
 
 <br>
 
@@ -56,7 +55,7 @@ the core: not legal. <code>packing=True</code> (B*-tree, annealed into the core,
    ([validation](#does-the-fast-loop-agree-with-the-slow-loop)).
 4. **GPU-native.** Layouts and design features are tensors on the GPU, so researchers, developers and AI agents
    train, evaluate and debug in the same few lines of Python: exact HPWL of 8.9M pins in 3 ms, a 2.2M-cell design
-   placed and legalized in 49 s ([speed](#speed)). An algorithm is a function from tensors to positions: no database
+   placed and legalized in 49 s. An algorithm is a function from tensors to positions: no database
    API, no TCL, no file formats.
 
 ## Two modes
@@ -90,7 +89,7 @@ tensorized, states the facts it needs, and writes its answer back into the desig
 | **Macro placer** | `before_fp` | `naive.place_macros` | mixed-size global placement, then macros legalized on their routing tracks with a halo; `packing=True` for block-level designs: B*-tree packing, annealed into the core, then for HPWL |
 | **Global placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the slow loop's own target density; `routability=True`: DREAMPlace's cell inflation |
 | **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal |
-| **Placement refiner** | `after_fp` | not yet | detailed placement is next ([roadmap](#roadmap)) |
+| **Placement refiner** | `after_fp` | not yet | detailed placement is next |
 
 `d.floorplan(utilization=...)` sizes the die (`naive.make_die`), then places the IO pins and the macros;
 `d.place()` is global placement plus legalization.
@@ -187,22 +186,6 @@ legal including power rails and the PDN; OpenROAD's <code>check_placement</code>
 </tr>
 </table>
 
-## Speed
-
-RTX 3080 Ti (12 GB), PyTorch 2.4. Times include everything the call does.
-
-| | cva6 (ASAP7) | bp_quad (NS3K) | bigblue4 (ISPD 05) |
-| --- | ---: | ---: | ---: |
-| cells / pins | 125k / 421k | 1.18M / 4.3M | 2.18M / 8.9M |
-| load from disk to GPU | 0.36 s | 0.31 s | 0.99 s |
-| HPWL, exact | **0.23 ms** | **1.5 ms** | **3.2 ms** |
-| WA wirelength, forward + backward | 1.2 ms | 8.3 ms | 17 ms |
-| global placement + legalization | **3.1 s** | **82 s** | **49 s** |
-| GPU memory, peak | 1.3 GB | 2.9 GB | 4.3 GB |
-
-bp_quad's legalization includes keeping signal pins clear of its PDN: a GPU row DP mirrors and shifts about 17k cells
-in a few seconds; the 1.5k multi-row cells left take about a minute in a Python fallback ([roadmap](#roadmap)).
-
 ## Does the fast loop agree with the slow loop?
 
 A fast loop is only useful if its numbers mean the same thing as the slow loop's. Six checks, each reproducible with
@@ -270,55 +253,6 @@ Routed wirelength in um. tinyRocket runs with `LEC_CHECK=0`, as its ORFS baselin
 cannot read its generated memory macro. Attar's placements are not timing-driven; ORFS's are.
 </details>
 
-## Benchmarks
-
-The zoo is distilled from public benchmarks, ORFS runs and Innovus runs on i3dPDK_NS3K, and published on the
-Hugging Face Hub. Each reader hands over only the facts its format has. **247 designs in 23 suites, in two modes** (`attar.load('<mode>/<suite>/<design>')`).
-
-<details open>
-<summary><b><code>after_fp</code>: placement problems (192 designs, 17 suites)</b></summary>
-<br>
-
-The floorplan and power grid are given; the cells are the answer.
-
-| suite | format | designs | cells | starts from | status |
-| --- | --- | ---: | --- | --- | --- |
-| ispd2005 | Bookshelf | 8 | 211k-2.2M | cells unplaced | placed legally |
-| ispd2015 | LEF/DEF | 20 | 29k-1.3M | cells unplaced | placed legally (fence regions not enforced yet) |
-| ispd2018, ispd2019 | LEF/DEF | 20 | 8k-900k | placed | re-placed legally |
-| ispd2024 | LEF/DEF (Nangate45) | 5 | 120k-715k | placed | re-placed legally |
-| iccad2025 | LEF/DEF (ASAP7) | 13 | 2k-298k | placed | re-placed legally |
-| gsrc_place | Bookshelf | 4 | 0.8k-28k | cells unplaced | placed legally |
-| ns3k | LEF/DEF (3nm-class) | 14 | 0.3k-170k | cells unplaced | placed legally; OpenROAD `check_placement` passes |
-| ns3k_{pl,st}_u{60,70,80} | LEF/DEF (3nm-class) | 6 x 14 | 0.9k-1.18M | cells unplaced | Innovus floorplans at 60/70/80% std-cell density, M5 pillar or M3 stripe PDN: placed legally; `check_placement` + global routing pass on 62 |
-| orfs_asap7 | LEF/DEF from ORFS 3_3 | 15 | 0.4k-1.05M | cells unplaced | placed legally; `check_placement` passes; 6 routed by ORFS with 0 DRC |
-| orfs_nangate45 | LEF/DEF from ORFS 3_3 | 8 | 0.7k-109k | cells unplaced | placed legally; `check_placement` passes |
-| stress | LEF/DEF (3nm-class) | 1 | 1.18M | placed | bp_quad: re-placed legally; `check_placement` passes |
-
-orfs_asap7 holds ORFS's asap7 designs, two nangate45 designs ported to ASAP7 with the RTL unmodified (swerv,
-dynamic_node; `tools/orfs_port_asap7.py`) and jpeg_x20 (20 x jpeg). Designs whose flow floorplan leaves the std cells
-under 50% of the row area are left out of the ORFS and NS3K suites: too sparse to be a placement problem.
-
-</details>
-
-<details>
-<summary><b><code>before_fp</code>: floorplan problems (55 designs, 6 suites)</b></summary>
-<br>
-
-The netlist is given; the die (utilization), IO pins and macros are the answer.
-
-| suite | format | designs | starts from | status today |
-| --- | --- | ---: | --- | --- |
-| orfs_asap7 | LEF/DEF from ORFS 2_1 | 5 | die initialized, IO pins and macros unplaced, no PDN | floorplanned at a looser and a tighter utilization than ORFS's; handed to ORFS, which draws the PDN and places: all pass ([checked](#before_fp-hand-off)) |
-| mcnc | YAL | 5 | blocks unplaced | floorplanned, no overlaps (no cell library: Attar is the end point) |
-| gsrc_hard | GSRC blocks | 6 | no die | die sized, floorplanned, no overlaps |
-| ispd2006_hb | Bookshelf | 28 | hard + soft blocks | runs; some block overlaps remain |
-| gsrc_soft, mcnc_soft | GSRC blocks | 11 | soft blocks only | block shapes are part of the answer: no engine yet |
-
-</details>
-
-Details, data quirks and how to add a reader: [docs/benchmarks.md](docs/benchmarks.md).
-
 ## A design is a state
 
 ```text
@@ -361,32 +295,6 @@ A proxy is lit once it is fast in Attar **and** shown to agree with the slow loo
 | **HPWL evaluation** | done | exact on the GPU; equals OpenROAD; legality equals `check_placement` | |
 | **Routed wirelength evaluation** | half way | ORFS hand-off and round trip; HPWL tracks routed WL above a 2% difference | a global-routing proxy, checked against ORFS routing |
 | **Timing evaluation** | not yet | Liberty and SDC paths recorded with each design | a GPU timing proxy, checked against ORFS STA |
-
-Also on the list:
-- **`before_fp`**: a macro legalizer that leaves no channel narrower than the flow allows (ORFS:
-  `RTLMP_MIN_CHANNEL_SIZE`), and utilization with headroom for the flow's own netlist growth (both behind the two
-  failed hand-offs above); then ORFS up to its PDN (2_4) distilled back as an `after_fp` problem, so a floorplan
-  and a placement can be solved one after the other; `before_fp` designs of the other ORFS designs;
-- routability: DREAMPlace's cell inflation (RUDY branch) is in global placement (`routability=True`), with the track
-  capacity ORFS's router itself uses; the pin-density branch is next;
-- libraries without a one-site filler (i3dPDK_NS3K): OpenROAD forbids one-site gaps there, the NS3K flow does not;
-- a placement refiner (detailed placement), the last of the built-in engines;
-- multi-row cells in the PDN row DP (today they fall back to a Python loop: about a minute on bp_quad);
-- a legalizer that leaves an already-legal placement alone (today it re-spreads it: +12% HPWL on DREAMPlace's adaptec1 result);
-- global placement that sees the gaps of rows cut around macros;
-- fence regions and placement blockages (stored today only as counts);
-- a block-level floorplanner for soft blocks (IBM-HB+, GSRC soft);
-- 3D designs (per-die geometry) and a hosted zoo.
-
-## Repository layout
-
-```text
-attar/            the package: Design, Evaluator, readers, kernels, attar.naive engines
-examples/         quickstart_placement.py, quickstart_floorplan.py, floorplan_flow.py (the floorplan engines step by step)
-tools/            distillation, ORFS round trip and hand-off, OpenROAD checks, validation, benchmarks, README figures
-tests/            77 tests (python -m unittest discover -s tests); designs missing from the zoo are skipped
-docs/             concepts, benchmarks, slow loop, API, the project spec (zh-TW), validation results, images
-```
 
 ## Acknowledgements
 
