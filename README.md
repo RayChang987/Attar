@@ -4,8 +4,8 @@
 
 ### The fast loop for physical design
 
-Any placement benchmark as GPU tensors. Place and evaluate a 100k-cell design in seconds,<br>
-in a few lines of Python. Then hand the result back to OpenROAD and route it.
+Diverse P&R benchmarks, distilled into one plug-and-play PyTorch environment on the GPU.<br>
+Place and evaluate a 100k-cell design in seconds, then hand it back to the full flow and route it.
 
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
@@ -13,6 +13,7 @@ in a few lines of Python. Then hand the result back to OpenROAD and route it.
 [![Tests](https://img.shields.io/badge/tests-77%20passing-5f7f1e?style=flat-square)](tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
+[Why Attar](#why-attar) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp; [Built-in engines](#built-in-engines) &nbsp;·&nbsp;
 [Quickstart](#quickstart) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery) &nbsp;·&nbsp;
 [Speed](#speed) &nbsp;·&nbsp; [Validation](#does-the-fast-loop-agree-with-the-slow-loop) &nbsp;·&nbsp;
 [Benchmarks](#benchmarks) &nbsp;·&nbsp; [Roadmap](#roadmap)
@@ -38,26 +39,61 @@ the core: not legal. <code>packing=True</code> (B*-tree, annealed into the core,
 
 <br>
 
-## Why a fast loop
+## Why Attar
 
-Placement research lives in a loop: change an idea, place, look at the numbers, change again. The slow loop
-(synthesis, place and route, signoff) takes minutes to hours per run. Attar is the other half: everything you need
-to iterate on placement, **fast to run and fast to write**. The zoo holds two kinds of problems, and every answer goes
-back to the slow loop:
+1. **Speed decides quality.** When AI agents do the research, iteration speed is more than a metric: in our view it
+   decides the quality of results (QoR). An agent that can propose, test and discard an idea in seconds finds what
+   works. When every run takes hours, even the best algorithm starves for feedback.
+2. **Data preparation is painful.** Traditional place-and-route (P&R) tools take minutes to hours per run, and every
+   benchmark suite comes in its own format (LEF/DEF, Bookshelf, YAL, GSRC blocks) with its own gaps. Getting a design
+   ready to experiment on is slow, fragmented work, repeated for every suite.
+3. **Attar is the fast loop.** Attar distills diverse P&R benchmarks into one plug-and-play PyTorch environment:
+   `attar.load` a name, and the design is on the GPU. Each reader hands over only the facts its source has, with
+   their provenance, and nothing missing is made up ([a design is a state](#a-design-is-a-state)). The fast loop
+   stays faithful to the full flows (the *slow loop*) without their overhead: its HPWL equals OpenROAD's to 7 digits,
+   its legality equals `check_placement`, its placements route in OpenROAD-flow-scripts with 0 DRC, and HPWL ranks
+   placements as routed wirelength does in 951 routed Innovus runs, once they differ by 2% or more
+   ([validation](#does-the-fast-loop-agree-with-the-slow-loop)).
+4. **GPU-native.** Layouts and design features are tensors on the GPU, so researchers, developers and AI agents
+   train, evaluate and debug in the same few lines of Python: exact HPWL of 8.9M pins in 3 ms, a 2.2M-cell design
+   placed and legalized in 49 s ([speed](#speed)). An algorithm is a function from tensors to positions: no database
+   API, no TCL, no file formats.
 
-- **`after_fp`, placement:** the floorplan and power grid are given, the cells are the answer (timing optimization and
-  global routing later).
-- **`before_fp`, floorplan:** the netlist is given; the die (utilization), the IO pins and the macros are the answer.
-  Attar draws no power grid: the floorplan goes to a flow that does (ORFS).
+## Two modes
 
-<table>
-<tr>
-<td width="25%" valign="top"><b>Fast to run</b><br><sub>The design lives on the GPU as flat tensors. HPWL of 8.9M pins in 3 ms; 2.2M cells placed and legalized in 48 s; a design loads in under a second.</sub></td>
-<td width="25%" valign="top"><b>Fast to write</b><br><sub>One <code>Design</code>, one <code>Evaluator</code>, a basic set of engines (<code>attar.naive</code>). An algorithm is a function from tensors to positions: no database API, no TCL, no file formats.</sub></td>
-<td width="25%" valign="top"><b>Honest about what it knows</b><br><sub>A design is a set of <i>facts</i> with provenance. What it can do follows from what it has, and nothing missing is ever made up.</sub></td>
-<td width="25%" valign="top"><b>Checked against the slow loop</b><br><sub>HPWL equals OpenROAD's to 7 digits, legality equals <code>check_placement</code>, the write-back round-trips through ORFS bit-identically, and Attar's placements route in ORFS with 0 DRC.</sub></td>
-</tr>
-</table>
+In production chip design, the power delivery network (PDN) is the dividing line: once the power grid and the macros
+are locked down, the design enters a different phase. Attar splits its problems at that line. It does not synthesize
+a PDN, and it should not: a `before_fp` answer goes to a flow that draws one (ORFS), and an `after_fp` problem comes
+with the PDN its flow drew.
+
+| | **Before-floorplan** (`before_fp`) | **After-floorplan** (`after_fp`) |
+| --- | --- | --- |
+| given | the netlist (an initial die for ORFS designs) | die, IO pins, macros, rows and PDN: a fixed floorplan |
+| the answer | target utilization (the die), IO pin placement, macro placement | standard-cell placement; then timing optimization and global routing on the same floorplan |
+| one call | `d.floorplan(utilization=0.6)` | `d.place()` |
+| back to the slow loop | ORFS draws the PDN and places | ORFS or OpenROAD routes and times |
+| in the zoo | 55 designs, 6 suites | 192 designs, 17 suites |
+
+Today `after_fp` is about placement; Attar measures wirelength, congestion (RUDY), density and legality. Timing and
+global-routing proxies are on the [roadmap](#roadmap).
+
+## Built-in engines
+
+Attar comes with a basic set of GPU engines, `attar.naive`, so a flow runs end to end even when you bring only one
+part of it: to work on timing optimization, you need a placement, not a placer of your own. Every engine is fully
+tensorized, states the facts it needs, and writes its answer back into the design with provenance
+(`placement: naive`).
+
+| engine | mode | call | what it does |
+| --- | --- | --- | --- |
+| **IO pin placer** | `before_fp` | `naive.place_io` | IO pins on the die boundary, net-aware once cells are placed |
+| **Macro placer** | `before_fp` | `naive.place_macros` | mixed-size global placement, then macros legalized on their routing tracks with a halo; `packing=True` for block-level designs: B*-tree packing, annealed into the core, then for HPWL |
+| **Global placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the slow loop's own target density; `routability=True`: DREAMPlace's cell inflation |
+| **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal |
+| **Placement refiner** | `after_fp` | not yet | detailed placement is next ([roadmap](#roadmap)) |
+
+`d.floorplan(utilization=...)` sizes the die (`naive.make_die`), then places the IO pins and the macros;
+`d.place()` is global placement plus legalization.
 
 ## Quickstart
 
@@ -113,13 +149,8 @@ d.pos = pos.detach(); naive.legalize(d)               # ... so legalize (multi-r
    and GSRC blocks.
 2. **Load.** `attar.load` puts the arrays on the GPU as a `Design`. `d.status()` shows each fact, each capability,
    and what a hand-off to ORFS still needs.
-3. **Move.** `attar.naive` is the basic, fully tensorized set of engines:
-   - electrostatic global placement (ePlace/DREAMPlace style, Nesterov, CUDA graphs), at the target density the
-     slow loop itself uses for the design; optionally routability-driven (DREAMPlace's cell inflation)
-   - a multi-row-height legalizer that keeps power-rail parity and signal pins clear of the PDN's via metal
-
-   For `before_fp` problems: die sizing for a utilization, IO pins, and macros on their routing tracks
-   (`d.floorplan(utilization=...)`).
+3. **Move.** Your algorithm, or the [built-in engines](#built-in-engines) (`attar.naive`), changes the positions:
+   die, IO pins and macros for `before_fp`, cells for `after_fp`.
 4. **Measure.** `attar.Evaluator` computes HPWL (exact, batched), Steiner wirelength, RUDY, density overflow and
    legality, on the current placement or on any positions you pass.
 5. **Hand off.** `d.export(out_def)` writes the design back into its source DEF's frame: the PDN, IO pin shapes and
@@ -339,6 +370,7 @@ Also on the list:
 - routability: DREAMPlace's cell inflation (RUDY branch) is in global placement (`routability=True`), with the track
   capacity ORFS's router itself uses; the pin-density branch is next;
 - libraries without a one-site filler (i3dPDK_NS3K): OpenROAD forbids one-site gaps there, the NS3K flow does not;
+- a placement refiner (detailed placement), the last of the built-in engines;
 - multi-row cells in the PDN row DP (today they fall back to a Python loop: about a minute on bp_quad);
 - a legalizer that leaves an already-legal placement alone (today it re-spreads it: +12% HPWL on DREAMPlace's adaptec1 result);
 - global placement that sees the gaps of rows cut around macros;
