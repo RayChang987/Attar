@@ -65,7 +65,7 @@ def terminal_lines(steps):
     printed the line (its code line is highlighted, 'floorplan'/'placed' make the plot appear)."""
     S = {s['step']: s for s in steps}
     G, R, W, D, Y, B = '#5f7f1e', '#b8323f', '#2b211c', '#a39486', '#b8650f', '#8e4b8a'     # warm light terminal
-    L = [('$ python quickstart.py', B, 'load')]
+    L = [('$ python quickstart_placement.py', B, 'load')]
     st = S['status']['out'].splitlines()
     L.append((st[0], W, 'status'))
     for line in st:
@@ -146,7 +146,7 @@ def render():
         dr.rectangle([0, 0, Wd, 40], fill=BAR)
         for k, c in enumerate(('#ff5f56', '#ffbd2e', '#27c93f')):
             dr.ellipse([16 + 24 * k, 13, 30 + 24 * k, 27], fill=c)
-        dr.text((110, 12), 'quickstart.py  -  attar', font=f_ui, fill='#8a7b6d')
+        dr.text((110, 12), 'quickstart_placement.py  -  attar', font=f_ui, fill='#8a7b6d')
         dr.rectangle([0, 40, LW, term_y0 - 10], fill=PANEL)
         if active is not None:                           # the line the run is at
             y = code_y0 + lh * LINE[active]

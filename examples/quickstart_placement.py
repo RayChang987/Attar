@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Attar in a few lines: load a placement problem, place it, look at it, write it back.
 
-usage: python3 examples/quickstart.py [design, default after_fp/orfs_asap7/aes]
+usage: python3 examples/quickstart_placement.py [design, default after_fp/orfs_asap7/aes]
 The design comes with its floorplan and PDN (an ORFS run at global placement): only the cells are to place. The
 result is written as examples/out_<design>.def and can be handed back to ORFS to route."""
 import os

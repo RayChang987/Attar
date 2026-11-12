@@ -70,7 +70,8 @@ d.plot('placed.png')
 d.export('placed.def')       # a DEF, back to the slow loop
 ```
 
-`examples/quickstart.py` is this program with a design name argument. The designs come from the *zoo*, distilled from public
+`examples/quickstart_placement.py` is this program with a design name argument; `examples/quickstart_floorplan.py` is the same for
+`before_fp` problems (`d.floorplan(utilization=0.6)` instead of `d.place()`, then `d.export` for ORFS). The designs come from the *zoo*, distilled from public
 benchmarks and published on the Hugging Face Hub, where `attar.load` fetches a design on first use
 ([more](docs/benchmarks.md#building-the-zoo)); Attar ships the readers, the zoo the data.
 `d.export` needs no raw file: the design keeps what it does not model of its source DEF (PDN, IO pin shapes, fixed
@@ -338,7 +339,7 @@ Also on the list:
 
 ```text
 attar/            the package: Design, Evaluator, readers, kernels, attar.naive engines
-examples/         quickstart.py (placement), floorplan_flow.py (the floorplan engines)
+examples/         quickstart_placement.py, quickstart_floorplan.py, floorplan_flow.py (the floorplan engines step by step)
 tools/            distillation, ORFS round trip and hand-off, OpenROAD checks, validation, benchmarks, README figures
 tests/            77 tests (python -m unittest discover -s tests); designs missing from the zoo are skipped
 docs/             concepts, benchmarks, slow loop, API, the project spec (zh-TW), validation results, images
