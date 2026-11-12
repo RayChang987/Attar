@@ -1,0 +1,94 @@
+{
+ "gplp": [
+  {
+   "step": "load",
+   "out": "",
+   "sec": 0.001539468765258789
+  },
+  {
+   "step": "floorplan",
+   "out": "  die: 460 x 460, core 460 x 460 (no rows), block area 84.8%\n  macros: 100 placed (mixed-size GP 339 it, lp on push (1 flips, 2 LP rounds, 0.24s; does not fit the core: no move lowers the overflow, sticks out by 4 x 6) legalization, mean move 78.4), 0 overlapping pairs, 5 outside the core, 1.28s\n  io: 334 pins on the boundary (nets), pitch 4, 0.004s\n  floorplan done in 1.38s: floorplan.die<naive:make_die(util=0.85, aspect=1)>, floorplan.io<naive:place_io(nets)>, floorplan.macros<naive:place_macros (5 stick out of the core)>\n",
+   "sec": 1.3794500827789307,
+   "res": {
+    "macros": 100,
+    "legalizer": "lp on push (1 flips, 2 LP rounds, 0.24s; does not fit the core: no move lowers the overflow, sticks out by 4 x 6)",
+    "halo": 0.0,
+    "gp_iterations": 339,
+    "legalize_iterations": 0,
+    "displacement": 78.41191864013672,
+    "grid": "rows",
+    "grid_placed": 0,
+    "no_spot": 0,
+    "overlapping_pairs": 0,
+    "outside_core": 5,
+    "fits_outline": false,
+    "seconds": 1.2788760662078857,
+    "hpwl": 160185.0,
+    "die": [
+     0.0,
+     0.0,
+     460.0,
+     460.0
+    ],
+    "counts": {
+     "macros": 100,
+     "nets": 885
+    },
+    "io": 334
+   }
+  },
+  {
+   "step": "legal",
+   "out": "(False, ['5 macros outside the core'])\n",
+   "sec": 0.008512258529663086
+  },
+  {
+   "step": "plot",
+   "out": "",
+   "sec": 0.4002501964569092
+  }
+ ],
+ "packed": [
+  {
+   "step": "load",
+   "out": "",
+   "sec": 0.0015099048614501953
+  },
+  {
+   "step": "floorplan",
+   "out": "  die: 460 x 460, core 460 x 460 (no rows), block area 84.8%\n    b*-tree: fits after 0 moves, HPWL 2.958e+05 -> 2.337e+05 in 20000 moves, 5.10s\n  macros: 100 packed (b*-tree), 0 overlapping pairs, all in the core, HPWL 2.337e+05, 5.10s\n  io: 334 pins on the boundary (nets), pitch 4, 0.004s\n  floorplan done in 5.11s: floorplan.die<naive:make_die(util=0.85, aspect=1)>, floorplan.io<naive:place_io(nets)>, floorplan.macros<naive:place_macros(packing)>\n",
+   "sec": 5.108907461166382,
+   "res": {
+    "macros": 100,
+    "legalizer": "b*-tree packing",
+    "halo": 0.0,
+    "overlapping_pairs": 0,
+    "outside_core": 0,
+    "fits_outline": true,
+    "hpwl": 172926.0,
+    "seconds": 5.098794460296631,
+    "die": [
+     0.0,
+     0.0,
+     460.0,
+     460.0
+    ],
+    "counts": {
+     "macros": 100,
+     "nets": 885
+    },
+    "io": 334
+   }
+  },
+  {
+   "step": "legal",
+   "out": "(True, [])\n",
+   "sec": 0.0008702278137207031
+  },
+  {
+   "step": "plot",
+   "out": "",
+   "sec": 0.13750958442687988
+  }
+ ]
+}

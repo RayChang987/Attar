@@ -19,12 +19,20 @@ in a few lines of Python. Then hand the result back to OpenROAD and route it.
 
 <br>
 
-<img src="docs/images/demo.gif" alt="Eight lines of Python run on cva6 and ariane136: load, plot the floorplan, place, plot the placement, export" width="920">
+<img src="docs/images/demo_placement.gif" alt="Placement mode: eight lines of Python run on cva6 and ariane133: load, plot the floorplan, place, plot the placement, export" width="920">
 
-<sub>Real runs on an RTX 3080 Ti, the same code on two designs. The floorplan comes as the flow made it; only the cells
-are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs, legal in 2.3 s; handed back
-to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own placement. <b>ariane136</b> (NS3K): 170k cells around
-136 SRAMs, legal in 5.1 s.</sub>
+<sub><b>Placement mode</b> (<code>after_fp</code>). Real runs on an RTX 3080 Ti, the same code on two designs. The
+floorplan comes as the flow made it; only the cells are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k
+cells around 8 SRAMs, legal in 2.5 s; handed back to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own
+placement. <b>ariane133</b> (NS3K, Innovus floorplan at 80% std-cell density): 163k cells around 133 SRAMs, legal in
+5.0 s.</sub>
+
+<img src="docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)" width="920">
+
+<sub><b>Floorplan mode</b> (<code>before_fp</code>). GSRC <b>n100</b>: 100 hard blocks, no die; Attar sizes one for 85%
+block area, places the IO pins and the macros. GP + LP legalization never overlaps macros, but here 5 stick out of
+the core: not legal. <code>packing=True</code> (B*-tree, annealed into the core, then for HPWL) fits them all in
+5.1 s, at 8% more wire. The lines are the strongest connections between macros and IO pins.</sub>
 
 </div>
 
