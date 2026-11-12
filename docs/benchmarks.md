@@ -29,17 +29,26 @@ hf upload-large-folder RayChang987/attar-zoo zoo/ --repo-type dataset
 
 ## Building the zoo
 
-| source | put it in | build |
-| --- | --- | --- |
-| ISPD 2005/2015, GSRC placement, ICCAD 2025 | `benchmarks/placement/<suite>/` | `python tools/distill_benchmarks.py <suite>` |
-| ISPD 2018/2019/2024 routing benchmarks | `benchmarks/routing/<suite>/` | `python tools/distill_benchmarks.py <suite>` |
-| MCNC (YAL), GSRC blocks, IBM-HB+ | `benchmarks/floorplan/...` | `python tools/distill_benchmarks.py mcnc gsrc_hard ...` |
-| ORFS designs (asap7, nangate45) | `orfs_runs/<design>_base`, `orfs_runs/nangate45/<design>_base` (`tools/orfs_run_to_gp.sh <key>`) | `python tools/distill_orfs.py <key>` (after_fp, from 3_3); `--stage 2_1_floorplan` (before_fp) |
-| nangate45 designs on ASAP7 | `python tools/orfs_port_asap7.py`, then as above | as above |
-| i3dPDK_NS3K (pa_pdn runs) | the kit and its Innovus runs | `python tools/distill_pa_pdn.py --ns3k <kit>` |
+The zoo is built by the maintainers and published on the Hub; the scripts that build it read local benchmark
+downloads, ORFS runs and the NS3K kit, and are not part of the repository. Each manifest records what a design was
+made from (source files by name and sha256, the run and its floorplan settings for NS3K). A design of your own
+goes through the same readers:
 
-`python tools/distill_benchmarks.py --list` shows what each suite expects. The ORFS tools use the docker image
-`openroad/orfs:26Q4-368-g9ca2a9e76`.
+```python
+import attar
+attar.distill('design.def', ['tech.lef', 'cells.lef'], 'my_zoo/after_fp/mine/design')   # LEF/DEF
+d = attar.load('my_zoo/after_fp/mine/design', device='cuda')
+```
+
+| source | reader | in the zoo as |
+| --- | --- | --- |
+| ISPD 2005/2015, GSRC placement, ICCAD 2025 | Bookshelf, LEF/DEF | `after_fp/<suite>` |
+| ISPD 2018/2019/2024 routing benchmarks | LEF/DEF | `after_fp/<suite>` |
+| MCNC (YAL), GSRC blocks, IBM-HB+ | YAL, GSRC blocks, Bookshelf | `before_fp/<suite>` |
+| ORFS designs (asap7, nangate45; nangate45 designs ported to ASAP7 by `tools/orfs_port_asap7.py`) | LEF/DEF of the run's 3_3 (2_1) stage | `after_fp/orfs_<platform>` (`before_fp/orfs_asap7`) |
+| i3dPDK_NS3K (pa_pdn): Innovus floorplans (rows cut only at the macros, `PG_HALO_STRIP_CUT=macro`), cells and nets from the same design's Xplace input DEF | LEF/DEF | `after_fp/ns3k`; `after_fp/stress` (bp_quad, a routed DEF) |
+
+The ORFS tools use the docker image `openroad/orfs:26Q4-368-g9ca2a9e76`.
 
 ## What each reader provides
 
@@ -70,7 +79,7 @@ Rules every reader follows:
 | ispd2024 | 5 | 120k-715k | placed | re-placed legal |
 | iccad2025 | 13 | 2k-298k | placed | re-placed legal |
 | gsrc_place | 4 | 0.8k-28k | cells unplaced | legal |
-| ns3k | 16 | 0.3k-170k | cells unplaced | legal, also by OpenROAD `check_placement` (`tools/distill_pa_pdn.py --ns3k <kit>`) |
+| ns3k | 16 | 0.3k-170k | cells unplaced | legal. OpenROAD `check_placement` passes and global routing has no overflow on 9 of the 15 new floorplans (the 6 designs without macros, ariane133, bp_multi_top, riscv32i); on ariane136, black_parrot, bp_be_top, bp_fe_top, swerv_wrapper and tinyRocket `check_placement` crashes (signal 11) on the floorplan DEF itself, with no cells placed |
 | orfs_asap7 | 32 | 0.4k-1.05M | cells unplaced | legal, also by OpenROAD `check_placement`; 9 routed by ORFS with 0 DRC. ORFS's asap7 designs, 8 nangate45 designs ported to ASAP7 (ariane133/136, black_parrot, bp_*, swerv, dynamic_node) and jpeg_x20 (20 x jpeg, the million-cell scaling test) |
 | orfs_nangate45 | 18 | 0.7k-209k | cells unplaced | legal, also by OpenROAD `check_placement` |
 | stress | 1 | 1.18M | placed | bp_quad on NS3K: re-placed legal, also by OpenROAD `check_placement` |

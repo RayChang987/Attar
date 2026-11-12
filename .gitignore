@@ -16,3 +16,7 @@ build/
 # PLY parser tables (generated)
 parser.out
 parsetab.py
+
+# zoo build scripts: they read local benchmark downloads, ORFS runs and the NS3K kit; the zoo itself is published
+# on the Hugging Face Hub (tools/zoo_release.py)
+tools/distill_*.py

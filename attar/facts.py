@@ -51,7 +51,7 @@ HINTS = {
     'pin_direction': 'the source states no pin directions (or the IR is older than attar-ir 0.6: distill it again)',
     'pdn': 'the source has no special nets on the pin layers (or the IR is older than attar-ir 0.8: distill it again)',
     'def_frame': 'distill from LEF/DEF (attar-ir >= 0.7): the frame of the source DEF is what export writes into',
-    'slow_loop': 'distill from an ORFS run (tools/distill_orfs.py); designs without a real cell library end in Attar',
+    'slow_loop': 'distill from an ORFS run (its 3_3 or 2_1 DEF); designs without a real cell library end in Attar',
     'floorplan.io': 'place the IO pins: attar.naive.place_io (or a source with placed pins; ORFS: GPL_PLACE_IOS=0)',
     'floorplan.macros': 'place the macros: attar.naive.place_macros (or a source with placed macros)',
 }

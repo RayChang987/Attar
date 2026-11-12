@@ -22,9 +22,9 @@ in a few lines of Python. Then hand the result back to OpenROAD and route it.
 <img src="docs/images/demo.gif" alt="Eight lines of Python run on cva6 and ariane136: load, plot the floorplan, place, plot the placement, export" width="920">
 
 <sub>Real runs on an RTX 3080 Ti, the same code on two designs. The floorplan comes as the flow made it; only the cells
-are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs, legal in 2.9 s; handed back
+are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs, legal in 2.3 s; handed back
 to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own placement. <b>ariane136</b> (NS3K): 170k cells around
-136 SRAMs, legal in 6.8 s.</sub>
+136 SRAMs, legal in 5.1 s.</sub>
 
 </div>
 
@@ -70,8 +70,9 @@ d.plot('placed.png')
 d.export('placed.def')       # a DEF, back to the slow loop
 ```
 
-`examples/quickstart.py` is this program with a design name argument. The designs come from a local *zoo* that you
-build from public benchmarks ([how](docs/benchmarks.md#building-the-zoo)); Attar ships the readers, not the data.
+`examples/quickstart.py` is this program with a design name argument. The designs come from the *zoo*, distilled from public
+benchmarks and published on the Hugging Face Hub, where `attar.load` fetches a design on first use
+([more](docs/benchmarks.md#building-the-zoo)); Attar ships the readers, the zoo the data.
 `d.export` needs no raw file: the design keeps what it does not model of its source DEF (PDN, IO pin shapes, fixed
 cells) and writes the cells and nets around it.
 
@@ -138,10 +139,10 @@ power rails and the PDN's via metal.</sub></td>
 <td><img src="docs/images/gallery/ariane136.png" alt="ariane136 on NS3K placed by attar.naive"></td>
 </tr>
 <tr>
-<td><sub><b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs in 3.5 s. ORFS routes it with
+<td><sub><b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs in 2.3 s. ORFS routes it with
 0 DRC and 7.4% less wire than its own placement.</sub></td>
-<td><sub><b>ariane136</b> (NS3K): 170k cells around 136 SRAMs in 7.6 s. OpenROAD's <code>check_placement</code>
-passes and its global router finds no overflow.</sub></td>
+<td><sub><b>ariane136</b> (NS3K): 170k cells around 136 SRAMs in 5 s, legal including power rails and the PDN.
+Innovus's floorplan cuts the rows only at the macros.</sub></td>
 </tr>
 </table>
 
@@ -169,7 +170,7 @@ the tools in this repo (ORFS on ASAP7 and Nangate45; OpenROAD alone on i3dPDK_NS
 | | check | result |
 | --- | --- | --- |
 | **1** | Attar's HPWL vs the HPWL OpenROAD computes from its own database, same DEF, 51 ORFS designs (33 ASAP7, 18 Nangate45) up to 1.48M cells | equal to within **0.00005%** |
-| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ORFS **51 / 51**, NS3K **17 / 17** (with bp_quad, 1.18M cells): legal on both, broken rejected by both |
+| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ORFS **51 / 51**, NS3K **11 / 17** (with bp_quad, 1.18M cells): legal on both, broken rejected by both. On the other 6 NS3K designs OpenROAD's `check_placement` crashes on the floorplan DEF itself ([which](docs/benchmarks.md#the-zoo-today)); Attar finds them legal |
 | **3** | ORFS's own placement written back unchanged, then ORFS resize, DP, CTS, routing | routed WL, DRC, WNS, TNS **bit-identical**, **9 / 9** designs |
 | **4** | Attar's own placement, at the design's target density, then ORFS to the end | **9 / 9** route with **0 DRC**; routed WL **0.2% to 7.4% shorter** than with ORFS's own placement |
 | **5** | HPWL vs routed wirelength, 951 routed runs of 16 designs (NS3K + Innovus) | same order at **≥ 2%** HPWL difference; a coin flip below 0.25% |
@@ -230,8 +231,8 @@ cannot read its generated memory macro. Attar's placements are not timing-driven
 
 ## Benchmarks
 
-The zoo is built locally from public benchmarks by `tools/distill_benchmarks.py` and the ORFS tools. Each reader hands
-over only the facts its format has. **193 designs in 17 suites, in two modes** (`attar.load('<mode>/<suite>/<design>')`).
+The zoo is distilled from public benchmarks, ORFS runs and Innovus runs on i3dPDK_NS3K, and published on the
+Hugging Face Hub. Each reader hands over only the facts its format has. **193 designs in 17 suites, in two modes** (`attar.load('<mode>/<suite>/<design>')`).
 
 <details open>
 <summary><b><code>after_fp</code>: placement problems (138 designs, 11 suites)</b></summary>

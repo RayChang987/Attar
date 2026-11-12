@@ -219,7 +219,7 @@ Tech Profile 是一小組張量，只保留算代理指標必需的參數；線�
 
 Floorplanning benchmark 是 block 層級。硬模組直接放進 Core 層（每個 block 是一顆未擺放的 macro）；軟模組只有面積和長寬比範圍，形狀是待決定的答案而不是事實，所以存成 `soft_area`、`soft_aspect` 兩個陣列，不宣稱 `cell_geometry`。
 
-**現況（2026-11-09，`tools/distill_benchmarks.py`，共 125 個設計）**
+**現況（2026-11-09，共 125 個設計）**
 
 | zoo suite | 讀取器 | 設計數 | 有的事實 | 一載入就能做 |
 | --- | --- | --- | --- | --- |

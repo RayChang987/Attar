@@ -1,5 +1,5 @@
-"""Front-end readers: each hands over only the facts its format has (spec 5.1). Uses the zoo built by
-tools/distill_benchmarks.py; a missing design skips its test."""
+"""Front-end readers: each hands over only the facts its format has (spec 5.1). Uses the local zoo; a missing design
+skips its test."""
 import unittest
 
 import torch

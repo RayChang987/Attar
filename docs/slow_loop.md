@@ -12,12 +12,11 @@ works the same way; gf12's is not in it, the PDK is proprietary).
 ```bash
 tools/orfs_run_to_gp.sh <key>                # ORFS up to 3_3_place_gp: orfs_runs/<design>_base, orfs_runs/<platform>/<design>_base
 tools/orfs_run_baseline.sh <design>          # the full flow (the baseline to compare against)
-python tools/distill_orfs.py <key>           # 3_3 -> zoo/after_fp/orfs_<platform>/<design> (a placement problem)
-python tools/distill_orfs.py <key> --stage 2_1_floorplan   # 2_1 -> zoo/before_fp/orfs_<platform>/<design> (a floorplan problem)
 ```
 
-Each stage's DEF stays in `orfs_runs/rt/<key>/<stage>.def`: it is the source of the distillation. `--reuse` distills
-an existing one again without docker.
+Each stage's DEF stays in `orfs_runs/rt/<key>/<stage>.def`. The zoo's ORFS designs are distilled from it
+(`attar.distill`): 3_3 gives `zoo/after_fp/orfs_<platform>/<design>` (a placement problem), 2_1
+`zoo/before_fp/orfs_<platform>/<design>` (a floorplan problem).
 
 **Designs ported to ASAP7.** `python tools/orfs_port_asap7.py` writes ASAP7 configs for nangate45 designs that ORFS
 has no ASAP7 config of (ariane133/136, black_parrot, bp_be_top, bp_fe_top, bp_multi_top, bp_quad, dynamic_node,
