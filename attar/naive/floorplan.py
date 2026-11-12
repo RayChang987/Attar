@@ -12,7 +12,9 @@ place_macros  Mixed-size global placement (macros move with the cells, attar.nai
               halo between macros and to the core edge. Legalizers: 'sweep' (sweep line from the center out, keeps
               the GP order), 'push' (all pairs at once, pushed apart in parallel), 'auto' (both, the better one).
               Macros still too close go, largest first, to the nearest free spot of an occupancy grid (2D prefix
-              sums give every free position at once). Then frozen.
+              sums give every free position at once). Then frozen. legalizer='lp': constraint graphs + LP
+              (attar/naive/macro_lp.py).
+bstar         (place_macros(packing=True)) B*-tree packing + annealing, block-level designs: attar/naive/bstar.py.
 floorplan     make_die (if a utilization is given), then whatever is missing: IO pins in name order, macros, a quick
               placement, IO pins again next to the cells they connect to; the cells end unplaced.
 All write their answer into the Design (floorplan.die / rows / floorplan.io / floorplan.macros become facts).
@@ -219,6 +221,20 @@ def _sweep_legalize(p, size, lo, hi, halo, sw, hb, x0, y0):
     return py, fy, 'y'
 
 
+def _overlapping_pairs(p, size, halo=0.0, chunk=2048):
+    """The number of overlapping pairs (boxes grown by halo / 2 on each side), in blocks of rows: memory O(chunk n)."""
+    c = p + size / 2
+    n = len(p)
+    total = 0
+    for i in range(0, n, chunk):
+        ci, si = c[i:i + chunk], size[i:i + chunk]
+        ov = ((si[:, None] + size[None]) / 2 + halo - (ci[:, None] - c[None]).abs() > 1e-6).all(2)
+        j = torch.arange(n, device=p.device)
+        ov &= j[None] > torch.arange(i, i + len(ci), device=p.device)[:, None]       # each pair once
+        total += int(ov.sum())
+    return total
+
+
 def _overlapping(p, size, halo=0.0):
     """Macros overlapping another one (boxes grown by halo / 2 on each side)."""
     c = p + size / 2
@@ -272,12 +288,23 @@ def _grid_place(p, size, todo, lo, hi, halo, gx, gy, max_cells=2048):
     return p, failed
 
 
-def place_macros(d, halo=None, target_density=0.9, legalizer='auto', verbose=True, **gp_args):
+def place_macros(d, halo=None, target_density=0.9, legalizer='auto', packing=False, packing_args=None, verbose=True,
+                 **gp_args):
     """Place the macros of d: mixed-size global placement, then macro legalization (halo between macros and to the
     core edge) on the macro grid (Design.macro_grid: pins on their routing tracks), frozen. The standard cells keep their mixed-size positions; run
     attar.naive.global_place afterwards for a placement around the fixed macros.
     legalizer: 'sweep' (sweep line from the center out, keeps the GP order), 'push' (parallel pairwise push),
-    'auto' (both; fewer overlaps, then lower HPWL with the cells at their mixed-size positions)."""
+    'lp' (the pair directions of the better of sweep / push, then positions by linear programming, as close to the
+    GP as the constraint graphs allow: attar/naive/macro_lp.py), 'auto' (= 'lp').
+    'lp' never leaves overlaps; it fits the macros into the core when it can, and otherwise lets them stick out by as
+    little as it found (res['fits_outline'], res['outside_core']). sweep and push stay in the core and may leave
+    overlaps (res['overlapping_pairs']).
+    packing=True: no GP; the macros are packed by a B*-tree and simulated annealing (attar/naive/bstar.py): into the
+    core first, then for HPWL. Only for block-level designs (no rows, nothing movable but the macros). Never
+    overlapping; sticks out of the core when it cannot fit. packing_args: moves (per macro and phase, default 200),
+    seed."""
+    if packing:
+        return _pack_macros(d, halo=halo, verbose=verbose, **(packing_args or {}))
     d.require('macro_place')
     from .gp import global_place
     t0 = time.time()
@@ -327,13 +354,25 @@ def place_macros(d, halo=None, target_density=0.9, legalizer='auto', verbose=Tru
         if method == 'sweep':
             q, _, axis = _sweep_legalize(gp_g.float(), size_g, lo, hi, h, stx, sty, 0.0, 0.0)
             label = 'sweep-%s' % axis
+        elif method == 'lp':
+            # directions from the better of sweep / push (+ free grid spots); positions by LP, towards the GP;
+            # never overlapping, in the core if the constraint graphs could be made to fit
+            base = {m: legalize(m, h) for m in ('sweep', 'push')}
+            bm = min(base, key=lambda m: score(base[m][0], h))
+            from .macro_lp import lp_legalize
+            q, info = lp_legalize(gp_g, size_g, lo, hi, h, stx, sty, q_dir=base[bm][0] - off)
+            fit_info[h] = info
+            label = 'lp on %s (%d flips, %d LP rounds, %.2fs%s)' % (
+                base[bm][1], info['flips'], info['lp_rounds'], info['seconds'],
+                '' if info['fits'] else '; does not fit the core: %s, sticks out by %.4g x %.4g' % ((info['why'],) + info['overflow']))
+            return q + off, label, 0, 0, []
         elif method == 'push':
             q, it = _legalize_macros(gp_g, size_g, movable_m, lo, hi, h)
             q = snap(q, lo, hi)               # then undo what snapping re-created
             q, it2 = _legalize_macros(q, size_g, movable_m, lo, hi, h + max(stx, sty))
             q = snap(q, lo, hi); it += it2; label = 'push'
         else:
-            raise ValueError('legalizer: auto, sweep or push, not %r' % method)
+            raise ValueError('legalizer: auto, sweep, push or lp, not %r' % method)
         bad = _overlapping(q + off, size, h - 1e-3).any(1)
         failed = []
         if bool(bad.any()):                   # dense: nearest free spot on the grid, largest first
@@ -345,13 +384,17 @@ def place_macros(d, halo=None, target_density=0.9, legalizer='auto', verbose=Tru
         q = d.pos.clone(); q[mac] = p
         return int(_overlapping(p, size, h - 1e-3).sum()) // 2, float(d.hpwl(q))
 
-    # a halo larger than the base channel (given by the caller) is halved until every pair keeps it
+    methods = ('lp',) if legalizer == 'auto' else (legalizer,)
+    fit_info = {}
+    # a halo larger than the base channel (given by the caller) is halved until every pair keeps it (and, for 'lp',
+    # until the macros fit the core)
     base = min(halo, max(2 * hb, 4 * sw)) if d.row_h is not None else halo
     h = halo
     while True:
-        tried = {m: legalize(m, h) for m in (('sweep', 'push') if legalizer == 'auto' else (legalizer,))}
+        tried = {m: legalize(m, h) for m in methods}
         best = min(tried, key=lambda m: score(tried[m][0], h))
-        if score(tried[best][0], h)[0] == 0 or h <= base + 1e-9:
+        ok = score(tried[best][0], h)[0] == 0 and (best != 'lp' or fit_info[h]['fits'])
+        if ok or h <= base + 1e-9:
             break
         h = max(base, h / 2)
     res_halo = h
@@ -361,15 +404,88 @@ def place_macros(d, halo=None, target_density=0.9, legalizer='auto', verbose=Tru
     it2 = 0
     pos = d.pos.clone(); pos[mac] = p
     d._pos = pos
-    d.fix_macros('naive:place_macros')
+    outside = int(((p < core[:2] - 1e-3) | (p + size > core[2:] + 1e-3)).any(1).sum())
+    d.fix_macros('naive:place_macros' + (' (%d stick out of the core)' % outside if outside else ''))
     ov = _overlapping(p, size)
     res = {'macros': len(mac), 'legalizer': how, 'halo': res_halo, 'gp_iterations': gp['iterations'], 'legalize_iterations': it + it2,
            'displacement': float((p - mixed_pos).abs().sum(1).mean()),
-           'grid': d.macro_grid_source, 'grid_placed': moved, 'no_spot': len(failed), 'overlapping_pairs': int(ov.sum()) // 2, 'seconds': time.time() - t0}
+           'grid': d.macro_grid_source, 'grid_placed': moved, 'no_spot': len(failed), 'overlapping_pairs': int(ov.sum()) // 2,
+           'outside_core': outside, 'fits_outline': outside == 0, 'seconds': time.time() - t0}
     if verbose:
-        print('  macros: %d placed (mixed-size GP %d it, %s legalization, mean move %.3g%s), %d overlapping pairs, %.2fs'
+        print('  macros: %d placed (mixed-size GP %d it, %s legalization, mean move %.3g%s), %d overlapping pairs, '
+              '%s, %.2fs'
               % (len(mac), gp['iterations'], how, res['displacement'], ', %d to free grid spots' % moved if moved else '',
-                 res['overlapping_pairs'], res['seconds']))
+                 res['overlapping_pairs'], '%d outside the core' % outside if outside else 'all in the core', res['seconds']))
+    return res
+
+
+def _pack_macros(d, halo=None, moves=200, seed=0, verbose=True):
+    """place_macros(packing=True): B*-tree packing of the macros in the core (attar.naive.bstar)."""
+    import numpy as np
+    from .bstar import anneal
+    if 'rows' in d.facts:
+        raise ValueError("place_macros(packing=True) is for block-level floorplans; %s has rows (%s): pack without "
+                         "packing (GP + LP legalization)" % (d.manifest.get('design'), d.facts['rows']))
+    d.require('macro_place')
+    t0 = time.time()
+    mac = d.macros
+    if len(mac) == 0:
+        d.fix_macros('naive:place_macros (no macros)')
+        return {'macros': 0}
+    if 'floorplan.macros' in d.facts:
+        d.release_macros()
+    others = d.movable.clone(); others[mac] = False
+    if bool(others.any()):
+        raise ValueError('place_macros(packing=True): %d movable cells are not macros; packing places macros only'
+                         % int(others.sum()))
+    h = float(halo or 0.0)
+    core = d.core_box[0].tolist()
+    step, off = d.macro_grid(mac)
+    st = step.double().cpu().numpy(); offn = off.double().cpu().numpy()
+    size = d.size[mac].double().cpu().numpy()
+    size_g = size + offn
+    first = lambda v, s: math.ceil(v / s - 1e-6) * s
+    lo = np.array([first(core[0] + h, st[0]), first(core[1] + h, st[1])])
+    hi = np.array(core[2:]) - h
+    k = np.ceil((size_g + h) / st - 1e-6).astype(np.int64)
+    ub = np.floor((hi - lo - size_g) / st + 1e-6).astype(np.int64)
+    width = int(np.floor((hi[0] - lo[0]) / st[0] + 1e-6))
+    # HPWL on the CPU: pins of the nets that count, in net order; macro pins move with their macro, the rest are fixed
+    keep = d.n_mask[d.p_net]
+    p_net = d.p_net[keep].cpu().numpy(); p_cell = d.p_cell[keep]
+    loc = torch.full((len(d.size),), -1, dtype=torch.long, device=d.device); loc[mac] = torch.arange(len(mac), device=d.device)
+    blk = loc[p_cell].cpu().numpy()
+    rel = (d.size[p_cell] / 2 + d.pin_off[keep]).double().cpu().numpy()        # from the cell's lower-left
+    fixed = (d.pos[p_cell].double().cpu().numpy() + rel)
+    starts = np.flatnonzero(np.r_[True, p_net[1:] != p_net[:-1]])
+    w = d.n_weight.double().cpu().numpy()[p_net[starts]]
+    mv = blk >= 0; b = blk[mv]; relm = rel[mv]
+
+    def lower_left(x, y):
+        return np.stack([lo[0] + x * st[0], lo[1] + y * st[1]], 1) + offn
+
+    def hpwl(x, y):
+        p = lower_left(x, y)
+        pin = fixed.copy()
+        pin[mv] = p[b] + relm
+        span = (np.maximum.reduceat(pin, starts) - np.minimum.reduceat(pin, starts)).sum(1)
+        return float((span * w).sum())
+
+    x, y, info = anneal(k[:, 0], k[:, 1], ub[:, 0], ub[:, 1], width, hpwl=hpwl, moves=moves, seed=seed, verbose=verbose)
+    p = torch.as_tensor(lower_left(x, y), device=d.device, dtype=d.pos.dtype)
+    pos = d.pos.clone(); pos[mac] = p
+    d._pos = pos
+    sz = d.size[mac]
+    cb = d.core_box[0]
+    outside = int(((p < cb[:2] - 1e-3) | (p + sz > cb[2:] + 1e-3)).any(1).sum())
+    d.fix_macros('naive:place_macros(packing)' + (' (%d stick out of the core)' % outside if outside else ''))
+    res = {'macros': len(mac), 'legalizer': 'b*-tree packing', 'halo': h, 'moves': info['moves'],
+           'overlapping_pairs': int(_overlapping(p, sz).sum()) // 2, 'outside_core': outside,
+           'fits_outline': outside == 0, 'hpwl': float(d.hpwl(d.pos)), 'seconds': time.time() - t0}
+    if verbose:
+        print('  macros: %d packed (b*-tree), %d overlapping pairs, %s, HPWL %.4g, %.2fs'
+              % (len(mac), res['overlapping_pairs'], '%d outside the core' % outside if outside else 'all in the core',
+                 res['hpwl'], res['seconds']))
     return res
 
 
@@ -435,11 +551,13 @@ def make_die(d, utilization, aspect_ratio=1.0, verbose=True):
             'released': released}
 
 
-def floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None, verbose=True):
+def floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None, packing=False, packing_args=None,
+              verbose=True):
     """Make the floorplan of d: a new die if `utilization` is given, then place what is missing (IO pins, macros).
     IO pins first go in name order; after a quick placement of the cells (the mixed-size GP of the macro placer, or a
     coarse GP when there are no macros to place) they move next to the cells they connect to. The cells end
-    unplaced: the floorplan is the question for attar.naive.place."""
+    unplaced: the floorplan is the question for attar.naive.place.
+    packing=True: macros by B*-tree packing instead of GP + LP legalization (block-level designs; see place_macros)."""
     from .gp import global_place
     t0 = time.time()
     res = {}
@@ -454,7 +572,7 @@ def floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None, v
         place_io(d, mode='order', pitch=io_pitch, verbose=False)
     gp_done = False
     if need_mac:
-        res['macros'] = place_macros(d, halo=halo, verbose=verbose)
+        res['macros'] = place_macros(d, halo=halo, packing=packing, packing_args=packing_args, verbose=verbose)
         gp_done = res['macros']['macros'] > 0
     if need_io:
         if not gp_done:

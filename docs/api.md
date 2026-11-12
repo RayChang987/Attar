@@ -24,7 +24,8 @@ environment variables.
 | `status(show=True)` | facts, solution state, capabilities, what an ORFS hand-off needs |
 | `capabilities()`, `missing(cap)`, `require(cap)`, `has(fact)`, `tier()` | facts and what follows from them |
 | `place(target_density=None, macro_halo=0, **kw)` | `naive.place`: global placement + legalization (default density: the source's own, else 0.9) |
-| `floorplan(utilization=None, aspect_ratio=1.0, **kw)` | `naive.floorplan`, for `before_fp` problems (see below) |
+| `floorplan(utilization=None, aspect_ratio=1.0, packing=False, **kw)` | `naive.floorplan`, for `before_fp` problems (see below) |
+| `floorplan_legal(pos=None)` | `(legal, problems)`: macros in their region and apart, IO pins in the die, all placed; checked from the positions on every call, not stored |
 | `plot(path=None, theme='light', dpi=150, **kw)` | die, core, rows, cells (an area-density image above 30k cells), macros, IO pins by direction; warm light theme by default |
 | `export(out_def)` | write the design as a DEF: its source frame (PDN, pins, fixed cells, verbatim) with the cells and signal nets from the IR |
 | `handoff_command(out_def, run_dir=None)` | the command that hands an exported DEF to ORFS |
@@ -65,9 +66,9 @@ and handed to a flow that draws the power grid):
 
 | function | key arguments |
 | --- | --- |
-| `floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None)` | |
+| `floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None, packing=False, packing_args=None)` | |
 | `make_die(d, utilization, aspect_ratio=1.0)` | |
 | `place_io(d, pitch=None, margin=None, mode='auto' \| 'nets' \| 'order')` | |
-| `place_macros(d, halo=None, target_density=0.9, legalizer='auto' \| 'sweep' \| 'push')` | |
+| `place_macros(d, halo=None, target_density=0.9, legalizer='auto' \| 'sweep' \| 'push' \| 'lp', packing=False, packing_args=None)` | default: GP, then `lp` (= `auto`): constraint graphs from the better of sweep / push, positions by linear programming (HiGHS, scipy); never overlapping, in the core when it can (`res['fits_outline']`, `res['outside_core']`). `packing=True`: no GP, B*-tree packing + annealing (into the core, then HPWL), block-level designs only (no rows); `packing_args`: `moves` (per macro and phase, default 200), `seed` |
 
 Each engine checks its facts first (`MissingFacts` otherwise) and writes its answer back into the design.

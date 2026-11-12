@@ -165,5 +165,5 @@ For `before_fp` problems:
 | --- | --- |
 | `make_die` | core area = cell area / utilization (+ macros), on the rows' site grid, rows regenerated |
 | `place_io` | die boundary as one line; targets from net centroids (or name order); parallel isotonic packing |
-| `place_macros` | mixed-size electrostatic GP, then macro legalization on the *macro grid* (positions that put macro pins on routing tracks): sweep line from the center out, or parallel pairwise push, keeping the better; leftovers to the nearest free grid spot |
+| `place_macros` | mixed-size electrostatic GP, then macro legalization on the *macro grid* (positions that put macro pins on routing tracks): sweep line from the center out, or parallel pairwise push, keeping the better; leftovers to the nearest free grid spot. With scipy, the pair directions of that result become constraint graphs and an LP places the macros as close to the GP as they allow: never overlapping, inside the core when the graphs can be made to fit, else sticking out by as little as found (`d.plot()` and `d.status()` mark the floorplan legal or not legal, `d.floorplan_legal()`). `packing=True`, for block-level designs (no rows): no GP; the macros are packed by a B*-tree and simulated annealing, first into the core, then for HPWL among packings that fit |
 | `floorplan` | `make_die` + `place_io` + `place_macros` |

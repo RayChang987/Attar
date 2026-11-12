@@ -104,6 +104,66 @@ class RailTest(unittest.TestCase):
 
 
 class FloorplanTest(unittest.TestCase):
+    def test_lp_macro_legalizer_removes_overlaps_left_by_push(self):
+        from attar import naive
+        from attar.naive.floorplan import _overlapping
+        d = need('before_fp/gsrc_hard/n50')            # at 0.8, push leaves 5 overlapping pairs here
+        naive.make_die(d, 0.8, verbose=False)
+        naive.place_io(d, mode='order', verbose=False)
+        r = naive.place_macros(d, legalizer='lp', verbose=False)
+        mac = d.macros; p = d.pos[mac]; core = d.core_box[0]
+        self.assertTrue(r['legalizer'].startswith('lp on'), r['legalizer'])
+        self.assertEqual(int(_overlapping(p, d.size[mac]).sum()), 0)
+        self.assertTrue(bool(((p >= core[:2] - 1e-3) & (p + d.size[mac] <= core[2:] + 1e-3)).all()))
+
+    def test_macro_placement_never_overlaps_and_floorplan_legal_says_when_it_does_not_fit(self):
+        from attar import naive
+        from attar.naive.floorplan import _overlapping
+        for packing in (False, True):
+            for util in (0.85, 0.97):                 # 0.97: blocks this size cannot all fit
+                d = need('before_fp/gsrc_hard/n30')
+                self.assertEqual(d.floorplan_legal(), (False, ['no die']))
+                r = d.floorplan(utilization=util, packing=packing, packing_args={'moves': 50}, verbose=False)['macros']
+                mac = d.macros; p = d.pos[mac]; core = d.core_box[0]
+                self.assertEqual(int(_overlapping(p, d.size[mac]).sum()), 0)
+                out = int(((p < core[:2] - 1e-3) | (p + d.size[mac] > core[2:] + 1e-3)).any(1).sum())
+                self.assertEqual((r['outside_core'], r['fits_outline']), (out, out == 0))
+                ok, issues = d.floorplan_legal()
+                self.assertEqual(ok, out == 0, issues)
+                self.assertIn('floorplan', d.status(show=False))
+            self.assertFalse(r['fits_outline'])
+
+    def test_packing_fits_where_gp_and_lp_do_not_and_needs_a_block_level_design(self):
+        from attar import naive
+        d = need('before_fp/gsrc_hard/n30')
+        naive.make_die(d, 0.85, verbose=False)
+        naive.place_io(d, mode='order', verbose=False)
+        r = naive.place_macros(d, packing=True, verbose=False)
+        self.assertTrue(r['fits_outline'])
+        self.assertEqual(r['overlapping_pairs'], 0)
+        self.assertTrue(d.floorplan_legal()[0])
+        with self.assertRaises(ValueError):             # rows: packing is for block-level floorplans
+            naive.place_macros(need('before_fp/orfs_asap7/tinyRocket'), packing=True)
+
+    def test_b_star_tree_packs_without_overlaps(self):
+        import random
+        import numpy as np
+        from attar.naive.bstar import shelf
+        rng = random.Random(1)
+        kx = np.array([rng.randint(1, 9) for _ in range(40)]); ky = np.array([rng.randint(1, 9) for _ in range(40)])
+        t = shelf(kx, ky, 30)
+        for _ in range(300):
+            t2 = t.copy()
+            if (t2.swap(rng) if rng.random() < 0.5 else t2.move(rng)):
+                t = t2
+            x, y = t.pack(kx, ky)
+            sep = (x[:, None] >= x[None] + kx[None]) | (x[None] >= x[:, None] + kx[:, None]) | \
+                  (y[:, None] >= y[None] + ky[None]) | (y[None] >= y[:, None] + ky[:, None])
+            np.fill_diagonal(sep, True)
+            self.assertTrue(sep.all())
+            seen = sorted(int(v) for v in t.blk)
+            self.assertEqual(seen, list(range(40)))
+
     def test_io_placement_unlocks_global_placement(self):
         from attar import naive
         try:

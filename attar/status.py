@@ -105,6 +105,9 @@ def status(d, color=True):
         L.append('  %s %-*s  all movable cells placed  (snapshots: %s)' % (OK, w, 'placement', snaps))
     else:
         L.append('  %s %-*s  %d movable cells unplaced  (snapshots: %s)' % (NO, w, 'placement', n_unplaced, snaps))
+    fp_ok, fp_issues = d.floorplan_legal()
+    L.append('  %s %-*s  %s' % (OK if fp_ok else NO, w, 'floorplan', 'legal (checked now: macros in place and apart, IO '
+                                 'pins in the die)' if fp_ok else 'not legal: ' + '; '.join(fp_issues)))
     L += ['', 'Capabilities']
     cw = max(len(DESCRIBE.get(c, c)) for c in CAPABILITIES)
     for c, req in CAPABILITIES.items():
@@ -118,7 +121,9 @@ def status(d, color=True):
     stage = m.get('orfs', {}).get('stage')
     ex = 'd.export("out.def")'
     if t == 'A':
-        if 'placement' in have or stage == '2_1_floorplan':      # 2_1: the floorplan alone goes to ORFS
+        if stage == '2_1_floorplan' and not fp_ok:
+            L.append('  -> the floorplan is not legal (%s): ORFS would not take it' % '; '.join(fp_issues))
+        elif 'placement' in have or stage == '2_1_floorplan':      # 2_1: the floorplan alone goes to ORFS
             L.append('  -> ready: %s, then  %s' % (ex, handoff_command(d, 'out.def')))
         else:
             L.append('  -> only a placement is missing: place the design (or restore a snapshot), then export and hand off')

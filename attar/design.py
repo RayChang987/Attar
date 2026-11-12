@@ -169,10 +169,63 @@ class Design:
 
     def handoff_command(self, out_def, run_dir=None):
         """Command that hands an exported DEF to an ORFS run of this design (run_dir: its WORK_HOME) and finishes the
-        flow there."""
+        flow there. A floorplan goes to ORFS only when it is legal (floorplan_legal)."""
         from .status import handoff_command
-        self.require('orfs_floorplan_handoff' if self.manifest.get('orfs', {}).get('stage') == '2_1_floorplan' else 'orfs_handoff')
+        fp = self.manifest.get('orfs', {}).get('stage') == '2_1_floorplan'
+        self.require('orfs_floorplan_handoff' if fp else 'orfs_handoff')
+        if fp:
+            ok, issues = self.floorplan_legal()
+            if not ok:
+                raise ValueError('%s: the floorplan is not legal (%s); ORFS would not take it'
+                                 % (self.manifest.get('design'), '; '.join(issues)))
         return handoff_command(self, out_def, run_dir)
+
+    def floorplan_check(self, pos=None):
+        """What is wrong with the floorplan, from the positions now (pos: these instead): -> (problems, a bool mask
+        over the cells of the macros outside their region). Nothing is stored: the answer follows the positions.
+        A macro's region is the core (the rows' outline) when an Attar engine placed the macros, the die when the
+        source did: a flow may put macros where there are no rows (the IR keeps no DEF core area)."""
+        problems = []
+        N = len(self.size)
+        outside = torch.zeros(N, dtype=torch.bool, device=self.device)
+        if 'floorplan.die' not in self.facts:
+            return ['no die'], outside
+        p = self.pos if pos is None else pos
+        mac = self.macros
+        if len(mac):
+            if 'floorplan.macros' not in self.facts and pos is None:
+                problems.append('macros not placed')
+            else:
+                ours = str(self.facts.get('floorplan.macros', 'naive')).startswith('naive') or pos is not None
+                cb = (self.core_box if ours else self.die_box)[self.cell_die[mac]]
+                q, s = p[mac], self.size[mac]
+                o = ((q < cb[:, :2] - 1e-3) | (q + s > cb[:, 2:] + 1e-3)).any(1)
+                outside[mac] = o
+                if bool(o.any()):
+                    k = int(o.sum()); problems.append('%d macro%s outside the %s' % (k, 's' * (k > 1), 'core' if ours else 'die'))
+                from .naive.floorplan import _overlapping_pairs
+                ov = 0
+                for die in torch.unique(self.cell_die[mac]).tolist():
+                    m = self.cell_die[mac] == die
+                    ov += _overlapping_pairs(q[m], s[m])
+                if ov:
+                    problems.append('%d overlapping macro pair%s' % (ov, 's' * (ov > 1)))
+        if self.io is not None and len(self.io):
+            if 'floorplan.io' not in self.facts and pos is None:
+                problems.append('IO pins not placed')
+            else:
+                db = self.die_box[self.cell_die[self.io]]
+                q = p[self.io]
+                k = int(((q < db[:, :2] - 1e-3) | (q > db[:, 2:] + 1e-3)).any(1).sum())
+                if k:
+                    problems.append('%d IO pin%s outside the die' % (k, 's' * (k > 1)))
+        return problems, outside
+
+    def floorplan_legal(self, pos=None):
+        """(legal, problems): macros inside their core and apart, IO pins inside the die, all of them placed. Checked
+        from the positions each time it is called (not a stored state)."""
+        problems, _ = self.floorplan_check(pos)
+        return not problems, problems
 
     def plot(self, path=None, **kw):
         """Draw die, core, rows, cells, macros and IO pins (attar.viz.plot); saved to path if given."""
