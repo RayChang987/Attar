@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Figures for README.md (docs/images):
   proxy_agreement.png               how often routed WL moves the same way as HPWL, by HPWL gap (pa_pdn, spec 7.1)
-  gallery/*.png                     designs placed by attar.naive (run with --gallery; needs the zoo and a GPU)"""
+  gallery/*.png                     designs placed by attar.naive (run with --gallery [name ...]: all, or those
+                                    figures, e.g. --gallery bp_quad; needs the zoo and a GPU)"""
 import io
 import contextlib
 import os
@@ -51,24 +52,26 @@ def proxy_agreement(mode):
     print('wrote', out)
 
 
-def gallery():
+def gallery(only=()):
     sys.path.insert(0, ROOT)
     import time
     import attar
-    jobs = [('after_fp/stress/bp_quad', 'bp_quad.png', 'place'), ('after_fp/ns3k/ariane136', 'ariane136.png', 'place'),
-            ('after_fp/ispd2005/bigblue4', 'bigblue4.png', 'place')]
-    for name, fn, how in jobs:
+    # (zoo name, file, what runs, its arguments): two floorplan problems (the die for a block area, IO pins and blocks
+    # by B*-tree packing; the cva6 placement comes from tools/make_demo_gif.py) and a placement problem
+    jobs = [('before_fp/gsrc_hard/n300', 'fp_n300.png', 'floorplan', dict(utilization=0.85, packing=True)),
+            ('before_fp/mcnc/ami49', 'fp_ami49.png', 'floorplan', dict(utilization=0.80, packing=True)),
+            ('after_fp/ns3k_pl_u80/ariane136', 'ariane136.png', 'place', {})]
+    for name, fn, how, kw in jobs:
+        if only and fn[:-4] not in only:
+            continue
         d = attar.load(name, 'cuda'); t = time.time()
         with contextlib.redirect_stdout(io.StringIO()):
-            if how == 'scratch':                         # the die, IO pins, macros and cells from scratch
-                d.floorplan(utilization=float(d.utilization()[0])); d.place()
-            elif how == 'floorplan':
-                d.floorplan()
+            if how == 'floorplan':
+                d.floorplan(**kw)
             else:
-                d.unplace(); d.place()
+                d.unplace(); d.place(**kw)
         sec = time.time() - t
-        title = '%s    %s in %.0f s' % (name, {'scratch': 'die, IO, macros, cells from scratch', 'floorplan': 'floorplan',
-                                               'place': 'global placement + legalization'}[how], sec)
+        title = '%s    %s in %.1f s' % (name, {'floorplan': 'floorplan', 'place': 'placement'}[how], sec)
         os.makedirs(os.path.join(IMG, 'gallery'), exist_ok=True)
         d.plot(os.path.join(IMG, 'gallery', fn), title=title, dpi=160)
         print('wrote', fn, title)
@@ -79,4 +82,4 @@ if __name__ == '__main__':
     os.makedirs(IMG, exist_ok=True)
     proxy_agreement('light')
     if '--gallery' in sys.argv:
-        gallery()
+        gallery(sys.argv[sys.argv.index('--gallery') + 1:])

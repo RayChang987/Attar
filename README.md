@@ -135,23 +135,24 @@ More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [slow 
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/gallery/bigblue4.png" alt="ISPD 2005 bigblue4 placed by attar.naive"></td>
-<td width="50%"><img src="docs/images/gallery/bp_quad.png" alt="bp_quad placed by attar.naive"></td>
+<td width="50%"><img src="docs/images/gallery/fp_n300.png" alt="GSRC n300 floorplanned by attar.naive with B*-tree packing"></td>
+<td width="50%"><img src="docs/images/gallery/fp_ami49.png" alt="MCNC ami49 floorplanned by attar.naive with B*-tree packing"></td>
 </tr>
 <tr>
-<td><sub><b>ISPD 2005 bigblue4</b>: 2.18M cells, 8170 fixed macros. Global placement and legalization in 48 s.</sub></td>
-<td><sub><b>bp_quad</b> (4x BlackParrot, 3nm-class NS3K): 1.18M cells around 220 macros in 82 s, legal including
-power rails and the PDN's via metal.</sub></td>
+<td><sub><b>GSRC n300</b> (floorplan mode): 300 hard blocks and 569 IO pins, no die given. Attar sizes one for 85% block
+area and packs the blocks (B*-tree) in 46 s: legal, HPWL 565k.</sub></td>
+<td><sub><b>MCNC ami49</b> (floorplan mode): 49 blocks of very different sizes in a die sized for 80% block area,
+packed in 2.3 s: legal, HPWL 948k.</sub></td>
 </tr>
 <tr>
 <td><img src="docs/images/gallery/cva6.png" alt="cva6 placed by attar.naive"></td>
-<td><img src="docs/images/gallery/ariane136.png" alt="ariane136 on NS3K placed by attar.naive"></td>
+<td><img src="docs/images/gallery/ariane136.png" alt="ariane136 on NS3K at 80% density placed by attar.naive"></td>
 </tr>
 <tr>
-<td><sub><b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs in 2.3 s. ORFS routes it with
+<td><sub><b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs in 2.5 s. ORFS routes it with
 0 DRC and 7.4% less wire than its own placement.</sub></td>
-<td><sub><b>ariane136</b> (NS3K): 170k cells around 136 SRAMs in 5 s, legal including power rails and the PDN.
-Innovus's floorplan cuts the rows only at the macros.</sub></td>
+<td><sub><b>ariane136</b> (NS3K, Innovus floorplan at 80% std-cell density): 170k cells around 136 SRAMs in 5.2 s,
+legal including power rails and the PDN; OpenROAD's <code>check_placement</code> and global routing pass.</sub></td>
 </tr>
 </table>
 
