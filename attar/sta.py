@@ -259,15 +259,24 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
         ctot = torch.zeros(n_nets, V, device=dev).index_add_(0, net_of, cap) + c * length[:, None]
         out = torch.where(plan['pin_big'][:, None], r * dd[:, None] * ctot[net_of] / 2, out)
         pi[big] = torch.stack([ctot[big], torch.zeros_like(ctot[big]), torch.zeros_like(ctot[big])], -1)
+    if plan.get('big_buf') is not None:              # large data nets: their exact trees (attar.steiner_big, host)
+        nets_b, pins_b, elm_b, pi_b, len_b = plan['big_buf']
+        out[pins_b] = elm_b
+        pi[nets_b] = pi_b
+        tlen[nets_b] = len_b
     return out, pi, tlen
 
 
 class Timer:
     """Build once per design (graph, levels, constraints); run() times a placement."""
 
-    def __init__(self, d, parasitics='placement'):
+    def __init__(self, d, parasitics='placement', exact_trees=True):
+        """exact_trees: every net that can carry a data arrival gets OpenROAD's tree on the host (attar.steiner_big,
+        an exact port including its tie-breaks); False: the GPU kernel for nets up to 256 pins (faster; its ties
+        differ from OpenROAD's on a few nets in 10^4), the host for larger ones."""
         d.require('sta')
         self.d = d
+        self.exact_trees = exact_trees
         self.dev = dev = d.device
         self.parasitics = parasitics
         t, _ = st.load(os.path.join(d.path, 'timing.safetensors'))
@@ -389,6 +398,7 @@ class Timer:
         lev, dropped = self._levelize(P, g_fr, g_to)
         self.n_cycle_edges = dropped
         self.level = lev
+        self._g_edges = (g_fr, g_to, to[launch])          # data graph and launch pins (structural reachability)
         nl = lev[n_to[nk]]; cl = lev[to[ck]]
         self.n_lev = T(nl); self.c_lev = T(cl)
         self.max_level = int(max(nl.max(initial=0), cl.max(initial=0)))
@@ -659,7 +669,61 @@ class Timer:
         drv = torch.as_tensor(self.net_driver, device=self.dev)
         drv_local = torch.where(drv >= 0, drv - ev.ptr[:-1], torch.full_like(drv, -1))
         self.plan = tree_plan(ev.ptr, ev.deg, drv_local)
+        self._big = None
+        big = self.plan['big']
+        from . import steiner_big
+        if (big is not None or self.exact_trees) and steiner_big.available():
+            # nets above the GPU buckets: OpenROAD's tree on the host each run (exact), into static buffers; only
+            # those that can carry a data arrival (clock nets are ideal, the rest keep the lumped model: unused)
+            ptr, deg = ev.ptr.cpu().numpy(), ev.deg.cpu().numpy()
+            reach = self._reachable()
+            if self.exact_trees:
+                bn = np.nonzero((drv_local.cpu().numpy() >= 0) & (deg >= 2))[0]
+            else:
+                bn = big.cpu().numpy()
+            bn = bn[reach[self.net_driver[bn]]]
+            big = torch.as_tensor(bn, device=self.dev)
+        if big is not None and len(big) and steiner_big.available():
+            cnt = deg[bn]
+            pins = np.repeat(ptr[bn] - np.concatenate([[0], np.cumsum(cnt)[:-1]]), cnt) + np.arange(int(cnt.sum()))
+            caps = torch.cat([self.pin_cap, self.pin_cap_min], 1).cpu().numpy()
+            pins_t = torch.as_tensor(pins, device=self.dev)
+            self._big = {'ptr': np.concatenate([[0], np.cumsum(deg[bn])]), 'drv': drv_local.cpu().numpy()[bn],
+                         'cap': caps[pins], 'rv': self.pin_rvia.cpu().numpy()[pins], 'cell': ev.cell[pins_t],
+                         'off': ev.off[pins_t]}
+            self.plan['big_buf'] = (big, pins_t, torch.zeros(len(pins), 4, device=self.dev),
+                                    torch.zeros(len(bn), 4, 3, device=self.dev), torch.zeros(len(bn), device=self.dev))
+        elif big is not None and not steiner_big.available():
+            warnings.warn('attar.sta: %d nets above %d pins use a lumped wire model (%s)'
+                          % (len(big), TREE_BUCKETS[-1][1], steiner_big.error()))
         self.big_steiner = ev.deg > M.RMST_MAX_DEGREE
+
+    def _reachable(self):
+        """Pins a data arrival can reach (structural): from launch arcs and constrained inputs over net and
+        combinational arcs, level by level."""
+        g_fr, g_to, seeds = self._g_edges
+        reach = np.zeros(self.P, bool)
+        reach[seeds] = True
+        reach[[p for p, _, _ in self.in_delay]] = True
+        o = np.argsort(self.level[g_fr], kind='stable')
+        g_fr, g_to = g_fr[o], g_to[o]
+        bounds = np.searchsorted(self.level[g_fr], np.arange(int(self.level.max(initial=0)) + 2))
+        for a, b in zip(bounds[:-1], bounds[1:]):
+            if b > a:
+                np.logical_or.at(reach, g_to[a:b], reach[g_fr[a:b]])
+        return reach
+
+    def _big_update(self, pos):
+        """The large nets' parasitics at pos, on the host (attar.steiner_big), into plan['big_buf']."""
+        if self._big is None:
+            return
+        from . import steiner_big
+        b = self._big
+        q = torch.round(((self.d.pos if pos is None else pos)[b['cell']] + b['off']) * self.d.dbu).cpu().numpy()
+        elm, pi, length = steiner_big.pd_rc(q[:, 0], q[:, 1], b['ptr'], b['drv'], b['cap'], b['rv'], self.r_sig,
+                                            self.c_sig, self.d.dbu)
+        _, _, elm_b, pi_b, len_b = self.plan['big_buf']
+        elm_b.copy_(torch.from_numpy(elm)); pi_b.copy_(torch.from_numpy(pi)); len_b.copy_(torch.from_numpy(length))
 
     def steiner(self, p):
         """Wire length of the nets without an estimate-parasitics tree (above the largest bucket, or no driver):
@@ -673,6 +737,8 @@ class Timer:
     def wires(self, pos=None):
         """Placement parasitics: per net the wire capacitance, per net arc the Elmore delay (ps)."""
         p = self.ev._pins(pos)
+        if not (p.is_cuda and torch.cuda.is_current_stream_capturing()):
+            self._big_update(pos)
         L = self.steiner(p)
         caps = torch.cat([self.pin_cap, self.pin_cap_min], 1)            # rise / fall max, rise / fall min
         elm_pin, self.pi, L = tree_elmore(p, self.plan, self.ev.E, caps, self.r_sig, self.c_sig, L,
@@ -881,6 +947,7 @@ class Timer:
                     self._g_out = self._run_core(self._pos_buf)
                 self._graph = g
             self._pos_buf.copy_(pos)
+            self._big_update(pos)                       # large nets on the host, into the graph's static buffers
             self._graph.replay()
             return TimingResult(self, self._g_out[0].clone(), self._g_out[1].clone())
 
