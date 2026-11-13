@@ -28,9 +28,23 @@ def index(repo=REPO_ID, revision=None):
 
 
 def fetch(*names, root=None, repo=REPO_ID, revision=None):
-    """Download designs ('after_fp/orfs_asap7/aes'), suites ('after_fp/ispd2005') or modes ('before_fp') into the zoo (`root`, default paths.zoo_dir());
-    everything when no name is given. Files already there are not downloaded again. Returns the zoo folder."""
+    """Download designs ('after_fp/orfs_asap7/aes'), suites ('after_fp/ispd2005') or modes ('before_fp') into the zoo (`root`, default paths.zoo_dir()),
+    with the shared cell libraries they reference (libraries/<name>); everything when no name is given. Files already
+    there are not downloaded again. Returns the zoo folder."""
     dest = zoo_dir(root)
     allow = [n.strip('/') + '/*' for n in names] or None
     _hub().snapshot_download(repo, repo_type='dataset', revision=revision, local_dir=dest, allow_patterns=allow)
+    if allow:                      # the shared cell libraries the fetched designs reference (zoo/libraries/<name>)
+        import glob
+        import os
+        need = set()
+        for n in names:
+            for m in glob.glob(os.path.join(dest, n.strip('/'), '**', 'manifest.json'), recursive=True):
+                with open(m) as f:
+                    b = (json.load(f).get('library') or {}).get('bundle')
+                if b and not os.path.exists(os.path.join(dest, 'libraries', b, 'library.safetensors')):
+                    need.add(b)
+        if need:
+            _hub().snapshot_download(repo, repo_type='dataset', revision=revision, local_dir=dest,
+                                     allow_patterns=['libraries/%s/*' % b for b in sorted(need)])
     return dest

@@ -99,6 +99,19 @@ also keeps its source DEF's frame (`frame.def.gz`: PDN, IO pins, fixed cells), s
 complete DEF with no raw file at hand. Bookshelf, YAL and GSRC designs have no cell library behind them, so they do
 not export. `d.status()` shows what a design can do.
 
+## Timing and cell libraries
+
+{n_timing} designs (the ORFS, NS3K and ICCAD 2025 suites) carry timing: Liberty arcs, pin capacitances, the SDC's
+clocks and I/O delays, and wire RC, distilled, so `d.timing()` / `d.timing_report()` run with no .lib or .sdc at hand.
+Their cells come from a shared cell library in `libraries/<name>/` (every cell of the platform corner: all drive
+strengths and threshold-voltage flavors, Liberty tables, LEF geometry, equivalence classes, buffers and inverters, for
+sizing and buffering); cells only one design has (its SRAMs) are in its own `library.safetensors`.
+`attar.load` / `attar.fetch` download the libraries a design references.
+
+| library | cells | equivalence classes | designs | size |
+| --- | ---: | ---: | ---: | ---: |
+{lib_rows}
+
 ## Suites
 
 | suite | designs | largest (cells) | size | contents | source | terms |
@@ -143,12 +156,28 @@ def main(root=None):
     missing = sorted(set(per) - set(SUITES))
     if missing:
         raise SystemExit('describe these suites in SUITES first: %s' % ', '.join(missing))
+    # shared cell libraries (attar.library bundles) the designs reference
+    libraries = {}
+    for lj in sorted(glob.glob(os.path.join(zoo, 'libraries', '*', 'library.json'))):
+        folder = os.path.dirname(lj)
+        with open(lj) as f:
+            meta = json.load(f)
+        users = sorted(k for k, v in designs.items() if 'library' in v['facts']
+                       and json.load(open(os.path.join(zoo, k, 'manifest.json'))).get('library', {}).get('bundle')
+                       == os.path.basename(folder))
+        libraries[os.path.basename(folder)] = {
+            'cells': len(meta['cells']), 'classes': len(meta.get('classes', [])), 'designs': len(users),
+            'sources': [r['name'] for r in meta['sources'].get('lib', [])],
+            'bytes': sum(os.path.getsize(os.path.join(folder, x)) for x in os.listdir(folder))}
     with open(os.path.join(zoo, 'index.json'), 'w') as f:
-        json.dump({'schema': 'attar-zoo-index/1', 'designs': designs}, f, indent=1)
+        json.dump({'schema': 'attar-zoo-index/1', 'designs': designs, 'libraries': libraries}, f, indent=1)
     rows = '\n'.join('| `%s` | %d | %s | %s | %s | %s | %s |' % (s, n, '{:,}'.format(cmax), _mb(b), *SUITES[s])
                      for s, (n, cmax, b) in sorted(per.items()))
+    lib_rows = '\n'.join('| `%s` | %d | %d | %d | %s |' % (k, v['cells'], v['classes'], v['designs'], _mb(v['bytes']))
+                         for k, v in sorted(libraries.items()))
+    n_timing = sum('timing' in v['facts'] for v in designs.values())
     with open(os.path.join(zoo, 'README.md'), 'w') as f:
-        f.write(CARD.format(n=len(designs), k=len(per), rows=rows))
+        f.write(CARD.format(n=len(designs), k=len(per), rows=rows, lib_rows=lib_rows, n_timing=n_timing))
     total = sum(v['bytes'] for v in designs.values())
     print('%d designs in %d suites, %s; wrote index.json and README.md in %s' % (len(designs), len(per), _mb(total), zoo))
 
