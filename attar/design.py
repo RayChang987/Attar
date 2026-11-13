@@ -487,6 +487,17 @@ class Design:
             self._timer = Timer(self)
         return self._timer.run(pos)
 
+    # -- routing congestion ------------------------------------------------------------------------------------------
+    def gr_overflow(self, pos=None, adjustment=None, maps=False):
+        """Global-routing overflow (GROV) at pos (default: the current placement): RUDY demand per gcell edge and
+        direction against OpenROAD's gcell grid and edge capacities (tracks minus what pins, OBS and the PDN block,
+        times 1 - the layer adjustment). Returns {'grov_%': share of gcell edges whose demand exceeds capacity,
+        'grov_h_%', 'grov_v_%', 'overflow_edges', 'edges', 'total_overflow' (tracks), 'max_util', ...}.
+        adjustment overrides the design's layer adjustment; maps=True adds the demand and capacity maps."""
+        self.require('gr_overflow', ignore=('placement',) if pos is not None else ())
+        from .routing import overflow
+        return overflow(self, pos, adjustment=adjustment, maps=maps)
+
     # -- sizing -------------------------------------------------------------------------------------------------------
     def library(self):
         """The design's cell library chain (attar.timing.chain): its local library (macros), then the shared bundle."""

@@ -16,7 +16,8 @@ FACTS = {
     'floorplan.macros': 'macro and fixed-cell (e.g. tap cell) locations',
     'rows': 'placement rows: origin, site width, height, die',
     'constraints': 'fence regions, placement blockages',
-    'routing': 'routing layers, GCell grid and capacities, pin access',
+    'routing': 'what blocks routing capacity: cell pin / OBS shapes and special nets on the routing layers, the routing '
+               'layer range and adjustment (OpenROAD\'s GCell grid and capacities follow)',
     'timing': 'Liberty arcs and pin capacitances, clocks, I/O delays',
     'library': 'a shared cell library (zoo/libraries/<name>): every cell of the platform corner with its Liberty data, LEF '
                'geometry and equivalence classes (sizing, buffering); the design\'s own macros in a local library',
@@ -41,6 +42,7 @@ CAPABILITIES = {
     'global_route': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'routing', 'placement'},
     'sta': {'netlist', 'pin_direction', 'timing'},
     'resize': {'netlist', 'cell_library', 'pin_offsets', 'timing', 'library'},   # sizing / Vt swap within a class
+    'gr_overflow': {'netlist', 'pin_offsets', 'placement', 'floorplan.die', 'tracks', 'routing'},   # GROV (RUDY)
     'export': {'netlist', 'cell_library', 'def_frame'},    # the source DEF's frame + the IR
     'orfs_handoff': {'cell_library', 'def_frame', 'slow_loop', 'floorplan.io', 'floorplan.macros', 'placement'},
     'orfs_floorplan_handoff': {'cell_library', 'def_frame', 'slow_loop', 'floorplan.io', 'floorplan.macros'},   # from ORFS 2_1

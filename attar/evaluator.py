@@ -4,7 +4,7 @@ The Evaluator is the second main object next to Design. Each metric declares the
 follows from what the design has, as for capabilities. Implemented:
   hpwl, star_wirelength, steiner_wirelength (RSMT estimate, see attar/metrics.py), rudy (congestion map),
   density_overflow (ePlace overflow), legality (rows, sites, overlaps; multi-row aware), timing (attar.sta: WNS,
-  TNS, hold, on placement parasitics).
+  TNS, hold, on placement parasitics), gr_overflow (GROV: RUDY demand against OpenROAD's gcell capacities).
 Listed for later: global-route wirelength and overflow, pin access, thermal.
 
 Speed: one HPWL call is ~0.15 ms up to ~1M pins (launch-bound). Exact speed-ups:
@@ -29,7 +29,7 @@ METRICS = {
     'density_overflow': ({'cell_geometry', 'placement', 'floorplan.die'}, True),
     'legality': ({'cell_geometry', 'placement', 'rows'}, True),
     'gr_wirelength': (WL | {'routing'}, False),
-    'gr_overflow': (WL | {'routing'}, False),
+    'gr_overflow': (WL | {'routing', 'tracks', 'floorplan.die'}, True),
     'timing': (WL | {'pin_direction', 'timing'}, True),
     'pin_access': (WL | {'routing'}, False),
     'thermal': ({'cell_geometry', 'placement', 'floorplan.die', 'timing'}, False),
@@ -307,6 +307,8 @@ class Evaluator:
                 out[m] = self.legality(pos)
             elif m == 'timing':
                 out[m] = self.d.timing(pos).summary()
+            elif m == 'gr_overflow':
+                out[m] = self.d.gr_overflow(pos)
         man = self.d.manifest
         out['units'] = 'Bookshelf units' if man.get('units', '').startswith('Bookshelf') else 'um'
         out['fidelity'] = man.get('fidelity')
