@@ -487,6 +487,116 @@ class Design:
             self._timer = Timer(self)
         return self._timer.run(pos)
 
+    # -- sizing -------------------------------------------------------------------------------------------------------
+    def library(self):
+        """The design's cell library chain (attar.timing.chain): its local library (macros), then the shared bundle."""
+        self.require('resize')
+        from .timing import chain
+        return chain(self.path, self.manifest)
+
+    def _lib_cell(self, name):
+        for L in self.library():
+            c = L.cid.get(name)
+            if c is not None and L.a['lc_file'][c] >= 0:
+                return L, c
+        return None, None
+
+    def equivalents(self, cell, dont_use=False):
+        """The masters cell (index or name) can be resized to: its master's equivalence class in the library
+        (drive strengths, threshold-voltage flavors), without the library's dont_use cells unless dont_use=True."""
+        c = self._cell_index(cell)
+        m = self.names['masters'][int(self.raw['c_master'][c])]
+        L, _ = self._lib_cell(m)
+        cl = (L.class_of(m) if L is not None else None) or [m]
+        skip = set() if dont_use or L is None else set(L.meta.get('dont_use', []))
+        return [x for x in cl if x == m or x not in skip]
+
+    def _cell_index(self, cell):
+        if isinstance(cell, str):
+            if not hasattr(self, '_cell_id'):
+                self._cell_id = {n: i for i, n in enumerate(self.names['cells'])}
+            return self._cell_id[cell]
+        return int(cell)
+
+    def _add_master(self, name):
+        """Append a library cell to the design's masters (LEF geometry in dbu, pins sorted by name, as distill)."""
+        L, c = self._lib_cell(name)
+        if L is None or not L.a['lc_lef'][c]:
+            raise KeyError('%s: not a cell with LEF geometry in the design\'s library' % name)
+        a, n = self.raw, self.names
+        q = lambda v: int(round(float(v) * self.dbu))  # noqa: E731
+        ptr = int(L.a['l_pin_ptr'][c])
+        pins = sorted(pn for j, pn in enumerate(L.pins[c]) if L.a['lp_lef'][ptr + j])
+        k_of = {pn: ptr + j for j, pn in enumerate(L.pins[c])}
+        lid = {ln: i for i, ln in enumerate(n.get('layers', []))}
+        lay = lambda k: lid.get(L.meta['layers'][L.a['lp_layer'][k]], -1) if L.a['lp_layer'][k] >= 0 else -1  # noqa: E731
+        add = {'m_size': np.array([[q(L.a['lc_size'][c][0]), q(L.a['lc_size'][c][1])]], a['m_size'].dtype),
+               'm_class': np.array([L.a['lc_class'][c]], a['m_class'].dtype),
+               'm_sym': np.array([L.a['lc_sym'][c]], a['m_sym'].dtype),
+               'm_pin_box': np.array([[q(v) for v in L.a['lp_box'][k_of[pn]]] for pn in pins], a['m_pin_box'].dtype).reshape(-1, 4),
+               'm_pin_use': np.array([L.a['lp_use'][k_of[pn]] for pn in pins], a['m_pin_use'].dtype),
+               'm_pin_layer': np.array([lay(k_of[pn]) for pn in pins], a['m_pin_layer'].dtype),
+               'm_pin_dir': np.array([L.a['lp_lefdir'][k_of[pn]] for pn in pins], a['m_pin_dir'].dtype)}
+        for k, v in add.items():
+            if k in a:
+                a[k] = np.concatenate([a[k], v])
+        a['m_pin_ptr'] = np.concatenate([a['m_pin_ptr'], np.array([a['m_pin_ptr'][-1] + len(pins)], a['m_pin_ptr'].dtype)])
+        n['masters'].append(name); n['master_pins'].append(pins)
+        return len(n['masters']) - 1
+
+    def resize(self, cells, masters, check=True):
+        """Swap cells (indices or names) to other masters (one name, or one per cell): sizing and threshold-voltage
+        swaps. check: each new master must be in its cell's equivalence class (d.equivalents). Masters the design
+        does not have yet come from its cell library. The cells keep their position and orientation (as OpenROAD's
+        replace_cell); size and pin offsets follow the new master. The timer is rebuilt on the next timing().
+        Returns the previous master names."""
+        self.require('resize')
+        cells = [cells] if isinstance(cells, (str, int, np.integer)) else list(cells)
+        idx = [self._cell_index(c) for c in cells]
+        masters = [masters] * len(idx) if isinstance(masters, str) else list(masters)
+        if len(masters) != len(idx):
+            raise ValueError('%d cells but %d masters' % (len(idx), len(masters)))
+        a, n = self.raw, self.names
+        a['c_master'] = a['c_master'].copy(); a['p_mpin'] = a['p_mpin'].copy()
+        mid = {m: i for i, m in enumerate(n['masters'])}
+        p_cell = a['p_cell'].astype(np.int64)
+        order = np.argsort(p_cell, kind='stable'); start = np.searchsorted(p_cell[order], np.arange(len(a['c_master']) + 1))
+        old_names, touched = [], []
+        for c, new in zip(idx, masters):
+            om = int(a['c_master'][c])
+            old_names.append(n['masters'][om])
+            if new == n['masters'][om]:
+                continue
+            if check and new not in self.equivalents(c, dont_use=True):
+                raise ValueError('%s: %s is not in the equivalence class of %s' % (n['cells'][c], new, n['masters'][om]))
+            if new not in mid:
+                mid[new] = self._add_master(new)
+            nm = mid[new]
+            pos_new = {pn: int(a['m_pin_ptr'][nm]) + j for j, pn in enumerate(n['master_pins'][nm])}
+            for p in order[start[c]:start[c + 1]]:
+                k = int(a['p_mpin'][p])
+                if k < 0:
+                    continue
+                pn = n['master_pins'][om][k - int(a['m_pin_ptr'][om])]
+                if pn not in pos_new:
+                    raise ValueError('%s: pin %s of %s not in %s' % (n['cells'][c], pn, n['masters'][om], new))
+                a['p_mpin'][p] = pos_new[pn]
+                touched.append(p)
+            a['c_master'][c] = nm
+        # derived geometry of the cells and pins that changed
+        s = self.scale
+        cm = torch.as_tensor(a['c_master'].astype(np.int64), device=self.device)
+        msize = torch.as_tensor(a['m_size'].astype(np.float64) * s, dtype=torch.float32, device=self.device)
+        ii = torch.as_tensor(idx, device=self.device)
+        self.size_n[ii] = msize[cm[ii]]
+        if touched and 'pin_offsets' in self.facts:
+            tp = np.asarray(touched); box = a['m_pin_box'][a['p_mpin'][tp]].astype(np.float64) * s
+            ctr = np.stack([(box[:, 0] + box[:, 2]) / 2, (box[:, 1] + box[:, 3]) / 2], -1)
+            self._p_ctr_n[torch.as_tensor(tp, device=self.device)] = torch.as_tensor(ctr, dtype=torch.float32, device=self.device)
+        self.update_orient()
+        self._timer = None
+        return old_names
+
     def timing_report(self, pos=None, endpoints=10, path=True, file=None):
         """Print (and return) a timing summary: WNS, TNS, violations, hold, the worst endpoints and the worst path."""
         import sys

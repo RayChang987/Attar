@@ -40,6 +40,7 @@ CAPABILITIES = {
     'detailed_place': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'rows', 'placement'},
     'global_route': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'routing', 'placement'},
     'sta': {'netlist', 'pin_direction', 'timing'},
+    'resize': {'netlist', 'cell_library', 'pin_offsets', 'timing', 'library'},   # sizing / Vt swap within a class
     'export': {'netlist', 'cell_library', 'def_frame'},    # the source DEF's frame + the IR
     'orfs_handoff': {'cell_library', 'def_frame', 'slow_loop', 'floorplan.io', 'floorplan.macros', 'placement'},
     'orfs_floorplan_handoff': {'cell_library', 'def_frame', 'slow_loop', 'floorplan.io', 'floorplan.macros'},   # from ORFS 2_1

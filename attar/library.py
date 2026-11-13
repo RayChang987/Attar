@@ -24,8 +24,8 @@ from . import liberty, st
 SCHEMA = 'attar-library/0.1'
 # Liberty pin directions, timing types and senses: attar.timing's codes
 from .timing import LD_NONE, LIB_DIR, S_NON, SENSE_CODE, T_OTHER, TYPE_CODE  # noqa: E402
+from .distill import D_UNKNOWN, LEF_DIR, M_BLOCK, M_CORE, M_OTHER, M_PAD, U_SIGNAL, _USE  # noqa: E402
 SEQ_CODE = {'': 0, 'ff': 1, 'latch': 2}
-USE_CODE = {'SIGNAL': 0, 'CLOCK': 1, 'POWER': 2, 'GROUND': 3, 'ANALOG': 4, 'SCAN': 5, 'RESET': 6, 'TIEOFF': 7}
 
 
 def _thr4(t, key):
@@ -86,13 +86,14 @@ class Library:
              'lc_area': np.zeros(C, np.float32), 'lc_leak': np.zeros(C, np.float32), 'lc_seq': np.zeros(C, np.uint8),
              'lc_file': np.full(C, -1, np.int16), 'lc_thr_in': np.zeros((C, 2, 4), np.float32),
              'lc_thr_out': np.zeros((C, 2, 4), np.float32), 'lc_size': np.zeros((C, 2), np.float32),
-             'lc_lef': np.zeros(C, np.uint8),
+             'lc_lef': np.zeros(C, np.uint8), 'lc_class': np.full(C, M_OTHER, np.uint8), 'lc_sym': np.zeros(C, np.uint8),
              'lp_lib': np.zeros(L, np.uint8), 'lp_cap': np.zeros((L, 2), np.float32),
              'lp_cap_min': np.zeros((L, 2), np.float32), 'lp_maxcap': np.zeros(L, np.float32),
              'lp_dir': np.full(L, LD_NONE, np.uint8), 'lp_clock': np.zeros(L, np.uint8),
              'lp_ctp': np.zeros((L, 2, 2), np.float32), 'lp_has_ctp': np.zeros((L, 2), np.uint8),
-             'lp_box': np.zeros((L, 4), np.float32), 'lp_use': np.zeros(L, np.uint8),
-             'lp_layer': np.full(L, -1, np.int16)}
+             'lp_lef': np.zeros(L, np.uint8), 'lp_box': np.zeros((L, 4), np.float32),
+             'lp_use': np.full(L, U_SIGNAL, np.uint8), 'lp_layer': np.full(L, -1, np.int16),
+             'lp_lefdir': np.full(L, D_UNKNOWN, np.uint8)}
         arcs, la = [], {'la_cell': [], 'la_from': [], 'la_to': [], 'la_type': [], 'la_sense': []}
         functions, whens, dont_use, footprint, lef_class = {}, [], [], {}, {}
         for c, cn in enumerate(names):
@@ -134,12 +135,17 @@ class Library:
                     whens.append(arc.get('when', '') or '')
             if cn in macros:
                 m = macros[cn]
+                # LEF geometry in attar.distill's codes (a design adds the cell as distill would have)
                 a['lc_size'][c] = (m.w, m.h); a['lc_lef'][c] = 1; lef_class[cn] = m.cls
+                a['lc_class'][c] = {'CORE': M_CORE, 'BLOCK': M_BLOCK, 'PAD': M_PAD}.get(m.cls, M_OTHER)
+                a['lc_sym'][c] = (1 if 'X' in m.sym else 0) | (2 if 'Y' in m.sym else 0) | (4 if 'R90' in m.sym else 0)
                 for j, pn in enumerate(pin_names[c]):
                     if pn in m.pins:
                         box, use = m.pins[pn]
-                        a['lp_box'][base + j] = box; a['lp_use'][base + j] = USE_CODE.get(use, 0)
-                        a['lp_layer'][base + j] = lid.get(m.pin_layer.get(pn), -1)
+                        k = base + j
+                        a['lp_lef'][k] = 1; a['lp_box'][k] = box; a['lp_use'][k] = _USE.get(use, U_SIGNAL)
+                        a['lp_layer'][k] = lid.get(m.pin_layer.get(pn), -1)
+                        a['lp_lefdir'][k] = LEF_DIR.get(m.pin_dir.get(pn), D_UNKNOWN)
         from .timing import _pack_tables
         K = max([len(t[0]) for arc in arcs for t in arc['tables'].values()]
                 + [len(t[1]) for arc in arcs for t in arc['tables'].values()] + [1])
@@ -202,6 +208,13 @@ class Library:
         with open(os.path.join(folder, 'library.json')) as f:
             meta = json.load(f)
         return cls(a, meta)
+
+    def class_of(self, cell):
+        """The equivalence class (list of cell names) a cell belongs to, or None."""
+        if not hasattr(self, '_class_of'):
+            self._class_of = {c: k for k, cl in enumerate(self.meta.get('classes', [])) for c in cl}
+        k = self._class_of.get(cell)
+        return None if k is None else self.meta['classes'][k]
 
     def __len__(self):
         return len(self.cells)
