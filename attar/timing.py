@@ -17,7 +17,7 @@ import re
 
 import numpy as np
 
-from . import liberty, sdc as sdc_mod, st
+from . import sdc as sdc_mod, st
 from .distill import source_ref
 
 # arc timing types
@@ -114,73 +114,97 @@ def _sdc_units(s, tu, cu):
     s['load'] = {p: v * cu for p, v in s['load'].items()}
 
 
-def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
-    """Distill timing facts into the IR at ir_dir (see the module doc). Returns a summary dict."""
+def find_bundle(ir_dir, name):
+    """A shared library bundle's folder: <zoo>/libraries/<name> next to the design's zoo, else the default zoo's."""
+    from . import paths
+    zoo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(ir_dir))))
+    for root in (zoo, paths.zoo_dir()):
+        f = os.path.join(root, 'libraries', name)
+        if os.path.exists(os.path.join(f, 'library.safetensors')):
+            return f
+    raise FileNotFoundError('library bundle %r (zoo/libraries/%s) not found for %s' % (name, name, ir_dir))
+
+
+_BUNDLES = {}
+
+
+def _load_library(folder):
+    from .library import Library
+    key = os.path.abspath(folder)
+    if key not in _BUNDLES:
+        _BUNDLES[key] = Library.load(folder)
+    return _BUNDLES[key]
+
+
+def chain(ir_dir, manifest):
+    """The design's cell library chain: its local library (the cells only it has), then the shared bundle."""
+    ref = manifest.get('library') or {}
+    out = []
+    if ref.get('local'):
+        out.append(_load_library(ir_dir))
+    if ref.get('bundle'):
+        out.append(_load_library(find_bundle(ir_dir, ref['bundle'])))
+    return out
+
+
+def arrays(d, c_master=None):
+    """The timer's per-design arrays, functions and arc `when` conditions: looked up along the design's library chain
+    (attar.library.design_arrays) when it references one, else timing.safetensors and timing.json."""
+    info = json.load(open(os.path.join(d.path, 'timing.json')))
+    if 'library' not in d.manifest:
+        t, _ = st.load(os.path.join(d.path, 'timing.safetensors'))
+        return t, info.get('functions') or {}, info.get('arc_when') or {}
+    from .library import design_arrays
+    cm = d.raw['c_master'] if c_master is None else c_master
+    used = set(np.asarray(cm)[np.asarray(cm) >= 0].tolist())
+    t, functions, arc_when, _ = design_arrays(chain(d.path, d.manifest), d.names['masters'], d.names['master_pins'],
+                                              d.raw['m_pin_ptr'], used)
+    return t, functions, arc_when
+
+
+def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=None):
+    """Distill timing facts into the IR at ir_dir (see the module doc). Returns a summary dict.
+    bundle: a shared library folder (attar.library, zoo/libraries/<name>). The design's Liberty files that are in it
+    are taken from it, the others become the design's local library (library.safetensors in ir_dir), and the design
+    references the bundle instead of storing timing.safetensors, provided the arrays come out identical to its own
+    Liberty files' (else timing.safetensors as without a bundle, and the summary says why)."""
+    from .library import Library, design_arrays
     with gzip.open(os.path.join(ir_dir, 'names.json.gz'), 'rt') as f:
         names = json.load(f)
     a, _ = st.load(os.path.join(ir_dir, 'core.safetensors'))
     masters, mpins = names['masters'], names['master_pins']
     m_ptr = a['m_pin_ptr'].astype(np.int64)
-    n_mp = int(m_ptr[-1])
-    # libraries: the first definition of a cell wins (OpenSTA warns on duplicates)
-    cells, lib_refs, cell_thr, default_thr = {}, [], {}, None
-    sdc_tu, sdc_cu = 1.0, 1.0
-    for p in lib_paths:
-        lib = liberty.read(p)
-        lib_refs.append(source_ref(p))
-        default_thr = default_thr or lib['thresholds']          # OpenSTA: ports use the first library read
-        if not lib_refs[1:]:                                    # and SDC values are in its units
-            sdc_tu, sdc_cu = lib['time_unit_ps'], lib['cap_unit_ff']
-        for k, v in lib['cells'].items():
-            if k not in cells:
-                cells[k] = v; cell_thr[k] = lib['thresholds']
-    mp_cap = np.zeros((n_mp, 2), np.float32); mp_cap_min = np.zeros((n_mp, 2), np.float32)
-    mp_maxcap = np.zeros(n_mp, np.float32)
-    mp_ctp = np.zeros((n_mp, 2, 2), np.float32)        # min / max clock tree path (macro clock pins), rise / fall
-    # thresholds per rise / fall: (input threshold, slew lower, slew upper, slew derate) of the pin's library, for loads
-    mp_thr = np.tile(np.array([.5, .2, .8, 1.0], np.float32), (n_mp, 2, 1))
-    T4 = lambda t, key: np.array([[t[key][i], t['slew_lower'][i], t['slew_upper'][i], t['slew_derate']] for i in (0, 1)],
-                                 np.float32)
-    mp_dir = np.full(n_mp, LD_NONE, np.uint8); mp_clock = np.zeros(n_mp, np.uint8)
     used = set(a['c_master'][a['c_master'] >= 0].tolist())
-    arcs, a_master, a_from, a_to, a_type, a_sense, a_thr = [], [], [], [], [], [], []
-    missing_cells = []
-    for m, mname in enumerate(masters):
-        lc = cells.get(mname)
-        local = {pn: int(m_ptr[m]) + i for i, pn in enumerate(mpins[m])}
-        if lc is None:
-            if m in used:
-                missing_cells.append(mname)
-            continue
-        for pn, pa in lc['pins'].items():
-            if pn in local:
-                k = local[pn]
-                mp_cap[k] = pa['cap']; mp_cap_min[k] = pa.get('cap_min', pa['cap']); mp_maxcap[k] = pa['max_cap'] or 0.0
-                mp_dir[k] = LIB_DIR.get(pa['dir'], LD_NONE); mp_clock[k] = pa['clock']
-                for i, mm in enumerate(('min', 'max')):
-                    if mm in pa.get('ctp', {}):
-                        mp_ctp[k, i] = pa['ctp'][mm]
-                mp_thr[k] = T4(cell_thr[mname], 'input')
-        if m not in used:
-            continue
-        for arc in lc['arcs']:
-            if arc['from'] not in local or arc['to'] not in local:
-                continue
-            t = TYPE_CODE.get(arc['type'], T_OTHER)
-            if t == T_OTHER:
-                continue
-            arcs.append(arc); a_master.append(m); a_from.append(local[arc['from']]); a_to.append(local[arc['to']])
-            a_thr.append(T4(cell_thr[mname], 'output'))
-            a_type.append(t); a_sense.append(SENSE_CODE.get(arc['sense'], S_NON))
-    K = max([len(t[0]) for arc in arcs for t in arc['tables'].values()] + [len(t[1]) for arc in arcs for t in arc['tables'].values()] + [1])
-    ix1, ix2, val, n = _pack_tables(arcs, K)
-    tens = {'mp_cap': mp_cap, 'mp_cap_min': mp_cap_min, 'mp_maxcap': mp_maxcap, 'mp_ctp': mp_ctp, 'mp_dir': mp_dir, 'mp_clock': mp_clock,
-            'a_master': np.asarray(a_master, np.int32), 'a_from': np.asarray(a_from, np.int32),
-            'a_to': np.asarray(a_to, np.int32), 'a_type': np.asarray(a_type, np.uint8),
-            'a_sense': np.asarray(a_sense, np.uint8), 'a_ix1': ix1, 'a_ix2': ix2, 'a_val': val, 'a_n': n,
-            # driver thresholds per arc and output rise / fall: (output threshold, slew lower, slew upper, slew derate)
-            'a_thr': np.asarray(a_thr, np.float32).reshape(-1, 2, 4), 'mp_thr': mp_thr}
-    st.save(os.path.join(ir_dir, 'timing.safetensors'), tens, {'schema': 'attar-timing/0.1'})
+    # the design's own Liberty files: the first definition of a cell wins (OpenSTA warns on duplicates)
+    own = Library.build(lib_paths, source_ref=source_ref)
+    tens, functions, arc_when, missing_cells = design_arrays([own], masters, mpins, m_ptr, used)
+    lib_refs = own.meta['sources']['lib']
+    default_thr = own.meta['default_thresholds']                 # OpenSTA: ports use the first library read
+    units = own.meta['units'] or {}
+    sdc_tu, sdc_cu = units.get('time_ps', 1.0), units.get('cap_ff', 1.0)   # and SDC values are in its units
+    lib_ref, bundle_note = None, None
+    for f in ('library.safetensors', 'library.json'):
+        if os.path.exists(os.path.join(ir_dir, f)):
+            os.remove(os.path.join(ir_dir, f))
+    if bundle is not None:
+        B = _load_library(bundle)
+        have = {r.get('sha256') for r in B.meta['sources']['lib']}
+        local = [p for p, r in zip(lib_paths, lib_refs) if r.get('sha256') not in have]
+        L = Library.build(local, source_ref=source_ref, name='local') if local else None
+        t2, f2, w2, m2 = design_arrays(([L] if L else []) + [B], masters, mpins, m_ptr, used)
+        same = (all(np.array_equal(tens[k], t2[k]) for k in tens) and f2 == functions and w2 == arc_when
+                and m2 == missing_cells)
+        if same:
+            if L is not None:
+                L.save(ir_dir)
+            lib_ref = {'bundle': B.meta['name'], 'sha256': source_ref(os.path.join(bundle, 'library.safetensors'))['sha256'],
+                       'local': [os.path.basename(p) for p in local]}
+        else:
+            bundle_note = 'arrays differ from the design\'s own Liberty files with bundle %s' % B.meta['name']
+    if lib_ref is None:
+        st.save(os.path.join(ir_dir, 'timing.safetensors'), tens, {'schema': 'attar-timing/0.1'})
+    elif os.path.exists(os.path.join(ir_dir, 'timing.safetensors')):
+        os.remove(os.path.join(ir_dir, 'timing.safetensors'))
 
     # constraints, by IO cell index
     io_cell, io_dir = a['io_cell'], a['io_dir']
@@ -228,17 +252,10 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
                 lay = re.search(r'\+\s*LAYER\s+(\S+)', m.group(2))
                 if lay and m.group(1) in port_idx:
                     info['io_layer'][str(port_idx[m.group(1)])] = lay.group(1)
-    # Liberty `when` conditions of the conditional arcs, by arc index (OpenSTA's sim disables them under constants)
-    info['arc_when'] = {str(i): arc['when'] for i, arc in enumerate(arcs) if arc.get('when')}
+    # Liberty `when` conditions of the conditional arcs, by arc index (OpenSTA's sim disables them under constants),
     # output pin functions of the masters used (constant propagation from tie cells, as OpenSTA's sim does)
-    info['functions'] = {}
-    for m, mname in enumerate(masters):
-        lc = cells.get(mname)
-        if lc is None or m not in used:
-            continue
-        fs = {pn: pa['function'] for pn, pa in lc['pins'].items() if pa.get('function') and pa['dir'] in ('output', 'inout')}
-        if fs:
-            info['functions'][str(m)] = fs
+    info['arc_when'] = arc_when
+    info['functions'] = functions
     info['rc'] = read_rc_tcl(rc_tcl) if rc_tcl else None
     # OpenROAD est::computeAverageCutResistance: the mean resistance of the cut layers between the block's lowest and
     # highest routing layer (via Vk joins Mk and Mk+1); every pin hangs off the estimated tree through it
@@ -261,7 +278,14 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
     mf = os.path.join(ir_dir, 'manifest.json')
     m = json.load(open(mf))
     m.setdefault('facts', {})['timing'] = 'liberty+sdc' + ('+rc' if rc_tcl else '')
-    m['timing'] = {'arcs': len(arcs), 'clocks': list(info['clocks']), 'missing_cells': missing_cells,
+    if lib_ref is not None:
+        m['facts']['library'] = lib_ref['bundle']
+        m['library'] = lib_ref
+    else:
+        m['facts'].pop('library', None); m.pop('library', None)
+    m['timing'] = {'arcs': len(tens['a_master']), 'clocks': list(info['clocks']), 'missing_cells': missing_cells,
                    'unsupported_sdc': info['unsupported'], 'sources': info['sources']}
+    if bundle_note:
+        m['timing']['bundle_note'] = bundle_note
     json.dump(m, open(mf, 'w'), indent=1)
     return m['timing']

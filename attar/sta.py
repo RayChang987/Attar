@@ -19,8 +19,8 @@ import numpy as np
 import torch
 
 from . import metrics as M
-from . import st
 from .distill import D_IN, D_INOUT, D_OUT
+from . import timing as timing_mod
 from .timing import (S_NEG, S_NON, S_POS, T_CLEAR, T_COMB, T_FALL_EDGE, T_HOLD_F, T_HOLD_R, T_PRESET, T_RISE_EDGE,
                      T_SETUP_F, T_SETUP_R, T_TRISTATE)
 
@@ -288,8 +288,9 @@ class Timer:
         self.precision = precision
         self.dev = dev = d.device
         self.parasitics = parasitics
-        t, _ = st.load(os.path.join(d.path, 'timing.safetensors'))
         self.info = info = json.load(open(os.path.join(d.path, 'timing.json')))
+        # the cell data: from the design's library chain (bundle + local) or its timing.safetensors (attar.timing.arrays)
+        t, info['functions'], info['arc_when'] = timing_mod.arrays(d)
         a = d.raw
         T = lambda x, dt=None: torch.as_tensor(np.asarray(x), device=dev, dtype=dt)
         p_cell = a['p_cell'].astype(np.int64); p_mpin = a['p_mpin'].astype(np.int64)
