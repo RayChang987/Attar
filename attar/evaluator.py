@@ -3,8 +3,9 @@
 The Evaluator is the second main object next to Design. Each metric declares the facts it needs; what can be measured
 follows from what the design has, as for capabilities. Implemented:
   hpwl, star_wirelength, steiner_wirelength (RSMT estimate, see attar/metrics.py), rudy (congestion map),
-  density_overflow (ePlace overflow), legality (rows, sites, overlaps; multi-row aware).
-Listed for later: global-route wirelength and overflow, timing, pin access, thermal.
+  density_overflow (ePlace overflow), legality (rows, sites, overlaps; multi-row aware), timing (attar.sta: WNS,
+  TNS, hold, on placement parasitics).
+Listed for later: global-route wirelength and overflow, pin access, thermal.
 
 Speed: one HPWL call is ~0.15 ms up to ~1M pins (launch-bound). Exact speed-ups:
   fast=True     CUDA graph for hpwl (0.22 -> 0.05 ms on 43k pins)
@@ -29,7 +30,7 @@ METRICS = {
     'legality': ({'cell_geometry', 'placement', 'rows'}, True),
     'gr_wirelength': (WL | {'routing'}, False),
     'gr_overflow': (WL | {'routing'}, False),
-    'timing': ({'netlist', 'timing'}, False),
+    'timing': (WL | {'pin_direction', 'timing'}, True),
     'pin_access': (WL | {'routing'}, False),
     'thermal': ({'cell_geometry', 'placement', 'floorplan.die', 'timing'}, False),
 }
@@ -304,6 +305,8 @@ class Evaluator:
                 out[m] = self.density_overflow(pos)
             elif m == 'legality':
                 out[m] = self.legality(pos)
+            elif m == 'timing':
+                out[m] = self.d.timing(pos).summary()
         man = self.d.manifest
         out['units'] = 'Bookshelf units' if man.get('units', '').startswith('Bookshelf') else 'um'
         out['fidelity'] = man.get('fidelity')
