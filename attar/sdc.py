@@ -1,8 +1,8 @@
 """SDC reader: the constraints static timing needs, evaluated by a real Tcl interpreter (SDC is Tcl: variables, expr,
 lsearch, loops all work), with the SDC commands bound to Python recorders.
 
-Kept: clocks (period, waveform, source ports), ideal clock latency and uncertainty, input / output delays, input
-transitions, port loads, clock groups, set_max_delay / set_min_delay with -from / -to (no -through). Recorded but not
+Kept: clocks (period, waveform, source ports), ideal clock latency, uncertainty and transition, input / output delays,
+input transitions, port loads, clock groups, set_max_delay / set_min_delay with -from / -to (no -through). Recorded but not
 modeled (listed in 'unsupported'): set_false_path, set_multicycle_path, path delays with -through or rise/fall
 qualifiers, driving cells, derates. Ignored: group_path,
 design rule limits (set_max_fanout, ...), set_units, and other commands that do not change timing.
@@ -34,10 +34,11 @@ def _opts(args, flags, valued):
 
 def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
     """Evaluate an SDC. ports_in / ports_out: the design's port names (for get_ports patterns, all_inputs, ...).
-    Returns {'clocks': {name: {'period', 'waveform', 'sources', 'latency', 'uncertainty'}}, 'input_delay': [...],
+    Returns {'clocks': {name: {'period', 'waveform', 'sources', 'latency', 'uncertainty', ['transition']}}, 'input_delay': [...],
     'output_delay': [...], 'input_transition': {port: ps}, 'load': {port: fF}, 'clock_groups': [...],
     'path_delays': [{'kind': 'max'|'min', 'value', 'from', 'to': [(kind, name)] or None, 'ignore_clock_latency'}],
-    'unsupported': {command: count}} with times in the SDC's units (ps for ORFS asap7)."""
+    'unsupported': {command: count}} with times and capacitances in the SDC's units (OpenSTA: the first Liberty
+    file's units; attar.timing.attach converts them to ps / fF)."""
     import tkinter
     tcl = tkinter.Tcl()
     ports = list(ports_in) + list(ports_out)
@@ -118,6 +119,26 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
                     res['clocks'][n][key] = val
         return ''
 
+    def set_clock_transition(*args):
+        o, pos = _opts(args, ('-rise', '-fall', '-min', '-max'), ())
+        val = float(pos[0])
+        for a in pos[1:]:
+            for k, n in objs(a, 'clock'):
+                if n in res['clocks'] and not o.get('-min'):
+                    tr = res['clocks'][n].setdefault('transition', [0.0, 0.0])
+                    for i in ([0] if o.get('-rise') else [1] if o.get('-fall') else [0, 1]):
+                        tr[i] = val
+        return ''
+
+    def remove_from_collection(*args):
+        o, pos = _opts(args, ('-intersect',), ())
+        if not pos:
+            return ''
+        flat =lambda v: ['%s:%s' % kn for kn in objs(v)] if objs(v) else split(v)   # noqa: E731
+        drop = set(flat(pos[1])) if len(pos) > 1 else set()
+        keep = [x for x in flat(pos[0]) if (x in drop) == bool(o.get('-intersect'))]
+        return tuple(keep)
+
     def io_delay(which):
         def f(*args):
             o, pos = _opts(args, ('-add_delay', '-max', '-min', '-rise', '-fall', '-clock_fall', '-level_sensitive',
@@ -190,7 +211,8 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
             'create_clock': create_clock, 'set_clock_latency': set_clock_latency,
             'set_clock_uncertainty': set_clock_uncertainty, 'set_input_delay': io_delay('input_delay'),
             'set_output_delay': io_delay('output_delay'), 'set_input_transition': set_input_transition,
-            'set_load': set_load, 'set_clock_groups': set_clock_groups,
+            'set_load': set_load, 'set_clock_groups': set_clock_groups, 'set_clock_transition': set_clock_transition,
+            'remove_from_collection': remove_from_collection, 'delete_from_list': remove_from_collection,
             'set_max_delay': path_delay('max'), 'set_min_delay': path_delay('min'),
             'get_name': lambda x: x.partition(':')[2], 'get_full_name': lambda x: x.partition(':')[2],
             'get_object_name': lambda x: x.partition(':')[2]}

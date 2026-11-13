@@ -93,6 +93,22 @@ def _pack_tables(arcs, K):
     return ix1, ix2, val, n
 
 
+def _sdc_units(s, tu, cu):
+    """SDC values from the first Liberty file's units (OpenSTA's user units) to ps and fF, in place."""
+    for c in s['clocks'].values():
+        for k in ('period', 'latency', 'source_latency', 'uncertainty', 'uncertainty_setup', 'uncertainty_hold'):
+            if k in c:
+                c[k] *= tu
+        c['waveform'] = [v * tu for v in c['waveform']]
+        if 'transition' in c:
+            c['transition'] = [v * tu for v in c['transition']]
+    for w in ('input_delay', 'output_delay', 'path_delays'):
+        for e in s[w]:
+            e['value'] *= tu
+    s['input_transition'] = {p: v * tu for p, v in s['input_transition'].items()}
+    s['load'] = {p: v * cu for p, v in s['load'].items()}
+
+
 def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
     """Distill timing facts into the IR at ir_dir (see the module doc). Returns a summary dict."""
     with gzip.open(os.path.join(ir_dir, 'names.json.gz'), 'rt') as f:
@@ -103,10 +119,13 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
     n_mp = int(m_ptr[-1])
     # libraries: the first definition of a cell wins (OpenSTA warns on duplicates)
     cells, lib_refs, cell_thr, default_thr = {}, [], {}, None
+    sdc_tu, sdc_cu = 1.0, 1.0
     for p in lib_paths:
         lib = liberty.read(p)
         lib_refs.append(source_ref(p))
         default_thr = default_thr or lib['thresholds']          # OpenSTA: ports use the first library read
+        if not lib_refs[1:]:                                    # and SDC values are in its units
+            sdc_tu, sdc_cu = lib['time_unit_ps'], lib['cap_unit_ff']
         for k, v in lib['cells'].items():
             if k not in cells:
                 cells[k] = v; cell_thr[k] = lib['thresholds']
@@ -168,6 +187,7 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
             'clock_groups': [], 'path_delays': [], 'unsupported': {}}
     if sdc_path or sdc_text:
         s = sdc_mod.read(sdc_text if sdc_text else sdc_path, pin_in, pin_out, names.get('design', ''), is_text=bool(sdc_text))
+        _sdc_units(s, sdc_tu, sdc_cu)
         for k, c in s['clocks'].items():
             info['clocks'][k] = dict(c, sources=[port_idx[p] for p in c['sources'] if p in port_idx])
         for w in ('input_delay', 'output_delay'):
