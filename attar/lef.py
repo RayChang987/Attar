@@ -2,7 +2,7 @@
 
 
 class Macro:
-    __slots__ = ('name', 'cls', 'w', 'h', 'pins', 'pin_layer', 'pin_dir', 'sym')
+    __slots__ = ('name', 'cls', 'w', 'h', 'pins', 'pin_layer', 'pin_dir', 'sym', 'shapes')
 
     def __init__(self, name):
         self.name, self.cls, self.w, self.h = name, '', 0.0, 0.0
@@ -10,6 +10,7 @@ class Macro:
         self.pin_layer = {}  # pin name -> layer of its first port shape
         self.pin_dir = {}  # pin name -> DIRECTION (INPUT, OUTPUT, INOUT, FEEDTHRU) when the LEF states it
         self.sym = set()   # SYMMETRY: 'X', 'Y', 'R90'
+        self.shapes = []   # (layer, (x0, y0, x1, y1), 'PIN' | 'OBS'): every pin port and OBS rectangle
 
 
 def read_lef(paths, macros=None, tech=None):
@@ -20,7 +21,7 @@ def read_lef(paths, macros=None, tech=None):
     tech.setdefault('vias', {})
     for path in paths:
         mac = pin = layer = site = via = None; via_layer = None
-        box = None; use = 'SIGNAL'; props = False
+        box = None; use = 'SIGNAL'; props = False; shape_layer = None; obs = False
         with open(path) as f:
             for line in f:
                 t = line.split()
@@ -33,22 +34,37 @@ def read_lef(paths, macros=None, tech=None):
                 if k == 'PROPERTYDEFINITIONS':
                     props = True; continue
                 if mac is not None:
+                    if obs:                                    # OBS: blockage rectangles per layer
+                        if k == 'LAYER' and len(t) > 1:
+                            shape_layer = t[1].rstrip(';')
+                        elif k == 'RECT' and shape_layer:
+                            v = [float(x) for x in t[1:5]] if t[1] != 'MASK' else [float(x) for x in t[3:7]]
+                            mac.shapes.append((shape_layer, (min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3])), 'OBS'))
+                        elif k == 'END':
+                            obs = False
+                        continue
                     if pin is not None:
                         if k == 'RECT':
                             v = [float(x) for x in t[1:5]] if t[1] != 'MASK' else [float(x) for x in t[3:7]]
                             x0, y0, x1, y1 = min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3])
                             box = [x0, y0, x1, y1] if box is None else [min(box[0], x0), min(box[1], y0), max(box[2], x1), max(box[3], y1)]
+                            if shape_layer:
+                                mac.shapes.append((shape_layer, (x0, y0, x1, y1), 'PIN'))
                         elif k == 'USE':
                             use = t[1].rstrip(';')
                         elif k == 'DIRECTION' and len(t) > 1:
                             mac.pin_dir[pin] = t[1].rstrip(';')
-                        elif k == 'LAYER' and len(t) > 1 and pin not in mac.pin_layer:
-                            mac.pin_layer[pin] = t[1].rstrip(';')
+                        elif k == 'LAYER' and len(t) > 1:
+                            shape_layer = t[1].rstrip(';')
+                            if pin not in mac.pin_layer:
+                                mac.pin_layer[pin] = shape_layer
                         elif k == 'END' and len(t) > 1 and t[1] == pin:
                             mac.pins[pin] = (tuple(box) if box else (0.0, 0.0, 0.0, 0.0), use)
                             pin = None
+                    elif k == 'OBS':
+                        obs, shape_layer = True, None
                     elif k == 'PIN':
-                        pin, box, use = t[1], None, 'SIGNAL'
+                        pin, box, use, shape_layer = t[1], None, 'SIGNAL', None
                         # attributes may follow on the PIN line (ISPD 2015: 'PIN o DIRECTION OUTPUT ;')
                         for kw in ('DIRECTION', 'USE'):
                             if kw in t[2:] and t.index(kw, 2) + 1 < len(t):
