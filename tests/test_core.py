@@ -49,7 +49,7 @@ class DesignTest(unittest.TestCase):
         self.assertIn(SMALL, names)
         d = need(SMALL)
         self.assertTrue(d.has('netlist') and d.has('rows') and d.has('cell_library') and d.has('tracks'))
-        self.assertFalse(d.has('timing'))
+        self.assertTrue(d.has('timing') and d.has('library') and d.has('routing'))
         self.assertEqual(d.facts['pin_offsets'], 'lef')
         self.assertEqual(d.manifest['fidelity'], 'F1')
 
@@ -100,13 +100,13 @@ class CapabilityTest(unittest.TestCase):
         self.assertIn('global_place', d.capabilities())
         self.assertNotIn('hpwl', d.capabilities())
         self.assertEqual(d.missing('hpwl'), ['placement'])
-        self.assertEqual(d.missing('global_route'), ['placement', 'routing'])
-        self.assertEqual(d.missing('sta'), ['timing'])
+        self.assertEqual(d.missing('global_route'), ['placement'])
+        self.assertEqual(d.missing('sta'), [])
         with self.assertRaises(MissingFacts) as e:
             d.hpwl()
         self.assertIn("restore('reference')", str(e.exception))
         d.restore('reference')
-        for c in ('hpwl', 'legalize', 'detailed_place', 'export'):
+        for c in ('hpwl', 'place', 'legalize', 'detailed_place', 'export', 'gr_overflow'):
             self.assertIn(c, d.capabilities())
 
     def test_explicit_positions_need_no_placement_state(self):
@@ -286,7 +286,8 @@ class StatusTest(unittest.TestCase):
         d = need(MEDIUM)
         s = d.status(show=False)
         self.assertIn('\u2705 netlist', s)                       # ✅
-        self.assertIn('\u274c timing', s)                        # ❌
+        self.assertIn('\u2705 timing', s)
+        self.assertIn('\u274c constraints', s)                   # ❌
         self.assertIn('\u274c placement', s)
         self.assertEqual(d.tier(), 'A')
         self.assertIn('only a placement is missing', s)

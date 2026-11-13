@@ -56,14 +56,17 @@ class EvaluatorTest(unittest.TestCase):
         ev = attar.Evaluator(d)
         self.assertEqual(ev.available(), [])              # unplaced: nothing to measure yet
         self.assertEqual(ev.missing('hpwl'), ['placement'])
-        self.assertIn('(not implemented yet)', ev.missing('gr_overflow'))
+        self.assertIn('(not implemented yet)', ev.missing('gr_wirelength'))
+        self.assertEqual(ev.missing('gr_overflow'), ['placement'])
         self.assertEqual(ev.missing('rudy'), ['placement'])
         d.restore('reference')
-        self.assertEqual(ev.available(), ['density_overflow', 'hpwl', 'legality', 'rudy', 'star_wirelength', 'steiner_wirelength'])
+        self.assertEqual(ev.available(), ['density_overflow', 'gr_overflow', 'hpwl', 'legality', 'rudy', 'star_wirelength',
+                                          'steiner_wirelength', 'timing'])
         r = ev.evaluate()
         self.assertIn('hpwl', r); self.assertEqual(r['fidelity'], 'F1')
+        self.assertIn('wns', ev.evaluate(metrics=('timing',))['timing'])
         with self.assertRaises(NotImplementedError):
-            ev.evaluate(metrics=('timing',))
+            ev.evaluate(metrics=('gr_wirelength',))
 
     def test_orientation_change_is_picked_up(self):
         d = need(SMALL).restore('reference')
