@@ -21,12 +21,12 @@ def _build():
     try:
         src = open(_SRC, 'rb').read()
         tag = hashlib.sha1(src).hexdigest()[:12]
-        cache = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'attar')
+        cache = os.path.join(os.path.expanduser('~'), '.cache', 'attar')        # as paths.zoo_dir: no environment
         os.makedirs(cache, exist_ok=True)
         so = os.path.join(cache, 'pdtree_%s.so' % tag)
         if not os.path.exists(so):
             tmp = so + '.%d.tmp' % os.getpid()
-            subprocess.run([os.environ.get('CXX', 'g++'), '-O3', '-std=c++17', '-fopenmp', '-shared', '-fPIC', _SRC,
+            subprocess.run(['g++', '-O3', '-std=c++17', '-fopenmp', '-shared', '-fPIC', _SRC,
                             '-o', tmp], check=True, capture_output=True, text=True)
             os.replace(tmp, so)
         lib = ctypes.CDLL(so)
