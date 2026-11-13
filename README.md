@@ -7,30 +7,12 @@ Place and evaluate a 100k-cell design in seconds.
 
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
-[![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](#does-the-fast-loop-agree-with-the-slow-loop)
+[![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](docs/validation/orfs_check.md)
 [![Tests](https://img.shields.io/badge/tests-77%20passing-5f7f1e?style=flat-square)](tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
-[Why Attar](#why-attar) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp; [Built-in engines](#built-in-engines) &nbsp;·&nbsp;
-[Quickstart](#quickstart) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery) &nbsp;·&nbsp;
-[Validation](#does-the-fast-loop-agree-with-the-slow-loop) &nbsp;·&nbsp; [Roadmap](#roadmap)
-
-<br>
-
-<img src="docs/images/demo_placement.gif" alt="Placement mode: eight lines of Python run on cva6 and ariane133: load, plot the floorplan, place, plot the placement, export" width="920">
-
-<sub><b>Placement mode</b> (<code>after_fp</code>). Real runs on an RTX 3080 Ti, the same code on two designs. The
-floorplan comes as the flow made it; only the cells are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k
-cells around 8 SRAMs, legal in 2.5 s; handed back to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own
-placement. <b>ariane133</b> (NS3K, Innovus floorplan at 80% std-cell density): 163k cells around 133 SRAMs, legal in
-5.0 s.</sub>
-
-<img src="docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)" width="920">
-
-<sub><b>Floorplan mode</b> (<code>before_fp</code>). GSRC <b>n100</b>: 100 hard blocks, no die; Attar sizes one for 85%
-block area, places the IO pins and the macros. GP + LP legalization never overlaps macros, but here 5 stick out of
-the core: not legal. <code>packing=True</code> (B*-tree, annealed into the core, then for HPWL) fits them all in
-5.1 s, at 8% more wire. The lines are the strongest connections between macros and IO pins.</sub>
+[Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
+[Quickstart](#quickstart) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery)
 
 </div>
 
@@ -50,11 +32,50 @@ the core: not legal. <code>packing=True</code> (B*-tree, annealed into the core,
    stays faithful to the full flows (the *slow loop*) without their overhead: its HPWL equals OpenROAD's to 7 digits,
    its legality equals `check_placement`, its placements route in OpenROAD-flow-scripts with 0 DRC, and HPWL ranks
    placements as routed wirelength does in 951 routed Innovus runs, once they differ by 2% or more
-   ([validation](#does-the-fast-loop-agree-with-the-slow-loop)).
+   ([validation](docs/validation/orfs_check.md)).
 4. **GPU-native.** Layouts and design features are tensors on the GPU, so researchers, developers and AI agents
    train, evaluate and debug in the same few lines of Python: exact HPWL of 8.9M pins in 3 ms, a 2.2M-cell design
    placed and legalized in 49 s. An algorithm is a function from tensors to positions: no database
    API, no TCL, no file formats.
+
+## Roadmap
+
+<p align="center"><img src="docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement) and placement (placer, legalizer, PDN-aware refinement), all done. Right, Evaluation: HPWL, OVF and timing done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
+
+Attar's built-in GPU engines, `attar.naive`, let a flow run end to end even when you bring only one part of it: to
+work on timing optimization, you need a placement, not a placer of your own. Every engine is fully tensorized,
+states the facts it needs, and writes its answer back into the design with provenance (`placement: naive`).
+
+| engine | mode | call | what it does |
+| --- | --- | --- | --- |
+| **Packing** | `before_fp` | `naive.place_macros(packing=True)` | block-level designs: B*-tree packing, annealed into the core, then for HPWL |
+| **Macro placement** | `before_fp` | `naive.place_macros` | mixed-size global placement, then macros legalized on their routing tracks with a halo |
+| **IO placement** | `before_fp` | `naive.place_io` | IO pins on the die boundary, net-aware once cells are placed |
+| **Placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the slow loop's own target density; `routability=True`: DREAMPlace's cell inflation |
+| **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal |
+| **PDN-aware refinement** | `after_fp` | inside `naive.legalize` | row DP and repair that keep cells clear of the PDN |
+
+`d.floorplan(utilization=...)` sizes the die (`naive.make_die`), then places the IO pins and the macros;
+`d.place()` is global placement plus legalization.
+
+<div align="center">
+
+<img src="docs/images/demo_placement.gif" alt="Placement mode: eight lines of Python run on cva6 and ariane133: load, plot the floorplan, place, plot the placement, export" width="920">
+
+<sub><b>Placement mode</b> (<code>after_fp</code>). Real runs on an RTX 3080 Ti, the same code on two designs. The
+floorplan comes as the flow made it; only the cells are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k
+cells around 8 SRAMs, legal in 2.5 s; handed back to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own
+placement. <b>ariane133</b> (NS3K, Innovus floorplan at 80% std-cell density): 163k cells around 133 SRAMs, legal in
+5.0 s.</sub>
+
+<img src="docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)" width="920">
+
+<sub><b>Floorplan mode</b> (<code>before_fp</code>). GSRC <b>n100</b>: 100 hard blocks, no die; Attar sizes one for 85%
+block area, places the IO pins and the macros. GP + LP legalization never overlaps macros, but here 5 stick out of
+the core: not legal. <code>packing=True</code> (B*-tree, annealed into the core, then for HPWL) fits them all in
+5.1 s, at 8% more wire. The lines are the strongest connections between macros and IO pins.</sub>
+
+</div>
 
 ## Two modes
 
@@ -71,26 +92,7 @@ with the PDN its flow drew.
 | back to the slow loop | ORFS draws the PDN and places | ORFS or OpenROAD routes and times |
 | in the zoo | 55 designs, 6 suites | 192 designs, 17 suites |
 
-Today `after_fp` is about placement; Attar measures wirelength, congestion (RUDY), density and legality. Timing and
-global-routing proxies are on the [roadmap](#roadmap).
-
-## Built-in engines
-
-Attar comes with a basic set of GPU engines, `attar.naive`, so a flow runs end to end even when you bring only one
-part of it: to work on timing optimization, you need a placement, not a placer of your own. Every engine is fully
-tensorized, states the facts it needs, and writes its answer back into the design with provenance
-(`placement: naive`).
-
-| engine | mode | call | what it does |
-| --- | --- | --- | --- |
-| **IO pin placer** | `before_fp` | `naive.place_io` | IO pins on the die boundary, net-aware once cells are placed |
-| **Macro placer** | `before_fp` | `naive.place_macros` | mixed-size global placement, then macros legalized on their routing tracks with a halo; `packing=True` for block-level designs: B*-tree packing, annealed into the core, then for HPWL |
-| **Global placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the slow loop's own target density; `routability=True`: DREAMPlace's cell inflation |
-| **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal |
-| **Placement refiner** | `after_fp` | not yet | detailed placement is next |
-
-`d.floorplan(utilization=...)` sizes the die (`naive.make_die`), then places the IO pins and the macros;
-`d.place()` is global placement plus legalization.
+Attar measures wirelength, congestion (RUDY, GROV), density, legality and timing; see the [roadmap](#roadmap).
 
 ## Quickstart
 
@@ -146,7 +148,7 @@ d.pos = pos.detach(); naive.legalize(d)               # ... so legalize (multi-r
    and GSRC blocks.
 2. **Load.** `attar.load` puts the arrays on the GPU as a `Design`. `d.status()` shows each fact, each capability,
    and what a hand-off to ORFS still needs.
-3. **Move.** Your algorithm, or the [built-in engines](#built-in-engines) (`attar.naive`), changes the positions:
+3. **Move.** Your algorithm, or the [built-in engines](#roadmap) (`attar.naive`), changes the positions:
    die, IO pins and macros for `before_fp`, cells for `after_fp`.
 4. **Measure.** `attar.Evaluator` computes HPWL (exact, batched), Steiner wirelength, RUDY, density overflow and
    legality, on the current placement or on any positions you pass.
@@ -184,75 +186,6 @@ legal including power rails and the PDN; OpenROAD's <code>check_placement</code>
 </tr>
 </table>
 
-## Does the fast loop agree with the slow loop?
-
-A fast loop is only useful if its numbers mean the same thing as the slow loop's. Eight checks, each reproducible with
-the tools in this repo (ORFS on ASAP7 and Nangate45; OpenROAD alone on i3dPDK_NS3K, which has no ORFS platform):
-
-| | check | result |
-| --- | --- | --- |
-| **1** | Attar's HPWL vs the HPWL OpenROAD computes from its own database, same DEF, 23 ORFS designs (15 ASAP7, 8 Nangate45) up to 1.05M cells | equal to within **0.00002%** |
-| **2** | Attar says legal, then OpenROAD `check_placement` on Attar's DEF; and 1% of the cells moved half a site | ORFS **23 / 23**; NS3K at 60/70/80% density **62 / 84** (Attar legal on all 84): legal on both, broken rejected by both. On the other 22, all with macros, OpenROAD's `check_placement` crashes on the floorplan DEF itself ([which](docs/benchmarks.md#the-zoo-today)) |
-| **3** | ORFS's own placement written back unchanged, then ORFS resize, DP, CTS, routing | routed WL, DRC, WNS, TNS **bit-identical**, **9 / 9** designs |
-| **4** | Attar's own placement, at the design's target density, then ORFS to the end | **9 / 9** route with **0 DRC**; routed WL **0.2% to 7.4% shorter** than with ORFS's own placement |
-| **5** | HPWL vs routed wirelength, 951 routed runs of 16 designs (NS3K + Innovus) | same order at **≥ 2%** HPWL difference; a coin flip below 0.25% |
-| **6** | `before_fp`: Attar's floorplan (a new die at a looser or tighter utilization, IO pins, macros) handed to ORFS, which draws the PDN and places, up to detailed placement | **12 / 14** pass `check_placement` with no more slew / cap / fanout violations than ORFS's own floorplan, every macro and pin kept. The 2 that fail (tight cva6, tight swerv_wrapper: [why](docs/validation/fp_handoff.md)) are not in the zoo until the floorplan engines handle them<a id="before_fp-hand-off"></a> |
-| **7** | `d.timing()`: Attar's GPU STA vs OpenSTA after `estimate_parasitics -placement`, same placement; and after 20% random cell swaps (`d.resize` vs OpenROAD `replace_cell`) | WNS within **1.2%** of OpenSTA on 30 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells, median 0.1-0.2%; 16 / 16 resized designs within **0.23%**; 5-30x faster than OpenSTA ([table](docs/validation/timing_routing.md)) |
-| **8** | `d.gr_overflow()`: RUDY on OpenROAD's gcell capacities vs OpenROAD's global route, 13 ORFS designs at ORFS's and a stressed (0.7) layer adjustment | capacities exact on non-macro designs, within **0.16%** with macros; GROV ranks designs as ORFS does (Spearman **0.97**) but is a pre-route estimate: it over-reads mild and under-reads heavy congestion ([table](docs/validation/timing_routing.md#global-routing-grov)) |
-
-<p align="center"><img src="docs/images/proxy_agreement.png" alt="Agreement of routed wirelength with HPWL rises from 55% for HPWL differences under 0.1% to 99.8% above 5%" width="760"></p>
-
-HPWL does *not* predict timing: WNS and TNS move independently of it, and Attar's placements are not timing-driven
-(their WNS ranges from better to worse than ORFS's). Timing has its own proxy, check 7.
-
-<details>
-<summary><b>Check 1 in detail: HPWL against OpenROAD, design by design</b></summary>
-<br>
-
-`tools/validate_orfs.py`, ORFS's global placement of each design:
-
-| design | cells | HPWL, Attar (um) | HPWL, OpenROAD (um) | difference |
-| --- | ---: | ---: | ---: | ---: |
-| gcd | 412 | 579.38 | 579.38 | -0.00001% |
-| riscv32i | 10,106 | 42,491.95 | 42,491.94 | +0.00000% |
-| aes | 12,420 | 40,690.80 | 40,690.80 | -0.00000% |
-| ibex | 21,076 | 66,060.55 | 66,060.55 | -0.00001% |
-| tinyRocket | 32,292 | 119,581.85 | 119,581.86 | -0.00000% |
-| jpeg | 57,891 | 126,376.97 | 126,376.96 | +0.00001% |
-| ethmac | 59,653 | 141,021.00 | 141,020.97 | +0.00002% |
-| swerv_wrapper | 114,086 | 732,124.62 | 732,124.70 | -0.00001% |
-| cva6 | 124,618 | 475,600.19 | 475,600.21 | -0.00001% |
-| jpeg_x20 | 1,052,787 | 5,979,077.00 | 5,979,076.93 | +0.00000% |
-
-jpeg_x20 is 20 copies of the synthesized jpeg run through ORFS as one design: a million-cell scaling test.
-The legality check covers rows, sites, overlaps, row segments cut around macros, power-rail parity, and signal pins
-clear of the PDN's via metal (as OpenROAD's `check_placement` checks it).
-All 23 ORFS designs, ASAP7 and Nangate45: [docs/validation/orfs_check.md](docs/validation/orfs_check.md).
-
-</details>
-
-<details>
-<summary><b>Check 4 in detail: Attar's placement routed by ORFS</b></summary>
-<br>
-
-`tools/orfs_roundtrip.py <design> <run> def=<Attar's DEF>`: ORFS resizes, legalizes in detail, builds the clock tree,
-routes and times Attar's placement. Target density: the one ORFS's own global placement used for the design.
-
-| design | cells | target density | routed WL, ORFS's placement | routed WL, Attar's | difference | DRC | WNS, ORFS / Attar (ps) |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| gcd | 412 | 0.75 | 812 | 792 | -2.5% | 0 | -37.7 / -35.4 |
-| riscv32i | 10,106 | 0.749 | 55,422 | 53,144 | -4.1% | 0 | -16.1 / -48.9 |
-| aes | 12,420 | 0.71 | 50,810 | 50,203 | -1.2% | 0 | -21.0 / -11.2 |
-| ibex | 21,076 | 0.594 | 89,254 | 85,609 | -4.1% | 0 | -13.7 / -45.7 |
-| tinyRocket | 32,292 | 0.506 | 157,727 | 151,074 | -4.2% | 0 | -90.1 / -100.3 |
-| jpeg | 57,891 | 0.75 | 168,997 | 167,280 | -1.0% | 0 | -76.1 / -87.5 |
-| ethmac | 59,653 | 0.79 | 196,952 | 196,594 | -0.2% | 0 | -75.9 / -80.2 |
-| swerv_wrapper | 114,086 | 0.646 | 916,214 | 864,815 | -5.6% | 0 | -57.3 / -370.8 |
-| cva6 | 124,618 | 0.84 | 642,595 | 595,183 | -7.4% | 0 | -57.1 / -32.2 |
-Routed wirelength in um. tinyRocket runs with `LEC_CHECK=0`, as its ORFS baseline does: ORFS's equivalence checker
-cannot read its generated memory macro. Attar's placements are not timing-driven; ORFS's are.
-</details>
-
 ## A design is a state
 
 ```text
@@ -283,18 +216,6 @@ Every reader states which facts it provides, and every engine and metric states 
 
 Each can do exactly what its facts allow. Engines add facts with provenance (`placement: naive`), so it is always
 clear which part of a design came from where. See [docs/concepts.md](docs/concepts.md).
-
-## Roadmap
-
-<p align="center"><img src="docs/images/roadmap.svg" alt="HPWL evaluation is done; routed wirelength evaluation is half way; timing evaluation has not started" width="100%"></p>
-
-A proxy is lit once it is fast in Attar **and** shown to agree with the slow loop.
-
-| | status | what is there | next |
-| --- | --- | --- | --- |
-| **HPWL evaluation** | done | exact on the GPU; equals OpenROAD; legality equals `check_placement` | |
-| **Routed wirelength evaluation** | half way | ORFS hand-off and round trip; HPWL tracks routed WL above a 2% difference | a global-routing proxy, checked against ORFS routing |
-| **Timing evaluation** | not yet | Liberty and SDC paths recorded with each design | a GPU timing proxy, checked against ORFS STA |
 
 ## Acknowledgements
 

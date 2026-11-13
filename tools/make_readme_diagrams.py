@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""README diagrams as SVG (docs/images): flow.svg (how Attar works) and roadmap.svg (where it stands).
+"""README diagrams as SVG (docs/images): flow.svg (how Attar works) and roadmap.svg (the roadmap as a mind map).
 Warm light palette, the same as attar.viz: paper surface, terracotta for Attar, sand for data, amber accents.
 Arrow labels sit on their arrows as pills in the arrow's color; arrowheads take their line's color and stop short
 of the box they point at.
@@ -116,62 +116,193 @@ def flow():
 
 
 def roadmap():
-    """Soft: a thin gradient track, nodes with soft gradients and halos (no hard outlines), tinted status chips."""
-    W, H = 1240, 420
+    """Mind map in the logo's palette (dark roast ground; yellow -> orange -> coral; gold, cream).
+    Attar in the middle; Data to the left (placement and floorplan benchmarks in two colors, with design counts),
+    Naive Engine and Evaluation to the right. Leaves carry a status chip: Done, Not yet (dashed), Won't have (dim)."""
+    K = dict(bg0='#34201a', bg1='#1d110c', text='#f6e7cf', muted='#9c8576', dim='#6f5a4d', yellow='#ffc95a',
+             orange='#ff9a3c', coral='#f26446', gold='#d9b05a', cream='#ffe3a8', brick='#ec6a4f', ink='#24150f')
+    F = "font-family=\"'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif\""
+
+    def t(x, y, s, size, fill, weight='normal', anchor='middle', ls=None):
+        return ('<text x="%g" y="%g" font-size="%g" fill="%s" font-weight="%s" text-anchor="%s"%s %s>%s</text>'
+                % (x, y, size, fill, weight, anchor, ' letter-spacing="%g"' % ls if ls else '', F, esc(s)))
+
+    PL, FP = K['cream'], K['brick']                       # placement / floorplan benchmarks
+    DATA, NAIVE, EVAL = K['cream'], K['orange'], K['gold']
+    data = [('Contest benchmarks', [('ISPD 2005', 8, PL), ('ISPD 2015', 20, PL), ('ISPD 2018', 10, PL),
+                                    ('ISPD 2019', 10, PL), ('ISPD 2024', 5, PL), ('ICCAD 2025', 13, PL),
+                                    ('GSRC placement', 4, PL), ('MCNC', 10, FP), ('GSRC blocks', 12, FP),
+                                    ('IBM-HB+ (ISPD 2006)', 28, FP)]),
+            ('ASAP7', [(15, PL), (5, FP)]),                  # stops here: design counts only
+            ('NS3K', [(99, PL)])]
+    naive = [('Floorplan', [('Packing', 'Done'), ('Macro placement', 'Done'), ('IO placement', 'Done')]),
+             ('Placement', [('Placer', 'Done'), ('Legalizer', 'Done'), ('PDN-aware refinement', 'Done')])]
+    ev = [('HPWL', 'Done'), ('OVF', 'Done'), ('Timing', 'Done'), ('Blocked pin checking', 'Not yet'),
+          ('Detailed routing', "Won't have"), ('DRV checks', "Won't have")]
+
+    FL, FM, FC = 23, 23, 27                               # font: leaf, middle, category
+    PITCH, LH, GAP = 58, 46, 30
+    LW_D, LW, LW_E = 368, 384, 420
+    MW_D, CW, RX, RY, CW_R, MW_R = 290, 192, 98, 52, 236, 168
+    x_dleaf = 40
+    x_dmid = x_dleaf + LW_D + 38
+    x_dcat = x_dmid + MW_D + 36
+    CX = x_dcat + CW + 36 + RX
+    x_rcat = CX + RX + 40
+    x_rmid = x_rcat + CW_R + 38
+    x_nleaf = x_rmid + MW_R + 38
+    x_eleaf = x_rmid
+    W = x_nleaf + LW + 50
+    top = 50
+    h_left = (len(data[0][1]) + len(data) - 2) * PITCH + GAP
+    h_right = 11 * PITCH + 2 * GAP
+    Ht = max(h_left, h_right)
+    cy = top + LH / 2 + Ht / 2
+    H = int(top + LH + Ht + 160)
+
     s = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">' % (W, H, W, H),
          '<defs>'
-         '<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfbf7"/>'
-         '<stop offset="1" stop-color="#f8f2e9"/></linearGradient>'
-         '<linearGradient id="track" gradientUnits="userSpaceOnUse" x1="210" y1="0" x2="620" y2="0"><stop offset="0" stop-color="%s"/>'
-         '<stop offset="1" stop-color="%s"/></linearGradient>'
-         '<radialGradient id="lit" cx="0.38" cy="0.32" r="0.75"><stop offset="0" stop-color="#ec8a57"/>'
+         '<radialGradient id="bg" cx="0.5" cy="0.42" r="0.75"><stop offset="0" stop-color="%s"/>'
          '<stop offset="1" stop-color="%s"/></radialGradient>'
-         '<radialGradient id="halo" r="0.5"><stop offset="0.55" stop-color="%s" stop-opacity="0.28"/>'
+         '<pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" '
+         'fill="none" stroke="#ffffff" stroke-opacity="0.028" stroke-width="1"/></pattern>'
+         '<linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="%s"/>'
+         '<stop offset="0.55" stop-color="%s"/><stop offset="1" stop-color="%s"/></linearGradient>'
+         '<radialGradient id="glow" r="0.5"><stop offset="0.35" stop-color="%s" stop-opacity="0.35"/>'
          '<stop offset="1" stop-color="%s" stop-opacity="0"/></radialGradient>'
-         '<radialGradient id="halo_a" r="0.5"><stop offset="0.55" stop-color="%s" stop-opacity="0.22"/>'
-         '<stop offset="1" stop-color="%s" stop-opacity="0"/></radialGradient>'
-         '<radialGradient id="dim" cx="0.38" cy="0.32" r="0.75"><stop offset="0" stop-color="#fbf6ee"/>'
-         '<stop offset="1" stop-color="#efe5d6"/></radialGradient>'
-         '<clipPath id="half"><rect x="0" y="0" width="0" height="0"/></clipPath>'
-         '</defs>' % (C['terra'], C['amber'], C['terra'], C['terra'], C['terra'], C['amber'], C['amber']),
-         '<rect width="%d" height="%d" rx="26" fill="url(#bg)"/>' % (W, H)]
-    s.append(text(56, 62, 'Where Attar stands', 20, C['ink2'], 'bold', 'start'))
-    s.append(text(56, 90, 'Each proxy is lit once it is fast in Attar and shown to agree with the slow loop', 15.5,
-                  C['muted'], anchor='start'))
-    xs, y, R = (210, 620, 1030), 172, 30
-    # track: soft sand underneath, a terracotta-to-amber stroke up to the half-lit node
-    s.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#ede3d4" stroke-width="6" stroke-linecap="round"/>' % (xs[0], y, xs[2], y))
-    s.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="url(#track)" stroke-width="6" stroke-linecap="round"/>' % (xs[0], y, xs[1], y))
-    # 1: HPWL, lit
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#halo)"/>' % (xs[0], y, R * 2.1))
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#lit)"/>' % (xs[0], y, R))
-    s.append('<path d="M %g %g l 9 10 l 18 -21" fill="none" stroke="%s" stroke-width="4.5" stroke-linecap="round" '
-             'stroke-linejoin="round"/>' % (xs[0] - 13, y + 1, C['white']))
-    # 2: routed WL, half lit: a soft amber left half over a pale disc
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#halo_a)"/>' % (xs[1], y, R * 1.9))
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#dim)"/>' % (xs[1], y, R))
-    s.append('<path d="M %g %g A %d %d 0 0 0 %g %g Z" fill="%s" opacity="0.9"/>' % (xs[1], y - R, R, R, xs[1], y + R, C['amber']))
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="none" stroke="%s" stroke-opacity="0.35" stroke-width="2"/>' % (xs[1], y, R, C['amber']))
-    # 3: timing, not lit: a pale disc
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="url(#dim)"/>' % (xs[2], y, R))
-    s.append('<circle cx="%d" cy="%d" r="%d" fill="none" stroke="#e3d6c3" stroke-width="2"/>' % (xs[2], y, R))
-    items = [('HPWL evaluation', 'Done', ('#f9e2d3', C['terra_d']), ['Exact, on the GPU: 3 ms for 8.9M pins',
-                                                                     'Equals OpenROAD to 7 digits',
-                                                                     'Legality = check_placement, 9/9']),
-             ('Routed wirelength evaluation', 'Half way', ('#f8ebcf', '#a0700f'), ['ORFS hand-off routes, 0 DRC',
-                                                                                   'HPWL vs routed WL: 951 runs',
-                                                                                   'Next: a global-routing proxy']),
-             ('Timing evaluation', 'Not yet', ('#f0e8dc', C['muted']), ['Liberty + SDC recorded, not read',
-                                                                        'HPWL does not predict WNS / TNS',
-                                                                        'Next: a GPU timing proxy vs ORFS STA'])]
-    for k, (x, (t, st, (chip, chip_ink), lines)) in enumerate(zip(xs, items)):
-        on = k < 2
-        s.append(text(x, y + 82, t, 21, C['ink'] if on else C['ink2'], 'bold'))
-        w = len(st) * 9.5 + 36
-        s.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="%s"/>' % (x - w / 2, y + 98, w, chip))
-        s.append(text(x, y + 117, st, 14.5, chip_ink, 'bold'))
+         '<filter id="soft" x="-20%%" y="-40%%" width="140%%" height="180%%"><feGaussianBlur in="SourceAlpha" stdDeviation="5"/>'
+         '<feOffset dy="4"/><feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>'
+         '<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>'
+         '</defs>' % (K['bg0'], K['bg1'], K['yellow'], K['orange'], K['coral'], K['orange'], K['orange']),
+         '<rect width="%d" height="%d" rx="28" fill="url(#bg)"/>' % (W, H),
+         '<rect width="%d" height="%d" rx="28" fill="url(#grid)"/>' % (W, H)]
+    links, nodes = [], []
+
+    def link(x1, y1, x2, y2, col, wd, op=0.6):
+        mx = (x1 + x2) / 2
+        links.append('<path d="M %g %g C %g %g %g %g %g %g" fill="none" stroke="%s" stroke-width="%g" '
+                     'stroke-linecap="round" stroke-opacity="%g"/>' % (x1, y1, mx, y1, mx, y2, x2, y2, col, wd, op))
+
+    def solid(x, y, w, h, label, col, size):              # category: filled in its branch color; '\n' breaks lines
+        lines = label.split('\n')
+        nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="%s" filter="url(#soft)"/>'
+                     % (x, y - h / 2, w, h, min(h / 2, 30), col))
         for i, l in enumerate(lines):
-            s.append(text(x, y + 158 + i * 25, l, 15, C['ink2'] if on else C['muted']))
+            dy = (i - (len(lines) - 1) / 2) * size * 1.15
+            nodes.append(t(x + w / 2, y + dy + size * 0.36, l, size, K['ink'], 'bold'))
+
+    def ring(x, y, w, h, label, col, size):               # middle level: outlined
+        nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="%s" fill-opacity="0.10" stroke="%s" '
+                     'stroke-width="2"/>' % (x, y - h / 2, w, h, h / 2, col, col))
+        nodes.append(t(x + w / 2, y + size * 0.36, label, size, col, 'bold'))
+
+    def chip(x, y, label, kind, col):
+        w = len(label) * 9.6 + 26
+        if kind == 'Done':
+            nodes.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="%s"/>' % (x, y - 14, w, col))
+            nodes.append(t(x + w / 2, y + 5.8, label, 16, K['ink'], 'bold'))
+        elif kind == 'Not yet':
+            nodes.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="none" stroke="%s" stroke-width="1.6" '
+                         'stroke-dasharray="4 3"/>' % (x, y - 14, w, col))
+            nodes.append(t(x + w / 2, y + 5.8, label, 16, col, 'bold'))
+        else:
+            nodes.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="#ffffff" fill-opacity="0.07"/>'
+                         % (x, y - 14, w))
+            nodes.append(t(x + w / 2, y + 5.8, label, 16, K['muted'], 'bold'))
+        return w
+
+    def leaf(x, y, w, label, col, status=None, counts=()):
+        if status == "Won't have":
+            nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="#ffffff" fill-opacity="0.035" '
+                         'stroke="%s" stroke-opacity="0.5" stroke-width="1.4"/>' % (x, y - LH / 2, w, LH, LH / 2, K['dim']))
+            tc = K['muted']
+        elif status == 'Not yet':
+            nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="none" stroke="%s" stroke-width="1.8" '
+                         'stroke-dasharray="6 5"/>' % (x, y - LH / 2, w, LH, LH / 2, col))
+            tc = K['text']
+        else:
+            nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="%s" fill-opacity="0.13" stroke="%s" '
+                         'stroke-opacity="0.85" stroke-width="1.6"/>' % (x, y - LH / 2, w, LH, LH / 2, col, col))
+            tc = K['text']
+        nodes.append(t(x + 22, y + FL * 0.36, label, FL, tc, anchor='start'))
+        if status:
+            cw = len(status) * 9.6 + 26
+            chip(x + w - cw - 9, y, status, status, col)
+        cx = x + w - 28
+        for n, c in reversed(counts):
+            nodes.append('<circle cx="%g" cy="%g" r="17" fill="%s"/>' % (cx, y, c))
+            nodes.append(t(cx, y + 5.8, str(n), 16, K['ink'], 'bold'))
+            cx -= 40
+
+    # ---- left: Data
+    y = cy - h_left / 2
+    gname, kids = data[0]                                 # Contest benchmarks: one leaf per suite
+    ys = [y + i * PITCH for i in range(len(kids))]
+    my = (ys[0] + ys[-1]) / 2
+    for yy, (label, n, col) in zip(ys, kids):
+        link(x_dmid, my, x_dleaf + LW_D, yy, col, 2.2)
+        leaf(x_dleaf, yy, LW_D, label, col, counts=[(n, col)])
+    link(x_dcat, cy, x_dmid + MW_D, my, DATA, 2.8)
+    ring(x_dmid, my, MW_D, 50, gname, DATA, FM)
+    y = ys[-1] + PITCH + GAP
+    for gname, counts in data[1:]:                        # ASAP7, NS3K: leaves at the middle level
+        link(x_dcat, cy, x_dmid + MW_D, y, DATA, 2.8)
+        leaf(x_dmid, y, MW_D, gname, DATA, counts=counts)
+        y += PITCH
+    solid(x_dcat, cy, CW, 92, 'Data,\nas tensors', DATA, FC)
+    link(CX - RX, cy, x_dcat + CW, cy, DATA, 4.5, 0.75)
+
+    # ---- right: Naive Engine, then Evaluation
+    y0 = cy - h_right / 2
+    mids = []
+    for g, (gname, kids) in enumerate(naive):
+        ys = [y0 + (g * 3 + i) * PITCH + g * GAP for i in range(3)]
+        my = ys[1]
+        mids.append(my)
+        for yy, (label, st) in zip(ys, kids):
+            link(x_rmid + MW_R, my, x_nleaf, yy, NAIVE, 2.2)
+            leaf(x_nleaf, yy, LW, label, NAIVE, st)
+    ny = (mids[0] + mids[1]) / 2
+    for g, (gname, _) in enumerate(naive):
+        link(x_rcat + CW_R, ny, x_rmid, mids[g], NAIVE, 2.8)
+        ring(x_rmid, mids[g], MW_R, 50, gname, NAIVE, FM)
+    eys = [y0 + (6 + i) * PITCH + 2 * GAP for i in range(6)]
+    ey = (eys[0] + eys[-1]) / 2
+    for yy, (label, st) in zip(eys, ev):
+        link(x_rcat + CW_R, ey, x_eleaf, yy, EVAL, 2.2)
+        leaf(x_eleaf, yy, LW_E, label, EVAL, st)
+    link(CX + RX, cy, x_rcat, ny, NAIVE, 4.5, 0.75)
+    link(CX + RX, cy, x_rcat, ey, EVAL, 4.5, 0.75)
+    solid(x_rcat, ny, CW_R, 60, 'Naive Engine', NAIVE, FC)
+    solid(x_rcat, ey, CW_R, 60, 'Evaluation', EVAL, FC)
+
+    s += links + nodes
+    # ---- center: the logo's gradient
+    s.append('<ellipse cx="%g" cy="%g" rx="%g" ry="%g" fill="url(#glow)"/>' % (CX, cy, RX * 2.1, RY * 2.6))
+    s.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="url(#brand)" filter="url(#soft)"/>'
+             % (CX - RX, cy - RY, 2 * RX, 2 * RY, RY))
+    s.append(t(CX, cy + 16, 'attar', 46, K['ink'], 'bold', ls=1))
+
+    # ---- legend
+    ly = H - 58
+    s.append('<line x1="50" y1="%g" x2="%g" y2="%g" stroke="#ffffff" stroke-opacity="0.08"/>' % (ly - 42, W - 50, ly - 42))
+    x = 50
+    for label, col in (('Placement benchmark (after_fp)', PL), ('Floorplan benchmark (before_fp)', FP)):
+        s.append('<rect x="%g" y="%g" width="40" height="24" rx="12" fill="%s" fill-opacity="0.13" stroke="%s" '
+                 'stroke-width="1.8"/>' % (x, ly - 12, col, col))
+        s.append(t(x + 54, ly + 7, label, 20, K['text'], anchor='start'))
+        x += 54 + len(label) * 10.4 + 44
+    s.append('<circle cx="%g" cy="%g" r="16" fill="%s"/>' % (x + 16, ly, K['cream']))
+    s.append(t(x + 16, ly + 5.5, 'n', 16, K['ink'], 'bold'))
+    s.append(t(x + 42, ly + 7, 'designs in the zoo', 20, K['text'], anchor='start'))
+    x = W - 50
+    nodes = []
+    for label in ("Won't have", 'Not yet', 'Done'):
+        w = len(label) * 9.6 + 26
+        x -= w
+        chip(x, ly, label, label, K['text'])
+        x -= 16
+    s += nodes
     s.append('</svg>')
     open(os.path.join(IMG, 'roadmap.svg'), 'w').write('\n'.join(s))
 
