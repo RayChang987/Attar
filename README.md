@@ -186,7 +186,7 @@ legal including power rails and the PDN; OpenROAD's <code>check_placement</code>
 
 ## Does the fast loop agree with the slow loop?
 
-A fast loop is only useful if its numbers mean the same thing as the slow loop's. Six checks, each reproducible with
+A fast loop is only useful if its numbers mean the same thing as the slow loop's. Eight checks, each reproducible with
 the tools in this repo (ORFS on ASAP7 and Nangate45; OpenROAD alone on i3dPDK_NS3K, which has no ORFS platform):
 
 | | check | result |
@@ -197,11 +197,13 @@ the tools in this repo (ORFS on ASAP7 and Nangate45; OpenROAD alone on i3dPDK_NS
 | **4** | Attar's own placement, at the design's target density, then ORFS to the end | **9 / 9** route with **0 DRC**; routed WL **0.2% to 7.4% shorter** than with ORFS's own placement |
 | **5** | HPWL vs routed wirelength, 951 routed runs of 16 designs (NS3K + Innovus) | same order at **≥ 2%** HPWL difference; a coin flip below 0.25% |
 | **6** | `before_fp`: Attar's floorplan (a new die at a looser or tighter utilization, IO pins, macros) handed to ORFS, which draws the PDN and places, up to detailed placement | **12 / 14** pass `check_placement` with no more slew / cap / fanout violations than ORFS's own floorplan, every macro and pin kept. The 2 that fail (tight cva6, tight swerv_wrapper: [why](docs/validation/fp_handoff.md)) are not in the zoo until the floorplan engines handle them<a id="before_fp-hand-off"></a> |
+| **7** | `d.timing()`: Attar's GPU STA vs OpenSTA after `estimate_parasitics -placement`, same placement; and after 20% random cell swaps (`d.resize` vs OpenROAD `replace_cell`) | WNS within **1.2%** of OpenSTA on 30 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells, median 0.1-0.2%; 16 / 16 resized designs within **0.23%**; 5-30x faster than OpenSTA ([table](docs/validation/timing_routing.md)) |
+| **8** | `d.gr_overflow()`: RUDY on OpenROAD's gcell capacities vs OpenROAD's global route, 13 ORFS designs at ORFS's and a stressed (0.7) layer adjustment | capacities exact on non-macro designs, within **0.16%** with macros; GROV ranks designs as ORFS does (Spearman **0.97**) but is a pre-route estimate: it over-reads mild and under-reads heavy congestion ([table](docs/validation/timing_routing.md#global-routing-grov)) |
 
 <p align="center"><img src="docs/images/proxy_agreement.png" alt="Agreement of routed wirelength with HPWL rises from 55% for HPWL differences under 0.1% to 99.8% above 5%" width="760"></p>
 
 HPWL does *not* predict timing: WNS and TNS move independently of it, and Attar's placements are not timing-driven
-(their WNS ranges from better to worse than ORFS's). Timing is the next proxy to build ([roadmap](#roadmap)).
+(their WNS ranges from better to worse than ORFS's). Timing has its own proxy, check 7.
 
 <details>
 <summary><b>Check 1 in detail: HPWL against OpenROAD, design by design</b></summary>
