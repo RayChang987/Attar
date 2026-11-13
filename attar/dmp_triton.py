@@ -1,6 +1,6 @@
 """attar.dmp as two Triton kernels: one thread lane per arc (gate) or per load (wire), every iteration in registers, one
 launch per batch. The math is attar.dmp's, which follows OpenSTA's DmpCeff.cc line by line; attar.dmp stays the
-reference (CPU, tests). float32 like the rest of the GPU timer.
+reference (CPU, tests). The delay model runs in float64 by default (OpenSTA's precision), arrivals in float32.
 """
 import torch
 import triton
@@ -102,21 +102,6 @@ def _newton(ix1, ix2, val, nn, bd, bs, slew, ce0, rd, ctot, vth, vl, vh, der, A,
     fail = conv | ~mask
     t0, dt, ce, conv, fail = _newton_iter(ix1, ix2, val, nn, bd, bs, slew, rd, ctot, vth, vl, vh, der, A, B, D, p1, p2,
                                           mask, t0, dt, ce, conv, fail, ORDER3, K, ITERS)
-    # OpenSTA iterates in double. A lane that used up the iterations in float32 without failing (bad step, singular,
-    # non-finite) is at float32's resolution of the 1% relative tolerance (e.g. t0 near 0): it continues in float64
-    # from where it is, as OpenSTA's double iteration would converge there.
-    more = mask & ~conv & ~fail
-    if tl.max(more.to(tl.int32), 0) > 0:
-        F = tl.float64
-        t0d, dtd, ced, convd, faild = _newton_iter(
-            ix1, ix2, val, nn, bd, bs, slew.to(F), rd.to(F), ctot.to(F), vth.to(F), vl.to(F), vh.to(F), der.to(F),
-            A.to(F), B.to(F), D.to(F), p1.to(F), p2.to(F), more, t0.to(F), dt.to(F), ce.to(F), ~more, ~more,
-            ORDER3, K, ITERS)
-        t0 = tl.where(more, t0d.to(tl.float32), t0)
-        dt = tl.where(more, dtd.to(tl.float32), dt)
-        ce = tl.where(more, ced.to(tl.float32), ce)
-        conv = conv | (more & convd)
-        fail = fail | (more & faild)
     fail = fail | ~conv | (dt <= 0) | (ce < 0) | (ce > ctot + 1e-6)
     return t0, dt, ce, fail
 
@@ -257,7 +242,7 @@ def _find_root(x1, x2, target, k0, k1, k2, k3, k4, p1, p2, t0, dt, p3, on, LOAD:
 
 
 @triton.jit
-def _gate_dev(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, der, mask,
+def _gate_core(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, der, mask,
               K, NIT: tl.constexpr, RIT: tl.constexpr):
     """attar.dmp.gate for one lane per arc: (delay, driver slew, valid, k0..k4, p1, p2, t0, dt, vo_delay, ub)."""
     c1 = tl.minimum(c1, ctot)
@@ -334,7 +319,39 @@ def _gate_dev(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, der
     zs = _nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(c1_, 1e-9), mask, K)
     delay = tl.where(zc_bad, zd, delay)
     dslew = tl.where(zc_bad, zs, dslew)
-    return delay, dslew, wave_ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub
+    return delay, dslew, wave_ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, pia | zc2
+
+
+@triton.jit
+def _gate_dev(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, der, mask,
+              K, NIT: tl.constexpr, RIT: tl.constexpr, MODE: tl.constexpr = 1):
+    """_gate_core per MODE: 2, in float64 (OpenSTA's precision: on strongly resistive nets float32 fails, or worse,
+    converges to a wrong waveform); 1, in float32 with the lanes whose Pi / ZeroC2 waveform failed recomputed in
+    float64; 0, float32 only. Delay and slew come back in float32, the waveform state in the computing precision."""
+    if MODE == 2:
+        F = tl.float64
+        delay, dslew, ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo, ub, used = _gate_core(
+            ix1, ix2, val, nn, lib, orf, slew.to(F), ctot.to(F), c1.to(F), rpi.to(F), vth.to(F), vl.to(F), vh.to(F),
+            der.to(F), mask, K, NIT, RIT)
+        delay = delay.to(tl.float32); dslew = dslew.to(tl.float32)
+    else:
+        delay, dslew, ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo, ub, used = _gate_core(
+            ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, der, mask, K, NIT, RIT)
+        redo = mask & used & ~ok
+        if MODE == 1 and tl.max(redo.to(tl.int32), 0) > 0:
+            F = tl.float64
+            D_, S_, O_, a0, a1, a2, a3, a4, q1, q2, u0, u1, vd, ud, _u = _gate_core(
+                ix1, ix2, val, nn, lib, orf, slew.to(F), ctot.to(F), c1.to(F), rpi.to(F), vth.to(F), vl.to(F),
+                vh.to(F), der.to(F), redo, K, NIT, RIT)
+            f = tl.float32
+            delay = tl.where(redo, D_.to(f), delay); dslew = tl.where(redo, S_.to(f), dslew)
+            ok = tl.where(redo, O_, ok)
+            k0 = tl.where(redo, a0.to(f), k0); k1 = tl.where(redo, a1.to(f), k1); k2 = tl.where(redo, a2.to(f), k2)
+            k3 = tl.where(redo, a3.to(f), k3); k4 = tl.where(redo, a4.to(f), k4)
+            p1 = tl.where(redo, q1.to(f), p1); p2 = tl.where(redo, q2.to(f), p2)
+            t0 = tl.where(redo, u0.to(f), t0); dt = tl.where(redo, u1.to(f), dt)
+            vo = tl.where(redo, vd.to(f), vo); ub = tl.where(redo, ud.to(f), ub)
+    return delay, dslew, ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo, ub
 
 
 @triton.jit(do_not_specialize=['N', 'K'])
@@ -370,8 +387,31 @@ def dmp_gate_kernel(ix1, ix2, val, nn, lib_p, orf_p, slew_p, ctot_p, cfar_p, rpi
 
 @triton.jit
 def _load_dev(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl, vh, der, elm, rise,
-              lvth, lvl, lvh, lder, RIT: tl.constexpr):
-    """attar.dmp.load + threshold_adjust for one lane per load: (wire delay, load slew)."""
+              lvth, lvl, lvh, lder, RIT: tl.constexpr, MODE: tl.constexpr = 1):
+    """_load_core per MODE (see _gate_dev); returns (wire delay, load slew) in float32."""
+    if MODE == 2:
+        F = tl.float64
+        w, s, bad = _load_core(valid, k0.to(F), k1.to(F), k2.to(F), k3.to(F), k4.to(F), p1.to(F), p2.to(F),
+                               t0.to(F), dt.to(F), vo_d.to(F), ub.to(F), ds.to(F), vth.to(F), vl.to(F), vh.to(F),
+                               der.to(F), elm.to(F), rise, lvth.to(F), lvl.to(F), lvh.to(F), lder.to(F), RIT)
+        w = w.to(tl.float32); s = s.to(tl.float32)
+    else:
+        w, s, bad = _load_core(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl, vh, der, elm, rise,
+                               lvth, lvl, lvh, lder, RIT)
+        if MODE == 1 and tl.max(bad.to(tl.int32), 0) > 0:
+            F = tl.float64
+            w2, s2, _b = _load_core(valid & bad, k0.to(F), k1.to(F), k2.to(F), k3.to(F), k4.to(F), p1.to(F),
+                                    p2.to(F), t0.to(F), dt.to(F), vo_d.to(F), ub.to(F), ds.to(F), vth.to(F), vl.to(F),
+                                    vh.to(F), der.to(F), elm.to(F), rise, lvth.to(F), lvl.to(F), lvh.to(F),
+                                    lder.to(F), RIT)
+            w = tl.where(bad, w2.to(tl.float32), w); s = tl.where(bad, s2.to(tl.float32), s)
+    return w, s
+
+
+@triton.jit
+def _load_core(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl, vh, der, elm, rise,
+               lvth, lvl, lvh, lder, RIT: tl.constexpr):
+    """attar.dmp.load + threshold_adjust for one lane per load: (wire delay, load slew, waveform failed)."""
     small = (elm == 0) | (elm < ds * 1e-3) | ~valid
     e = tl.where(small, 1.0, elm)
     p3 = 1.0 / e
@@ -393,7 +433,7 @@ def _load_dev(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl, 
     delta = s * ((lvth - vth) / dd)
     w = w + tl.where(rise, delta, -delta)
     s = s * (((lvh - lvl) / lder) / (dd / der))
-    return w, s
+    return w, s, ~small & fail
 
 
 @triton.jit(do_not_specialize=['N'])
@@ -424,7 +464,7 @@ def dmp_load_kernel(state_p, elm_p, rise_p, lthr_p, wire_o, slew_o, N, RIT: tl.c
 @triton.jit(do_not_specialize=['N', 'NT', 'K'])
 def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t0_p, tag_p, s0_p, pi_p,
                       amax, amin, smax, smin, st_o, N,
-                      NT, K, NIT: tl.constexpr, RIT: tl.constexpr, BLOCK: tl.constexpr):
+                      NT, K, NIT: tl.constexpr, RIT: tl.constexpr, BLOCK: tl.constexpr, MODE: tl.constexpr):
     """One level's arcs, 2N lanes (max analysis, then min): DMP gate delay and driver slew, the driver pin's arrivals
     (per tag) and slews by float atomics, and per lane the row its loads need (STATE + delay, reach) in st_o.
     fi < 0: a launch arc (arrival t0 into tag at its clock pin, slew s0: the clock's transition)."""
@@ -452,7 +492,7 @@ def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t
     vth = tl.load(tb, mask=mask, other=0.5); vl = tl.load(tb + 1, mask=mask, other=0.2)
     vh = tl.load(tb + 2, mask=mask, other=0.8); der = tl.load(tb + 3, mask=mask, other=1.0)
     delay, ds, ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo, ub = _gate_dev(
-        ix1, ix2, val, nn, lib, orf, slew, cn + cf, cf, rr, vth, vl, vh, der, mask, K, NIT, RIT)
+        ix1, ix2, val, nn, lib, orf, slew, cn + cf, cf, rr, vth, vl, vh, der, mask, K, NIT, RIT, MODE)
     ti = t * 2 + orf
     reach = launch
     for g in range(NT):
@@ -478,7 +518,7 @@ def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t
 @triton.jit(do_not_specialize=['N', 'M', 'NT'])
 def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, sthr_p,
                       amax, amin, smax, smin, N, M,
-                      NT, RIT: tl.constexpr, BLOCK: tl.constexpr):
+                      NT, RIT: tl.constexpr, BLOCK: tl.constexpr, MODE: tl.constexpr):
     """One level's loads, 2M lanes (max analysis, then min): DMP wire delay and load slew from the arc's row of
     stage_gate_kernel, threshold adjustment, the load pin's arrivals and slews by float atomics."""
     l = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
@@ -511,7 +551,8 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
     lvth = tl.load(lb, mask=mask, other=0.5); lvl = tl.load(lb + 1, mask=mask, other=0.2)
     lvh = tl.load(lb + 2, mask=mask, other=0.8); lder = tl.load(lb + 3, mask=mask, other=1.0)
     w, sl = _load_dev(ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo, ub, ds, vth, vl, vh, der, elm, orf == 0,
-                      lvth, lvl, lvh, lder, RIT)
+                      lvth, lvl, lvh, lder, RIT, MODE)
+    delay = delay.to(tl.float32)                           # (float64 rows in MODE 2)
     si = sk * 2 + orf
     INF = float('inf')
     for g in range(NT):
@@ -526,6 +567,9 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
 
 
 BLOCK = 128
+# the delay model's precision (attar.sta.Timer precision=): 'double' (OpenSTA's), 'retry' (float32, the lanes whose
+# waveform fails recomputed in float64), 'single'
+MODES = {'single': 0, 'retry': 1, 'double': 2}
 
 
 def gate(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr):
@@ -553,19 +597,22 @@ def load(state, elmore, rise, lthr):
     return w, s
 
 
-def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin):
+def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin, precision='double'):
     """One level of the timer on the GPU: stage_gate_kernel then stage_load_kernel. tables: (ix1, ix2, val, n32, thr);
-    lev: the level's static arrays (lib, fi, t, orf, net, t0, tag, ea, en, s0)."""
+    lev: the level's static arrays (lib, fi, t, orf, net, t0, tag, ea, en, s0); precision: see MODES."""
+    mode = MODES[precision]
     ix1, ix2, val, n32, thr = tables
     lib, fi, t, orf, net, t0, tag, ea, en, s0 = lev
     N, M = len(lib), len(ea)
     if not N:
         return
     NT = amax.shape[1]
-    st = torch.empty(2 * N, 20, device=amax.device)
+    st = torch.empty(2 * N, 20, device=amax.device, dtype=torch.float64 if mode == 2 else torch.float32)
     stage_gate_kernel[(triton.cdiv(2 * N, BLOCK),)](ix1, ix2, val, n32, thr, lib, fi, t, orf, net, t0, tag, s0, pi,
                                                     amax, amin, smax, smin, st, N,
-                                                    NT=NT, K=ix1.shape[-1], NIT=NEWTON_MAX_ITER, RIT=ROOT_N, BLOCK=BLOCK)
+                                                    NT=NT, K=ix1.shape[-1], NIT=NEWTON_MAX_ITER, RIT=ROOT_N, BLOCK=BLOCK,
+                                                    MODE=mode)
     if M:
         stage_load_kernel[(triton.cdiv(2 * M, BLOCK),)](st, ea, en, fi, orf, t0, tag, nto, elm, sthr,
-                                                        amax, amin, smax, smin, N, M, NT=NT, RIT=ROOT_N, BLOCK=BLOCK)
+                                                        amax, amin, smax, smin, N, M, NT=NT, RIT=ROOT_N, BLOCK=BLOCK,
+                                                        MODE=mode)

@@ -97,12 +97,15 @@ def arc_eval(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr, steps=Non
     this analysis (max or min pin caps), (c_far, rpi): its pi model's far capacitance and resistance (the near one is
     ctot - c_far). thr: the driver library's (output threshold, slew lower, slew upper, slew derate)."""
     from . import dmp
-    tab = (ix1[lib, orf], ix2[lib, orf], val[lib, orf], tn[lib, orf],
-           ix1[lib, 2 + orf], ix2[lib, 2 + orf], val[lib, 2 + orf], tn[lib, 2 + orf])
+    F = torch.float64                                    # OpenSTA's precision (float32 fails on strongly resistive nets)
+    dt_out = slew.dtype
+    tab = (ix1[lib, orf].to(F), ix2[lib, orf].to(F), val[lib, orf].to(F), tn[lib, orf],
+           ix1[lib, 2 + orf].to(F), ix2[lib, 2 + orf].to(F), val[lib, 2 + orf].to(F), tn[lib, 2 + orf])
+    slew, ctot, c_far, rpi, thr = slew.to(F), ctot.to(F), c_far.to(F), rpi.to(F), thr.to(F)
     c_far = torch.minimum(c_far, ctot)
     delay, dslew, _, stt = dmp.gate(tab, slew, ctot, (ctot - c_far).clamp(min=0), rpi, c_far,
                                     thr[:, 0], thr[:, 1], thr[:, 2], thr[:, 3], steps or dmp.EAGER)
-    return delay, dslew, torch.stack([stt[k].to(delay.dtype) for k in STATE], 1)
+    return delay.to(dt_out), dslew.to(dt_out), torch.stack([stt[k].to(dt_out) for k in STATE], 1)
 
 
 def load_eval(state, elmore, rise, lthr, steps=None):
@@ -110,11 +113,14 @@ def load_eval(state, elmore, rise, lthr, steps=None):
     (DelayCalcBase::thresholdAdjust). state: the arcs' STATE rows, one per load; lthr: the loads' (input threshold,
     slew lower, slew upper, slew derate)."""
     from . import dmp
-    st_ = {k: state[:, i] for i, k in enumerate(STATE)}
+    F, dt_out = torch.float64, elmore.dtype
+    st_ = {k: state[:, i].to(F) for i, k in enumerate(STATE)}
     st_['valid'] = st_['valid'] > 0.5
-    w, sl = dmp.load(st_, elmore, steps or dmp.EAGER)
-    return dmp.threshold_adjust(w, sl, rise, st_['vth'], st_['vl'], st_['vh'], st_['derate'],
-                                lthr[:, 0], lthr[:, 1], lthr[:, 2], lthr[:, 3])
+    w, sl = dmp.load(st_, elmore.to(F), steps or dmp.EAGER)
+    lthr = lthr.to(F)
+    w, sl = dmp.threshold_adjust(w, sl, rise, st_['vth'], st_['vl'], st_['vh'], st_['derate'],
+                                 lthr[:, 0], lthr[:, 1], lthr[:, 2], lthr[:, 3])
+    return w.to(dt_out), sl.to(dt_out)
 
 
 def compile_fn(fn):
@@ -270,13 +276,16 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
 class Timer:
     """Build once per design (graph, levels, constraints); run() times a placement."""
 
-    def __init__(self, d, parasitics='placement', exact_trees=True):
+    def __init__(self, d, parasitics='placement', exact_trees=True, precision='double'):
         """exact_trees: every net that can carry a data arrival gets OpenROAD's tree on the host (attar.steiner_big,
         an exact port including its tie-breaks); False: the GPU kernel for nets up to 256 pins (faster; its ties
-        differ from OpenROAD's on a few nets in 10^4), the host for larger ones."""
+        differ from OpenROAD's on a few nets in 10^4), the host for larger ones.
+        precision: the GPU delay model's, 'double' (OpenSTA's; float32 fails or drifts on strongly resistive nets),
+        'retry' (float32, failing lanes in float64) or 'single'."""
         d.require('sta')
         self.d = d
         self.exact_trees = exact_trees
+        self.precision = precision
         self.dev = dev = d.device
         self.parasitics = parasitics
         t, _ = st.load(os.path.join(d.path, 'timing.safetensors'))
@@ -1032,7 +1041,8 @@ class Timer:
         if self.triton is not None and self.fused:               # one fused kernel per level
             pic, elc = pi.contiguous(), elm.contiguous()
             for lv in self.tri_lev:
-                self.triton.stage(self.tri_tables, lv, self.tri_sthr, pic, elc, self.tri_nto, amax, amin, smax, smin)
+                self.triton.stage(self.tri_tables, lv, self.tri_sthr, pic, elc, self.tri_nto, amax, amin, smax, smin,
+                                  self.precision)
             smin = torch.where(torch.isfinite(smin), smin, smax)
             self.amax, self.amin = amax.view(P, 2, NT), amin.view(P, 2, NT)
             self.smax, self.smin = smax.view(P, 2), smin.view(P, 2)
