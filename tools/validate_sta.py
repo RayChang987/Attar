@@ -77,7 +77,9 @@ def sdc_path(design, plat):
 
 def truth(design, plat, libs, sdc, rc):
     """OpenSTA's endpoint slacks: {name: (setup, hold)}, plus wns / tns / seconds."""
-    out_dir = os.path.join(RUNS, 'sta', design); os.makedirs(out_dir, exist_ok=True)
+    # cached per design (asap7, as before) or per platform / design
+    out_dir = os.path.join(RUNS, 'sta', design) if plat == 'asap7' else os.path.join(RUNS, 'sta', plat, design)
+    os.makedirs(out_dir, exist_ok=True)
     tsv = os.path.join(out_dir, 'truth.tsv'); meta = os.path.join(out_dir, 'truth.json')
     if not (os.path.exists(tsv) and os.path.exists(meta)):
         odb = os.path.join(flow_dir(base_dir(run_key(plat, design))), '3_3_place_gp.odb')
@@ -98,22 +100,27 @@ def truth(design, plat, libs, sdc, rc):
             raise RuntimeError(log[-3000:])
         _, sec, wns, tns = line[-1].split()
         json.dump({'seconds': float(sec), 'worst_slack': float(wns), 'tns': float(tns)}, open(meta, 'w'))
+    # OpenSTA reports in the first Liberty file's time unit (ps for ASAP7, ns for Nangate45): to ps
+    from attar import liberty
+    tu = liberty.read(libs[0])['time_unit_ps']
     ep = {}
     for l in open(tsv):
         t = l.split()
         if len(t) == 3:
             try:
-                ep[t[0]] = (float(t[1]), float(t[2]))
+                ep[t[0]] = (float(t[1]) * tu, float(t[2]) * tu)
             except ValueError:
                 pass
-    return ep, json.load(open(meta))
+    m = json.load(open(meta))
+    m['worst_slack'] *= tu; m['tns'] *= tu
+    return ep, m
 
 
 def attar_design(design, plat, libs, sdc, rc, work, dev):
     src = os.path.join(attar.paths.zoo_dir(), 'after_fp', 'orfs_' + plat, design)
     d = attar.load(src, dev)
     if 'timing' not in d.facts:
-        dst = os.path.join(work, design)
+        dst = os.path.join(work, design if plat == 'asap7' else plat + '_' + design)
         tj = os.path.join(dst, 'timing.json')
         if not os.path.exists(tj) or 'arc_when' not in json.load(open(tj)):   # absent, or attached by an older attar
             shutil.rmtree(dst, ignore_errors=True); shutil.copytree(src, dst)
