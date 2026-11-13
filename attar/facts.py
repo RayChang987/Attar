@@ -36,6 +36,7 @@ CAPABILITIES = {
     'die_size': {'cell_geometry'},                         # on the rows' site grid when there are rows
     'io_place': {'netlist', 'floorplan.die'},
     'macro_place': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'floorplan.io'},
+    'place': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'floorplan.io', 'floorplan.macros', 'rows'},  # d.place()
     'global_place': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'floorplan.io', 'floorplan.macros'},
     'legalize': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'rows', 'placement'},
     'detailed_place': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'rows', 'placement'},
@@ -64,18 +65,29 @@ HINTS = {
 # what each capability means, for status()
 DESCRIBE = {
     'hpwl': 'evaluate HPWL', 'wirelength_model': 'WA wirelength on given positions',
-    'die_size': 'size the die for a utilization', 'io_place': 'IO pin placement', 'macro_place': 'macro placement', 'global_place': 'global placement', 'legalize': 'legalization', 'detailed_place': 'detailed placement',
-    'global_route': 'global routing', 'sta': 'static timing analysis', 'export': 'write a DEF (source frame + IR)',
+    'die_size': 'size the die for a utilization', 'io_place': 'IO pin placement', 'macro_place': 'macro placement', 'place': 'cell placement (global + legalization)',
+    'global_place': 'global placement', 'legalize': 'legalization', 'detailed_place': 'detailed placement',
+    'global_route': 'global routing', 'sta': 'static timing analysis', 'resize': 'gate sizing (resize)',
+    'gr_overflow': 'global-routing overflow (GROV)', 'export': 'write a DEF (source frame + IR)',
     'orfs_handoff': 'hand off to ORFS for validation', 'orfs_floorplan_handoff': 'hand the floorplan to ORFS (2_1)',
     'plot': 'plot the design',
 }
+# capabilities a design can lose: (when, why). A design whose floorplan is the given problem (after_fp: the die, rows
+# and PDN are drawn) cannot be given a new die.
+BLOCKED = {
+    'die_size': lambda d: (d.mode == 'after_fp' or 'pdn' in d.facts,
+                           'the floorplan is given (%s); only the cells are to place'
+                           % ('die, rows and PDN drawn' if 'pdn' in d.facts else 'after_fp: the die is fixed')),
+}
+# the steps of 'place', each an engine of its own: status() shows only 'place'
+PLACE_STEPS = ('global_place', 'legalize', 'detailed_place')
 DEFAULT_HINT = 'load a source that provides it (deriving it, attar.derive, is not implemented yet)'
 
 
 class MissingFacts(RuntimeError):
-    def __init__(self, design, capability, missing, reasons=None):
+    def __init__(self, design, capability, missing, reasons=None, blocked=None):
         self.capability, self.missing = capability, sorted(missing)
-        lines = ['%s cannot do %r: missing %s' % (design, capability, ', '.join(self.missing))]
+        lines = ['%s cannot do %r: %s' % (design, capability, blocked or 'missing ' + ', '.join(self.missing))]
         for m in self.missing:
             lines.append('  %s (%s): %s' % (m, FACTS.get(m, '?'), (reasons or {}).get(m) or HINTS.get(m, DEFAULT_HINT)))
         super().__init__('\n'.join(lines))

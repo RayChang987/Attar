@@ -2,7 +2,7 @@
 Everything here follows from the IR; nothing on disk outside it is looked at."""
 import os
 
-from .facts import CAPABILITIES, DESCRIBE, FACTS, HINTS, DEFAULT_HINT
+from .facts import CAPABILITIES, DESCRIBE, FACTS, HINTS, DEFAULT_HINT, PLACE_STEPS
 
 OK, NO = '✅', '❌'   # ✅ ❌
 
@@ -109,10 +109,12 @@ def status(d, color=True):
     L.append('  %s %-*s  %s' % (OK if fp_ok else NO, w, 'floorplan', 'legal (checked now: macros in place and apart, IO '
                                  'pins in the die)' if fp_ok else 'not legal: ' + '; '.join(fp_issues)))
     L += ['', 'Capabilities']
-    cw = max(len(DESCRIBE.get(c, c)) for c in CAPABILITIES)
-    for c, req in CAPABILITIES.items():
-        miss = sorted(req - have)
-        L.append('  %s %-*s  %s' % (OK if not miss else NO, cw, DESCRIBE.get(c, c), '' if not miss else 'needs ' + ', '.join(miss)))
+    shown = {c: req for c, req in CAPABILITIES.items() if c not in PLACE_STEPS}
+    cw = max(len(DESCRIBE.get(c, c)) for c in shown)
+    for c, req in shown.items():
+        miss, why = sorted(req - have), d.blocked(c)
+        note = why or ('needs ' + ', '.join(miss) if miss else '')
+        L.append('  %s %-*s  %s' % (NO if note else OK, cw, DESCRIBE.get(c, c), note))
     # hand-off to ORFS: the requirement list, then what to do
     L += ['', 'Hand-off to ORFS needs']
     for f in sorted(CAPABILITIES['orfs_handoff']):

@@ -14,7 +14,7 @@ import torch
 from . import paths, st
 from .deffile import ORIENTS
 from .distill import ASIDE, FIXED, MACRO, PLACED, TERMINAL, PHYSICAL  # noqa: F401
-from .facts import CAPABILITIES, FACTS, MissingFacts, infer_facts, upgrade_facts
+from .facts import BLOCKED, CAPABILITIES, FACTS, MissingFacts, infer_facts, upgrade_facts
 
 
 def _orient_offset(o, px, py, w, h):
@@ -142,14 +142,31 @@ class Design:
             raise KeyError('unknown fact %r (known: %s)' % (fact, ', '.join(FACTS)))
         return fact in self.present
 
+    @property
+    def mode(self):
+        """'after_fp' (the floorplan is given: only the cells are to place), 'before_fp', or None (not from the zoo)."""
+        parts = os.path.normpath(os.path.abspath(self.path)).split(os.sep)   # <zoo>/<mode>/<suite>/<design>
+        return parts[-3] if len(parts) > 3 and parts[-3] in paths.MODES else None
+
+    def blocked(self, capability):
+        """Why the design cannot do a capability whatever facts it gets (BLOCKED), or None."""
+        rule = BLOCKED.get(capability)
+        if rule is None:
+            return None
+        hit, why = rule(self)
+        return why if hit else None
+
     def capabilities(self):
         have = self.present
-        return sorted(c for c, req in CAPABILITIES.items() if req <= have)
+        return sorted(c for c, req in CAPABILITIES.items() if req <= have and not self.blocked(c))
 
     def missing(self, capability):
         return sorted(CAPABILITIES[capability] - self.present)
 
     def require(self, capability, ignore=()):
+        why = self.blocked(capability)
+        if why:
+            raise MissingFacts(self.manifest.get('design', self.path), capability, set(), blocked=why)
         miss = set(CAPABILITIES[capability]) - self.present - set(ignore)
         if miss:
             raise MissingFacts(self.manifest.get('design', self.path), capability, miss)

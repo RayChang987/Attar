@@ -189,7 +189,7 @@ class FloorplanTest(unittest.TestCase):
             d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)         # ORFS floorplan: IO pins and macros unplaced
         except FileNotFoundError:
             raise unittest.SkipTest('no 2_1 zoo')
-        self.assertEqual(d.capabilities(), ['die_size', 'export', 'io_place', 'plot', 'wirelength_model'])
+        self.assertEqual(d.capabilities(), ['die_size', 'export', 'io_place', 'plot', 'resize', 'sta', 'wirelength_model'])
         naive.place_io(d, verbose=False)
         self.assertIn('macro_place', d.capabilities())
         self.assertNotIn('global_place', d.capabilities())          # macros still unplaced
@@ -203,8 +203,16 @@ class FloorplanTest(unittest.TestCase):
         core = d.core_box[0]
         self.assertTrue(bool((d.pos[m] >= core[:2] - 1e-3).all() and (d.pos[m] + d.size[m] <= core[2:] + 1e-3).all()))
 
+    def test_after_fp_design_keeps_its_die(self):
+        d = need(SMALL)                                  # gcd after ORFS GP: die, rows and PDN are the problem
+        self.assertNotIn('die_size', d.capabilities())
+        self.assertIn('the floorplan is given', d.blocked('die_size'))
+        from attar.facts import MissingFacts
+        with self.assertRaises(MissingFacts):
+            d.floorplan(utilization=0.5, verbose=False)
+
     def test_new_die_for_a_utilization_then_place_is_legal(self):
-        d = need(SMALL)                                  # gcd after ORFS GP: IO pins, tap cells placed in its die
+        d = need('before_fp/orfs_asap7/aes')             # ORFS floorplan (2_1): tap cells placed, IO pins not
         d.floorplan(utilization=0.5, aspect_ratio=1.5, verbose=False)
         self.assertAlmostEqual(float(d.utilization()[0]), 0.5, delta=0.02)
         core = d.core_box[0]
@@ -213,7 +221,7 @@ class FloorplanTest(unittest.TestCase):
         self.assertIn('floorplan.io', d.facts); self.assertIn('floorplan.macros', d.facts)
         self.assertNotIn('placement', d.present)          # the floorplan leaves the cells to the placer
         self.assertIn('export', d.capabilities())         # export rewrites DIEAREA, ROWs, TRACKS
-        self.assertNotIn('slow_loop', d.facts)            # gcd comes from ORFS 3_3: no floorplan hand-off
+        self.assertIn('orfs_floorplan_handoff', d.capabilities())   # a new die still goes back to ORFS 2_1
         self.assertEqual(d.snapshots, {})
         r = d.place(verbose=False)
         self.assertTrue(r['legal'])                       # legality includes rail parity on the new rows
