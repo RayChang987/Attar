@@ -42,7 +42,8 @@ LIB_DIR = {'input': LD_IN, 'output': LD_OUT, 'inout': LD_INOUT, 'internal': LD_I
 def read_rc_tcl(path):
     """An OpenROAD RC script (ORFS platform setRC.tcl): set_layer_rc / set_wire_rc -> {'layer': {name: [r, c]},
     'via': {name: r}, 'signal': [r, c], 'clock': [r, c]} (r in the Liberty resistance unit per um, c in its capacitance
-    unit per um: kohm and fF for ASAP7, so r * c * um^2 is ps). set_wire_rc -layers averages the layers' RC."""
+    unit per um: kohm and fF for ASAP7, so r * c * um^2 is ps). set_wire_rc -layers averages the layers' RC and
+    names them ('signal_layers' / 'clock_layers'); set_routing_layers -signal gives 'routing'."""
     out = {'layer': {}, 'via': {}}
     text = open(path).read().replace('\\\n', ' ')
     for line in text.splitlines():
@@ -61,11 +62,15 @@ def read_rc_tcl(path):
                 out['via'][o['-via']] = float(o.get('-resistance', 0))
             elif '-layer' in o:
                 out['layer'][o['-layer']] = [float(o.get('-resistance', 0)), float(o.get('-capacitance', 0))]
+        elif t[0] == 'set_routing_layers' and isinstance(o.get('-signal'), str):
+            out['routing'] = o['-signal'].split('-')             # set_routing_layers -signal M2-M7
         elif t[0] == 'set_wire_rc':
             kinds = [k for k in ('signal', 'clock') if o.get('-' + k)] or ['signal', 'clock']
             if '-layers' in o or '-layer' in o:
                 ls = (o.get('-layers') or o.get('-layer')).split()
                 rc = [float(np.mean([out['layer'][l][k] for l in ls])) for k in (0, 1)]
+                for k in kinds:                                   # the tree's layer: pins connect up to it by vias
+                    out[k + '_layers'] = ls
             else:
                 rc = [float(o.get('-resistance', 0)), float(o.get('-capacitance', 0))]
             for k in kinds:
@@ -210,6 +215,19 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
             return out
         info['path_delays'] = [dict(e, **{'from': cells_of(e['from']), 'to': cells_of(e['to'])}) for e in s['path_delays']]
         info['unsupported'] = s['unsupported']
+    # IO pins' layers (the first LAYER of each pin in the source DEF's PINS): OpenROAD connects a port to its net's
+    # estimated tree through the vias from that layer
+    info['io_layer'] = {}
+    frame = os.path.join(ir_dir, 'frame.def.gz')
+    if os.path.exists(frame):
+        with gzip.open(frame, 'rt') as f:
+            text = f.read()
+        i, j = text.find('\nPINS'), text.find('\nEND PINS')
+        if i >= 0 and j > i:
+            for m in re.finditer(r'^\s*-\s+(\S+)(.*?);\s*$', text[i:j], re.M | re.S):
+                lay = re.search(r'\+\s*LAYER\s+(\S+)', m.group(2))
+                if lay and m.group(1) in port_idx:
+                    info['io_layer'][str(port_idx[m.group(1)])] = lay.group(1)
     # Liberty `when` conditions of the conditional arcs, by arc index (OpenSTA's sim disables them under constants)
     info['arc_when'] = {str(i): arc['when'] for i, arc in enumerate(arcs) if arc.get('when')}
     # output pin functions of the masters used (constant propagation from tie cells, as OpenSTA's sim does)
@@ -224,10 +242,13 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
     info['rc'] = read_rc_tcl(rc_tcl) if rc_tcl else None
     # OpenROAD est::computeAverageCutResistance: the mean resistance of the cut layers between the block's lowest and
     # highest routing layer (via Vk joins Mk and Mk+1); every pin hangs off the estimated tree through it
+    # (the routing layers: the manifest's, else the RC script's set_routing_layers -signal)
     rl = (json.load(open(os.path.join(ir_dir, 'manifest.json'))).get('routing') or {}).get('layers')
+    rl = rl or (info['rc'] or {}).get('routing')
     if info['rc'] and rl and info['rc'].get('via'):
         lo, hi = (int(re.sub(r'\D', '', x)) for x in rl)
-        vs = [info['rc']['via'][v] for v in ('V%d' % k for k in range(lo, hi)) if v in info['rc']['via']]
+        via_k = {int(m.group(1)): r for v, r in info['rc']['via'].items() for m in [re.fullmatch(r'V(?:IA)?(\d+)', v)] if m}
+        vs = [via_k[k] for k in range(lo, hi) if k in via_k]
         info['rc']['cut_res'] = float(np.mean(vs)) if vs else 0.0
     info['units'] = {'time': 'ps', 'cap': 'fF', 'res': 'kohm'}
     info['default_thresholds'] = default_thr

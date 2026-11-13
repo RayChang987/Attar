@@ -233,11 +233,11 @@ def _subtree(T, P, depth, maxd, f_p, nl, vv, V: tl.constexpr):
 
 
 @triton.jit
-def _rc_kernel(p_p, idx_p, real_p, cap_p, nets_p, elm_o, pi_o, len_o, q_p, scr_p, pscr_p, f_p, i_p,
-               alpha, dbu, r, c, rcut, D: tl.constexpr, N: tl.constexpr, ROUNDS: tl.constexpr,
+def _rc_kernel(p_p, idx_p, real_p, cap_p, nets_p, elm_o, pi_o, len_o, q_p, scr_p, pscr_p, f_p, i_p, rv_p,
+               alpha, dbu, r, c, D: tl.constexpr, N: tl.constexpr, ROUNDS: tl.constexpr,
                MAXDEG: tl.constexpr, V: tl.constexpr, LOGN: tl.constexpr):
     """attar.sta.tree_elmore for one net per program: pin locations (dbu, rounded), the PD tree, its RC moments with
-    pins behind rcut, the driving point pi model (O'Brien-Savarino); writes the pins' Elmore delays (P, V), the net's
+    every pin behind its via resistance rv (the driver's in series with the whole tree), the driving point pi model (O'Brien-Savarino); writes the pins' Elmore delays (P, V), the net's
     pi (E, V, 3) and tree length (E,)."""
     b = tl.program_id(0)
     lane = tl.arange(0, D)
@@ -278,14 +278,16 @@ def _rc_kernel(p_p, idx_p, real_p, cap_p, nets_p, elm_o, pi_o, len_o, q_p, scr_p
     pinn = tl.load(idx_p + b * D + tl.minimum(nl, D - 1), mask=isp, other=0)
     cp = tl.load(cap_p + pinn[:, None] * V + vv[None, :], mask=isp[:, None] & (vv[None, :] >= 0), other=0.0)
     cn = cw + cp
+    rv = tl.load(rv_p + pinn, mask=isp, other=0.0)[:, None]          # pins' via resistance; the driver: slot 0
+    rd = tl.sum(tl.where(nl == 0, tl.load(rv_p + pinn, mask=isp, other=0.0), 0.0), 0)
     Re = (r * el)[:, None]
     y1 = tl.sum(cn, 0)
-    m1 = rcut * y1[None, :] + _path(Re * _subtree(cn, P, depth, maxd, fb, nl, vv, V), P, fb, ib, nl, vv, V, LOGN)
-    m1p = m1 + rcut * cp
+    m1 = rd * y1[None, :] + _path(Re * _subtree(cn, P, depth, maxd, fb, nl, vv, V), P, fb, ib, nl, vv, V, LOGN)
+    m1p = m1 + rv * cp
     qq = cw * m1 + cp * m1p
-    m2 = rcut * tl.sum(qq, 0)[None, :] + _path(Re * _subtree(qq, P, depth, maxd, fb, nl, vv, V), P, fb, ib, nl, vv,
-                                                V, LOGN)
-    m2p = m2 + rcut * cp * m1p
+    m2 = rd * tl.sum(qq, 0)[None, :] + _path(Re * _subtree(qq, P, depth, maxd, fb, nl, vv, V), P, fb, ib, nl, vv,
+                                              V, LOGN)
+    m2p = m2 + rv * cp * m1p
     y2 = -tl.sum(qq, 0)
     y3 = tl.sum(cw * m2 + cp * m2p, 0)
     ok = (y3 > 1e-12) & (y2 < -1e-12)
@@ -328,10 +330,10 @@ def pd_tree(q, valid, alpha=0.3, rounds=None, max_deg=MAX_DEG):
     return xy, par.long(), alive.bool()
 
 
-def rc_bucket(p, idx, real, cap, nets, elm, pi, tlen, alpha, dbu, r, c, rcut, rounds=None, max_deg=MAX_DEG,
+def rc_bucket(p, idx, real, cap, nets, elm, pi, tlen, alpha, dbu, r, c, rvia, rounds=None, max_deg=MAX_DEG,
               num_warps=None):
-    """One degree bucket of attar.sta.tree_elmore in one launch: idx (n, D) pin ids (D a power of two), real (n, D);
-    writes elm (P, V), pi (E, V, 3), tlen (E,) in place."""
+    """One degree bucket of attar.sta.tree_elmore in one launch: idx (n, D) pin ids (D a power of two), real (n, D),
+    rvia (P,) the pins' via resistances; writes elm (P, V), pi (E, V, 3), tlen (E,) in place."""
     n, D = idx.shape
     assert D == triton.next_power_of_2(D) and D >= 2
     N = 2 * D
@@ -343,6 +345,6 @@ def rc_bucket(p, idx, real, cap, nets, elm, pi, tlen, alpha, dbu, r, c, rcut, ro
     f = torch.empty(n * N * max(V, 2), device=dev)
     i = torch.empty(n * N, dtype=torch.int32, device=dev)
     R = rounds if rounds is not None else max(1, D // 2)
-    _rc_kernel[(n,)](p, idx, real, cap, nets, elm, pi, tlen, q, scr, pscr, f, i, alpha, float(dbu), float(r),
-                     float(c), float(rcut), D=D, N=N, ROUNDS=R, MAXDEG=max_deg, V=V, LOGN=(N - 1).bit_length(),
+    _rc_kernel[(n,)](p, idx, real, cap, nets, elm, pi, tlen, q, scr, pscr, f, i, rvia, alpha, float(dbu), float(r),
+                     float(c), D=D, N=N, ROUNDS=R, MAXDEG=max_deg, V=V, LOGN=(N - 1).bit_length(),
                      num_warps=num_warps or max(1, min(4, N * V // 128)))

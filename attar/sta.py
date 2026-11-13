@@ -10,6 +10,7 @@ use OpenSTA's edge relationships between any two clocks. Delays: NLDM tables, bi
 Not modeled: path exceptions (set_false_path, set_max_delay, ...), clock gating checks, recovery / removal, latches.
 """
 import json
+import re
 import math
 import os
 import warnings
@@ -178,9 +179,10 @@ def _side_stream(dev):
 def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
     """Elmore delay from each net's driver to every pin and the driver's pi model, on OpenROAD's estimate-parasitics
     tree (attar.steiner.pd_tree: Prim-Dijkstra alpha 0.3 on nearest neighbors, steinerized; dbu coordinates), each
-    branch a pi segment of wire RC r, c per um, every pin behind rcut (OpenROAD's average cut resistance), the driver
-    included (EstimateParasitics::estimateWireParasiticSteiner, parasiticNodeConnectPins). cap: pin capacitance (P,).
-    Nets above the largest bucket: lumped on length (r x distance x half the net's C).
+    branch a pi segment of wire RC r, c per um, every pin behind its via resistance rcut (a scalar, OpenROAD's average
+    cut resistance, or per pin (P,): the vias up to the wire's layer), the driver's in series with the whole tree (EstimateParasitics::estimateWireParasiticSteiner, parasiticNodeConnectPins). cap: pin capacitance (P,).
+    Nets above the largest bucket: from plan['big_buf'] (their exact trees, filled by Timer._big_update), else lumped
+    on length (r x distance x half the net's C).
     cap may hold V variants (P, V) (rise / fall, max / min pin capacitances: OpenSTA reduces per rise / fall and
     min / max). Returns per pin and variant the Elmore delay (P, V) in ps, per net and variant the pi model (E, V, 3)
     near C / R / far C, and per net the tree's wire length in um (length where no tree was built)."""
@@ -200,6 +202,7 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
     tlen = length.clone()
     if rc_bucket is not None:                     # one Triton launch per bucket: tree, moments, pi, scattered outputs
         pc, cc = p.float().contiguous(), cap.float().contiguous()
+        rv = (rcut.float() if torch.is_tensor(rcut) else torch.full((len(p),), float(rcut), device=dev)).contiguous()
         # the high-degree buckets (few nets, one long program each) on a side stream, beside the small ones
         cur = torch.cuda.current_stream(dev)
         side = _side_stream(dev)
@@ -207,7 +210,7 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
         for idx, real, nets in plan['tri']:
             if len(nets):
                 with torch.cuda.stream(side if idx.shape[1] >= SIDE_D else cur):
-                    rc_bucket(pc, idx, real, cc, nets, out, pi, tlen, 0.3, dbu, r, c, rcut)
+                    rc_bucket(pc, idx, real, cc, nets, out, pi, tlen, 0.3, dbu, r, c, rv)
         cur.wait_stream(side)
     for D, nets, idx, real, rows, rpins, ri in (plan['buckets'] if rc_bucket is None else ()):
         n = len(nets)
@@ -226,19 +229,22 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
         reach = 1
         while reach < N:
             M = (torch.bmm(M, M) > 0).float(); reach *= 2
-        # point capacitance: half of every incident wire (pi segments); pins behind rcut at their points
+        # point capacitance: half of every incident wire (pi segments); pins behind their vias at their points
         half = c * el / 2
         cw = (half + torch.bmm(Pm.transpose(1, 2), half[:, :, None])[:, :, 0])[:, :, None]   # (n, N, 1)
         cn = cw + cp                                                       # (n, N, V) per pin-cap variant
         Re = (r * el)[:, :, None]                                          # resistance of each point's parent wire
         sub = lambda x: torch.bmm(M.transpose(1, 2), x)                    # subtree sums
         path = lambda x: torch.bmm(M, x)                                   # root-to-point sums
+        rv = rcut[idx] if torch.is_tensor(rcut) else torch.full(idx.shape, float(rcut), device=dev)
+        rv = torch.cat([torch.where(real, rv, torch.zeros_like(rv)), torch.zeros(n, N - D, device=dev)], 1)[:, :, None]
+        rd = rv[:, :1]                                                     # the driver's (slot 0), (n, 1, 1)
         y1 = cn.sum(1)                                                     # (n, V)
-        m1 = rcut * y1[:, None, :] + path(Re * sub(cn))                    # Elmore at the points
-        m1p = m1 + rcut * cp                                               # ... at the pins
+        m1 = rd * y1[:, None, :] + path(Re * sub(cn))                      # Elmore at the points
+        m1p = m1 + rv * cp                                                 # ... at the pins
         qq = cw * m1 + cp * m1p
-        m2 = rcut * qq.sum(1, keepdim=True) + path(Re * sub(qq))
-        m2p = m2 + rcut * cp * m1p
+        m2 = rd * qq.sum(1, keepdim=True) + path(Re * sub(qq))
+        m2p = m2 + rv * cp * m1p
         # the driver's pi model from the driving point admittance moments (O'Brien-Savarino), per variant
         y2 = -qq.sum(1); y3 = (cw * m2 + cp * m2p).sum(1)
         ok = (y3 > 1e-12) & (y2 < -1e-12)
@@ -432,6 +438,7 @@ class Timer:
         rc = info.get('rc') or {}
         self.r_sig, self.c_sig = (rc.get('signal') or [0.0, 0.0])
         self.cut_res = float(rc.get('cut_res', 0.0))
+        self.pin_rvia = T(self._pin_vias(d, info, rc, p_cell, p_mpin, io_mask), torch.float32)
         self.p_cell_np = p_cell
         self.pi = None
         self.pin_net = d.p_net
@@ -454,6 +461,39 @@ class Timer:
             except Exception:  # noqa: BLE001  (no Triton: the PyTorch reference path)
                 self.triton = None
         self._mp_names = None; self._sink_drv = None
+
+    def _pin_vias(self, d, info, rc, p_cell, p_mpin, io_mask):
+        """Per pin, the resistance between it and its net's estimated tree (EstimateParasitics::
+        parasiticNodeConnectPins): with set_wire_rc on a layer and layer RC given, the vias from the pin's layer
+        (a cell pin's LEF layer, a port's DEF layer) to the wire's first layer, one per cut layer, each its
+        set_layer_rc -via value (at least 1e-3 ohm; insertViaResistances); else the average cut resistance of the
+        routing layers for every pin (computeAverageCutResistance)."""
+        P = len(p_cell)
+        layers = rc.get('signal_layers')
+        if not layers or not (rc.get('layer') or rc.get('via')):
+            return np.full(P, self.cut_res, np.float32)
+        num = lambda name: int(re.sub(r'\D', '', name)) if re.search(r'\d', name or '') else None   # noqa: E731
+        via = {num(v): r for v, r in rc.get('via', {}).items() if re.fullmatch(r'(?i)v(?:ia)?\d+', v)}
+        tree = num(layers[0])
+        def stack(k):
+            if k is None or tree is None:
+                return self.cut_res
+            lo, hi = min(k, tree), max(k, tree)
+            return sum(max(via.get(i, 0.0), 1e-6) for i in range(lo, hi)) if hi > lo else 1e-6
+        names = d.names.get('layers') or []
+        m_lay = d.raw['m_pin_layer'] if 'm_pin_layer' in d.raw else None
+        lut = np.array([stack(num(n)) for n in names] + [self.cut_res], np.float32)   # per layer; last: unknown
+        out = np.full(P, self.cut_res, np.float32)
+        ok = p_mpin >= 0
+        if m_lay is not None:
+            ml = m_lay.astype(np.int64)[p_mpin[ok]]
+            out[ok] = lut[np.where((ml >= 0) & (ml < len(names)), ml, len(names))]
+        io_l = info.get('io_layer') or {}
+        for p in np.nonzero(io_mask)[0]:
+            l = io_l.get(str(int(p_cell[p])))
+            if l is not None:
+                out[p] = stack(num(l))
+        return out
 
     def _constants(self, d, info, t, p_cell, p_mpin, pdir, p_net, n_ptr, c_master, fr, to, atype, lib_id, asense):
         """Constant propagation (OpenSTA's sim): nets driven by tie cells, then every output whose function is
@@ -634,7 +674,7 @@ class Timer:
         L = self.steiner(p)
         caps = torch.cat([self.pin_cap, self.pin_cap_min], 1)            # rise / fall max, rise / fall min
         elm_pin, self.pi, L = tree_elmore(p, self.plan, self.ev.E, caps, self.r_sig, self.c_sig, L,
-                                          self.d.dbu, rcut=self.cut_res)
+                                          self.d.dbu, rcut=self.pin_rvia)
         return L * self.c_sig, elm_pin[self.n_to]                       # (A, 4): Elmore per variant
 
     def _lookup(self, lib, slot, x, y):
