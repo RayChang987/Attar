@@ -2,7 +2,7 @@
 
 Per cell: pin direction, capacitance (rise / fall), clock flag, max_capacitance, and every timing group (related_pin,
 timing_sense, timing_type, when) with its NLDM tables: cell_rise / cell_fall / rise_transition / fall_transition for
-delay arcs, rise_constraint / fall_constraint for checks. Power, noise and CCS groups are skipped while parsing.
+delay arcs, rise_constraint / fall_constraint for checks. Internal power, noise and CCS groups are skipped while parsing.
 Units are normalized to ps and fF; table axes to (input slew, load) for delays and (constrained pin slew, related pin
 slew) for checks, whatever order the library's templates use.
 """
@@ -11,7 +11,7 @@ import re
 
 _TOK = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:[^"\\]|\\.)*"|\\\n|[{}();:,]|[^\s{}();:,"]+', re.S)
 # groups never needed for timing (large: power tables, noise, CCS)
-SKIP = {'internal_power', 'leakage_power', 'power', 'ccsn_first_stage', 'ccsn_last_stage', 'output_current_rise',
+SKIP = {'internal_power', 'power', 'ccsn_first_stage', 'ccsn_last_stage', 'output_current_rise',
         'output_current_fall', 'receiver_capacitance', 'pg_pin', 'dynamic_current', 'leakage_current',
         'intrinsic_parasitic', 'gate_leakage', 'normalized_driver_waveform', 'test_cell', 'statetable',
         'power_lut_template', 'output_voltage', 'input_voltage', 'operating_conditions', 'wire_load',
@@ -19,6 +19,8 @@ SKIP = {'internal_power', 'leakage_power', 'power', 'ccsn_first_stage', 'ccsn_la
 TABLES = ('cell_rise', 'cell_fall', 'rise_transition', 'fall_transition', 'rise_constraint', 'fall_constraint')
 TIME_SCALE = {'1ps': 1.0, '10ps': 10.0, '100ps': 100.0, '1ns': 1000.0, '10ns': 1e4, '100ns': 1e5}
 CAP_SCALE = {'ff': 1.0, 'pf': 1000.0, 'nf': 1e6}
+POWER_SCALE = {'1pw': 1e-3, '10pw': 1e-2, '100pw': 1e-1, '1nw': 1.0, '10nw': 10.0, '100nw': 100.0, '1uw': 1e3,
+               '1mw': 1e6, '1w': 1e9}
 
 
 class Group:
@@ -57,6 +59,8 @@ def parse(text):
             args = [_strip(a) for a in pending[2:-1] if a != ',']
             pending = []
             if skip or kind in SKIP:
+                if not skip and stack:                     # remember that the parent had one (e.g. a cell's ff)
+                    stack[-1].attrs.setdefault('@skipped', set()).add(kind)
                 skip += 1
                 continue
             g = Group(kind, args)
@@ -130,7 +134,8 @@ def _table(g, templates, kind):
 
 
 def read(path):
-    """A Liberty file -> {'name', 'time_unit_ps', 'cap_unit_ff', 'cells': {cell: {'pins': {...}, 'arcs': [...]}}}.
+    """A Liberty file -> {'name', 'time_unit_ps', 'cap_unit_ff', 'cells': {cell: {'pins': {...}, 'arcs': [...], 'area',
+    'leakage' (nW), 'dont_use', 'footprint', 'seq' ('ff' | 'latch' | ''), 'macro'}}}.
     Pin: {'dir': 'input'|'output'|'inout'|'internal', 'cap': (rise, fall) fF, 'cap_min': the *_capacitance_range lower
     bounds (min analysis), 'clock': bool, 'max_cap': fF or None}.
     Arc: {'from', 'to', 'sense', 'type', 'when', 'tables': {kind: (index_1, index_2, values)}} in ps / fF."""
@@ -142,6 +147,7 @@ def read(path):
     if 'capacitive_load_unit' in lib.attrs:
         n, u = lib.attrs['capacitive_load_unit'][0][:2]
         cu = float(n) * CAP_SCALE.get(u.lower(), 1.0)
+    lu = POWER_SCALE.get(lib.attrs.get('leakage_power_unit', '1nW').replace(' ', '').lower(), 1.0)   # -> nW
     templates = {}
     for g in lib.groups:
         if g.kind in ('lu_table_template',) and g.args:
@@ -206,7 +212,13 @@ def read(path):
                         arcs.append({'from': rp, 'to': name, 'sense': ta.get('timing_sense', ''),
                                      'type': ta.get('timing_type', 'combinational'), 'when': ta.get('when', ''),
                                      'tables': tables})
-        cells[c.args[0]] = {'pins': pins, 'arcs': arcs}
+        skipped = c.attrs.get('@skipped', set())
+        cells[c.args[0]] = {'pins': pins, 'arcs': arcs, 'area': _num(c.attrs.get('area', 0.0)),
+                            'leakage': _leakage(c) * lu,
+                            'dont_use': c.attrs.get('dont_use', 'false') == 'true',
+                            'footprint': c.attrs.get('cell_footprint', ''),
+                            'seq': 'ff' if 'ff' in skipped else 'latch' if 'latch' in skipped else '',
+                            'macro': c.attrs.get('is_macro_cell', 'false') == 'true'}
     # thresholds (fractions of the supply), OpenSTA's defaults when absent: 50% delay, 20% / 80% slew, derate 1
     pct = lambda k, d: float(lib.attrs[k]) / 100.0 if k in lib.attrs else d
     thr = {'input': (pct('input_threshold_pct_rise', .5), pct('input_threshold_pct_fall', .5)),
@@ -216,6 +228,22 @@ def read(path):
            'slew_derate': float(lib.attrs.get('slew_derate_from_library', 1.0))}
     return {'name': lib.args[0] if lib.args else '', 'time_unit_ps': tu, 'cap_unit_ff': cu, 'cells': cells,
             'thresholds': thr}
+
+
+def _num(v):
+    """A simple attribute's number (a value written without ';' runs into the next statement: its first token)."""
+    try:
+        return float(str(v).split()[0])
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def _leakage(c):
+    """A cell's leakage in the library's unit: cell_leakage_power, else the mean of its leakage_power groups (states)."""
+    if 'cell_leakage_power' in c.attrs:
+        return _num(c.attrs['cell_leakage_power'])
+    vals = [_num(g.attrs['value']) for g in c.sub('leakage_power') if 'value' in g.attrs]
+    return sum(vals) / len(vals) if vals else 0.0
 
 
 # -- Liberty boolean functions (for constant propagation) ---------------------------------------------------------------
