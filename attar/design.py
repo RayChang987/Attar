@@ -476,6 +476,45 @@ class Design:
         pos = self.pos if pos is None else pos
         return pos[self.p_cell] + self.size[self.p_cell] / 2 + self.pin_off
 
+    # -- timing -----------------------------------------------------------------------------------------------------
+    def timing(self, pos=None):
+        """Static timing at pos (default: the current placement): an attar.sta.TimingResult with per-endpoint setup /
+        hold slack, WNS / TNS. Needs the 'timing' fact (attar.timing.attach). The timer is built once per design and
+        kept; on CUDA a re-time is a CUDA-graph replay."""
+        self.require('sta')
+        from .sta import Timer
+        if getattr(self, '_timer', None) is None:
+            self._timer = Timer(self)
+        return self._timer.run(pos)
+
+    def timing_report(self, pos=None, endpoints=10, path=True, file=None):
+        """Print (and return) a timing summary: WNS, TNS, violations, hold, the worst endpoints and the worst path."""
+        import sys
+        r = self.timing(pos)
+        sm = r.summary()
+        out = file or sys.stdout
+        name = self.manifest.get('design', '')
+        print('Timing of %s (%s clocks, parasitics: placement estimate)' % (name, ', '.join(self._timer.clock_names) or 'no'), file=out)
+        print('  setup: WNS %.2f ps, TNS %.2f ps, %d of %d endpoints violated (worst slack %.2f ps)'
+              % (sm['wns'], sm['tns'], sm['setup_violations'], sm['endpoints'], sm['worst_slack']), file=out)
+        print('  hold:  WHS %.2f ps, THS %.2f ps, %d violated' % (sm['whs'], sm['ths'], sm['hold_violations']), file=out)
+        worst = []
+        if endpoints:
+            v, i = torch.sort(r.setup)
+            k = int(torch.isfinite(v).sum())
+            for p in i[:min(endpoints, k)].tolist():
+                worst.append((r._pin_name(p), float(r.setup[p]), float(r.hold[p])))
+            print('  worst endpoints (setup slack, hold slack):', file=out)
+            for nm, a, b in worst:
+                print('    %-50s %9.2f %9.2f' % (nm, a, b), file=out)
+        pth = r.path() if path and sm['endpoints'] else []
+        if pth:
+            print('  worst path (arrival, slew ps):', file=out)
+            for nm, rf, a, sl in pth:
+                print('    %9.2f %7.2f %s %s' % (a, sl, '^' if rf == 'r' else 'v', nm), file=out)
+        sm.update({'worst_endpoints': worst, 'worst_path': pth})
+        return sm
+
     def hpwl(self, pos=None, per_net=False, exclude_clock=False):
         """Pin-based HPWL in microns (a 0-d tensor; no host sync). pos: evaluate these positions instead."""
         self.require('hpwl', ignore=('placement',) if pos is not None else ())
