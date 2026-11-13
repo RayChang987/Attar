@@ -18,7 +18,7 @@ A design is a set of *facts*. Each fact has a *provenance*: the source it came f
 | `floorplan.macros` | macro and fixed-cell locations |
 | `rows` | placement rows: origin, site width, height, orientation |
 | `constraints` | fence regions, placement blockages (not stored yet) |
-| `routing`, `timing`, `stack` | routing resources, Liberty/SDC, 3D stack (not stored yet) |
+| `routing`, `timing`, `die_stack` | routing resources, Liberty/SDC, 3D die stack (not stored yet) |
 | `cell_library` | the cells are instances of a real cell library (LEF macros): the result can go back to DEF |
 | `tracks` | routing tracks per layer and the routing layer of every macro pin (macro pins go on their tracks) |
 | `pdn` | PDN metal (wires, vias) on the three lowest routing layers: signal pins keep clear of it |

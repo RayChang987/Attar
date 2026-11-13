@@ -120,7 +120,7 @@ v0.1 的成功不是「環節都有」，而是「wirelength 的快迴圈結論�
 | `constraints` | fence region、placement blockage | 題目 |
 | `routing` | layer 方向與 pitch、GCell grid 與容量、pin access | 題目 |
 | `timing` | Liberty 的 arc 與 pin cap、clock、I/O delay | 題目 |
-| `stack` | 3D：各 die 的製程、HBT 參數 | 題目 |
+| `die_stack` | 3D：die stack，各 die 的製程、HBT 參數 | 題目 |
 | `cell_library` | cell 是真實 cell library（LEF master）的實例，結果可印回 DEF | 題目 |
 | `tracks` | 各層 routing track 與每個 macro pin 的 layer（macro pin 對齊 track） | 題目 |
 | `pin_direction` | 每個 pin 是 net 的 driver 還是 sink（LEF `DIRECTION`、Bookshelf `I`/`O`）；timing 的前提 | 題目 |

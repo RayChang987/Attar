@@ -20,7 +20,7 @@ FACTS = {
     'timing': 'Liberty arcs and pin capacitances, clocks, I/O delays',
     'library': 'a shared cell library (zoo/libraries/<name>): every cell of the platform corner with its Liberty data, LEF '
                'geometry and equivalence classes (sizing, buffering); the design\'s own macros in a local library',
-    'stack': '3D: per-die technology, hybrid bonding terminals',
+    'die_stack': '3D: the die stack (per-die technology, hybrid bonding terminals)',
     'cell_library': 'cells are instances of a real cell library (LEF masters): a DEF of the design means something',
     'tracks': 'routing tracks and the routing layer of every master pin (pin access: macros go on-track)',
     'pdn': 'PDN metal (wires, vias) on the lowest routing layers: signal pins must keep clear of it',
