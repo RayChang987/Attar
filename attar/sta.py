@@ -2,7 +2,7 @@
 
 Graph: a node per pin and transition (rise, fall); net arcs (driver -> sink) and cell arcs (one per Liberty timing arc
 and instance). Clocks are ideal (pre-CTS): a register clock pin sees its clock's edge plus the ideal latency, slew 0
-(set_clock_transition is not modeled). Arrivals are kept per tag (launching clock, launching edge), so setup and hold
+Arrivals are kept per tag (launching clock, launching edge), so setup and hold
 use OpenSTA's edge relationships between any two clocks. Delays: NLDM tables, bilinear with linear extrapolation
 (OpenSTA's rule), on the net's total load (no effective capacitance). Wires (parasitics='placement'): net capacitance
 = Steiner length x c per um; a sink's delay is the Elmore delay of a wire of its Manhattan distance from the driver
@@ -426,6 +426,8 @@ class Timer:
         self.rel_setup, self.rel_hold = T(su, torch.float32), T(ho, torch.float32)
         self.wf = T([c['waveform'] for c in self.clocks] or np.zeros((0, 2)), torch.float32)
         self.lat = T([c.get('latency', 0.0) for c in self.clocks] or np.zeros(0), torch.float32)
+        # set_clock_transition: the ideal clock's slew at the register clock pins, rise / fall (default 0)
+        self.ctr = T([c.get('transition', [0.0, 0.0]) for c in self.clocks] or np.zeros((0, 2)), torch.float32)
         self.unc_s = T([c.get('uncertainty_setup', c.get('uncertainty', 0.0)) for c in self.clocks] or np.zeros(0), torch.float32)
         self.unc_h = T([c.get('uncertainty_hold', c.get('uncertainty', 0.0)) for c in self.clocks] or np.zeros(0), torch.float32)
         io_mask = np.isin(p_cell, a['io_cell']) if 'io_cell' in a else np.zeros(len(p_cell), bool)
@@ -738,14 +740,15 @@ class Timer:
             a_i, o_i = T(np.concatenate(a_i)), T(np.concatenate(o_i))
             ck = clk_of[self.l_fr[a_i]]
             edge = (self.l_type[a_i] == T_FALL_EDGE).long() ^ par[self.l_fr[a_i]]
-            lc = [(self.l_lib[a_i], self.l_to[a_i], o_i, 2 * ck + edge, self.wf[ck, edge] + self.lat[ck])]
+            cks = self.ctr[ck, (self.l_type[a_i] == T_FALL_EDGE).long()]     # the clock pin's slew
+            lc = [(self.l_lib[a_i], self.l_to[a_i], o_i, 2 * ck + edge, self.wf[ck, edge] + self.lat[ck], cks)]
             lcell = cell_of[self.l_fr[a_i].cpu().numpy()]
             for i, e in enumerate(self.ex):
                 m = T(np.nonzero(np.isin(lcell, list(ex_from[i])))[0])
                 if len(m):
                     t0 = self.wf[ck[m], edge[m]] + (0.0 if e['ignore_clock_latency'] else self.lat[ck[m]])
-                    lc.append((self.l_lib[a_i][m], self.l_to[a_i][m], o_i[m], torch.full_like(m, 2 * C + i), t0))
-            self.lc = tuple(torch.cat([x[j] for x in lc]) for j in range(5))
+                    lc.append((self.l_lib[a_i][m], self.l_to[a_i][m], o_i[m], torch.full_like(m, 2 * C + i), t0, cks[m]))
+            self.lc = tuple(torch.cat([x[j] for x in lc]) for j in range(6))
         else:
             self.lc = None
         # data net arcs grouped by driver: a driver's arcs expand to its loads (OpenSTA: gate delay + wire delay per arc)
@@ -793,6 +796,7 @@ class Timer:
             self.k_setup = (self.k_type == T_SETUP_R) | (self.k_type == T_SETUP_F)
             self.k_ck = ck
             crf = fall_chk.long()                          # the clock pin's transition at the check
+            self.k_cslew = self.ctr[ck, crf]               # its slew (ideal clock: set_clock_transition)
             self.k_ctp_min = self.pin_ctp[self.k_fr, 0, crf]; self.k_ctp_max = self.pin_ctp[self.k_fr, 1, crf]
             kcell = cell_of[self.k_to.cpu().numpy()]; ks = self.k_setup.cpu().numpy()
             ea, et, er = [], [], []
@@ -840,18 +844,18 @@ class Timer:
         i32 = lambda x: x.to(torch.int32).contiguous()  # noqa: E731
         dev = self.dev
 
-        def lev(lib, fi, t, orf, t0, tag, ea, en):
+        def lev(lib, fi, t, orf, t0, tag, ea, en, s0):
             return (i32(lib), i32(fi), i32(t), i32(orf), i32(self.pin_net[t]), t0.float().contiguous(), i32(tag),
-                    i32(ea), i32(en))
+                    i32(ea), i32(en), s0.float().contiguous())
         self.tri_lev = []
         if self.lc is not None:
-            lib, to, orf, tag, t0 = self.lc
-            self.tri_lev.append(lev(lib, torch.full_like(lib, -1), to, orf, t0, tag, *self.lc_ex))
+            lib, to, orf, tag, t0, cks = self.lc
+            self.tri_lev.append(lev(lib, torch.full_like(lib, -1), to, orf, t0, tag, *self.lc_ex, cks))
         for cb in self.cb_lev:
             if cb is not None:
                 lib, f, t_, orf, irf, ea, en = cb
                 z = torch.zeros(len(lib), device=dev)
-                self.tri_lev.append(lev(lib, f * 2 + irf, t_, orf, z, torch.zeros_like(lib), ea, en))
+                self.tri_lev.append(lev(lib, f * 2 + irf, t_, orf, z, torch.zeros_like(lib), ea, en, z))
         self.tri_tables = (self.t_ix1.contiguous(), self.t_ix2.contiguous(), self.t_val.contiguous(), self.t_n32,
                            self.t_thr.contiguous())
         self.tri_sthr = self.sink_thr.contiguous()
@@ -967,9 +971,8 @@ class Timer:
             self.smax, self.smin = smax.view(P, 2), smin.view(P, 2)
             return self._checks()
         if self.lc is not None:
-            lib, to, orf, tag, t0 = self.lc
-            zero = torch.zeros_like(t0)                         # ideal clock: slew 0 at the register clock pin
-            stage(lib, None, to, orf, t0, tag, *self.lc_ex, zero, zero)
+            lib, to, orf, tag, t0, cks = self.lc               # ideal clock: its transition at the register clock pin
+            stage(lib, None, to, orf, t0, tag, *self.lc_ex, cks, cks)
         for k in range(self.max_level + 1):
             cb = self.cb_lev[k]
             if cb is not None:
@@ -990,11 +993,10 @@ class Timer:
         fin = lambda x: torch.where(torch.isnan(x) | ~torch.isfinite(x), torch.full_like(x, INF), x)
         sp = torch.full((P,), INF, device=dev); hp = torch.full((P,), INF, device=dev)
         if len(self.k_lib):
-            zero = torch.zeros(len(self.k_lib), device=dev)
             for rf in (0, 1):
                 ok = self.t_n[self.k_lib, rf, 0] > 0
-                cmax = self._lookup(self.k_lib, rf, smax[self.k_to, rf], zero)
-                cmin = self._lookup(self.k_lib, rf, smin[self.k_to, rf], zero)
+                cmax = self._lookup(self.k_lib, rf, smax[self.k_to, rf], self.k_cslew)
+                cmin = self._lookup(self.k_lib, rf, smin[self.k_to, rf], self.k_cslew)
                 lat = self.lat[self.k_ck][:, None]
                 req_s = (lt[None] + self.rel_setup[:, self.k_ctag].T + lat - cmax[:, None] - self.unc_s[self.k_ck][:, None]
                          - self.k_ctp_min[:, None])
@@ -1017,7 +1019,7 @@ class Timer:
             to = self.k_to[a_]
             for rf in (0, 1):
                 ok = self.t_n[self.k_lib[a_], rf, 0] > 0
-                cst = self._lookup(self.k_lib[a_], rf, smax[to, rf], torch.zeros(len(a_), device=dev))
+                cst = self._lookup(self.k_lib[a_], rf, smax[to, rf], self.k_cslew[a_])
                 s = fin(rq - cst - self.k_ctp_min[a_] - amax[to, rf, tg])
                 sp.scatter_reduce_(0, to, torch.where(ok, s, torch.full_like(s, INF)), 'amin')
         p, rf, tg, rq = self.op_ex

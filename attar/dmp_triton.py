@@ -422,12 +422,12 @@ def dmp_load_kernel(state_p, elm_p, rise_p, lthr_p, wire_o, slew_o, N, RIT: tl.c
 
 
 @triton.jit(do_not_specialize=['N', 'NT', 'K'])
-def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t0_p, tag_p, pi_p,
+def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t0_p, tag_p, s0_p, pi_p,
                       amax, amin, smax, smin, st_o, N,
                       NT, K, NIT: tl.constexpr, RIT: tl.constexpr, BLOCK: tl.constexpr):
     """One level's arcs, 2N lanes (max analysis, then min): DMP gate delay and driver slew, the driver pin's arrivals
     (per tag) and slews by float atomics, and per lane the row its loads need (STATE + delay, reach) in st_o.
-    fi < 0: a launch arc (arrival t0 into tag at its clock pin, slew 0)."""
+    fi < 0: a launch arc (arrival t0 into tag at its clock pin, slew s0: the clock's transition)."""
     l = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = l < 2 * N
     mn = l >= N
@@ -445,6 +445,7 @@ def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t
     sx = tl.load(smax + fis, mask=mask & ~launch, other=0.0)
     sn = tl.load(smin + fis, mask=mask & ~launch, other=0.0)
     slew = tl.where(mn, tl.where(sn < INF, sn, sx), sx)
+    slew = tl.where(launch, tl.load(s0_p + c, mask=mask, other=0.0), slew)      # launch: the clock pin's slew
     pb = pi_p + (net * 4 + orf + 2 * mn.to(tl.int32)) * 3
     cn = tl.load(pb, mask=mask, other=1.0); rr = tl.load(pb + 1, mask=mask, other=0.0); cf = tl.load(pb + 2, mask=mask, other=0.0)
     tb = tthr + (lib * 2 + orf) * 4
@@ -554,15 +555,15 @@ def load(state, elmore, rise, lthr):
 
 def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin):
     """One level of the timer on the GPU: stage_gate_kernel then stage_load_kernel. tables: (ix1, ix2, val, n32, thr);
-    lev: the level's static arrays (lib, fi, t, orf, net, t0, tag, ea, en)."""
+    lev: the level's static arrays (lib, fi, t, orf, net, t0, tag, ea, en, s0)."""
     ix1, ix2, val, n32, thr = tables
-    lib, fi, t, orf, net, t0, tag, ea, en = lev
+    lib, fi, t, orf, net, t0, tag, ea, en, s0 = lev
     N, M = len(lib), len(ea)
     if not N:
         return
     NT = amax.shape[1]
     st = torch.empty(2 * N, 20, device=amax.device)
-    stage_gate_kernel[(triton.cdiv(2 * N, BLOCK),)](ix1, ix2, val, n32, thr, lib, fi, t, orf, net, t0, tag, pi,
+    stage_gate_kernel[(triton.cdiv(2 * N, BLOCK),)](ix1, ix2, val, n32, thr, lib, fi, t, orf, net, t0, tag, s0, pi,
                                                     amax, amin, smax, smin, st, N,
                                                     NT=NT, K=ix1.shape[-1], NIT=NEWTON_MAX_ITER, RIT=ROOT_N, BLOCK=BLOCK)
     if M:
