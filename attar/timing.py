@@ -283,6 +283,10 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=
         m['library'] = lib_ref
     else:
         m['facts'].pop('library', None); m.pop('library', None)
+    if sdc_path or sdc_text:                                  # the SDC is read now
+        (m.get('unread_sources') or {}).pop('sdc', None)
+        if 'unread_sources' in m and not m['unread_sources']:
+            del m['unread_sources']
     m['timing'] = {'arcs': len(tens['a_master']), 'clocks': list(info['clocks']), 'missing_cells': missing_cells,
                    'unsupported_sdc': info['unsupported'], 'sources': info['sources']}
     if bundle_note:

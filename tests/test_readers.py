@@ -32,11 +32,11 @@ class LefDefTest(unittest.TestCase):
         self.assertIn('floorplan.macros', d.facts)
         self.assertIn('hpwl', d.capabilities())                            # the routing benchmark comes placed
 
-    def test_asap7_contest_design_has_libraries_but_no_timing_yet(self):
+    def test_asap7_contest_design_has_timing(self):
         d = need('after_fp/iccad2025/aes')
         self.assertEqual(d.manifest['fidelity'], 'F1')
-        self.assertNotIn('timing', d.facts)
-        self.assertIn('sdc', d.manifest['unread_sources'])
+        self.assertIn('timing', d.facts)                     # the contest's Liberty + SDC, distilled
+        self.assertNotIn('sdc', d.manifest.get('unread_sources', {}))
         # the contest's aes input has every cell in N, also in FS rows: the rail check sees it
         self.assertGreater(attar.Evaluator(d).legality()['wrong_rail'], 0)
         self.assertTrue(attar.Evaluator(need('after_fp/iccad2025/des')).legality()['legal'])
