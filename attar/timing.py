@@ -1,0 +1,226 @@
+"""The 'timing' fact: Liberty, SDC and wire RC distilled into an IR (spec 5.1: the fast loop reads only the IR).
+
+attach(ir_dir, lib_paths, sdc_path, rc_tcl) writes two files next to core.safetensors:
+  timing.safetensors  per master pin (aligned with the IR's m_pin_* arrays): rise / fall capacitance (and the lower
+                      bounds of their ranges, for min analysis), max capacitance,
+                      Liberty direction and clock flag; per Liberty timing arc of a master used by the design: from /
+                      to master pin, timing type and sense, and its NLDM tables (padded to K x K) in ps / fF.
+  timing.json         clocks (period, waveform, ideal latency, uncertainty, source IO cells), input / output delays per
+                      IO cell, clock groups, wire RC per um (signal, clock) and per layer, what the SDC had that is not
+                      modeled, and the sources (name + sha256, never paths).
+and records the fact in manifest.json. The timer is attar.sta.
+"""
+import gzip
+import json
+import os
+import re
+
+import numpy as np
+
+from . import liberty, sdc as sdc_mod, st
+from .distill import source_ref
+
+# arc timing types
+T_COMB, T_RISE_EDGE, T_FALL_EDGE, T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F, T_PRESET, T_CLEAR, T_TRISTATE, T_OTHER = range(11)
+TYPE_CODE = {'combinational': T_COMB, 'combinational_rise': T_COMB, 'combinational_fall': T_COMB,
+             'rising_edge': T_RISE_EDGE, 'falling_edge': T_FALL_EDGE,
+             'setup_rising': T_SETUP_R, 'hold_rising': T_HOLD_R, 'setup_falling': T_SETUP_F, 'hold_falling': T_HOLD_F,
+             'preset': T_PRESET, 'clear': T_CLEAR, 'three_state_enable': T_TRISTATE, 'three_state_disable': T_TRISTATE,
+             'three_state_enable_rise': T_TRISTATE, 'three_state_enable_fall': T_TRISTATE,
+             'three_state_disable_rise': T_TRISTATE, 'three_state_disable_fall': T_TRISTATE}
+# arc sense: positive (in rise -> out rise), negative (in rise -> out fall), non (both)
+S_POS, S_NEG, S_NON = 0, 1, 2
+SENSE_CODE = {'positive_unate': S_POS, 'negative_unate': S_NEG, 'non_unate': S_NON}
+# table slots: delay arcs (cell_rise, cell_fall, rise_transition, fall_transition); checks (rise_, fall_constraint)
+DELAY_SLOTS = ('cell_rise', 'cell_fall', 'rise_transition', 'fall_transition')
+CHECK_SLOTS = ('rise_constraint', 'fall_constraint')
+# Liberty pin directions
+LD_IN, LD_OUT, LD_INOUT, LD_INTERNAL, LD_NONE = 0, 1, 2, 3, 4
+LIB_DIR = {'input': LD_IN, 'output': LD_OUT, 'inout': LD_INOUT, 'internal': LD_INTERNAL}
+
+
+def read_rc_tcl(path):
+    """An OpenROAD RC script (ORFS platform setRC.tcl): set_layer_rc / set_wire_rc -> {'layer': {name: [r, c]},
+    'via': {name: r}, 'signal': [r, c], 'clock': [r, c]} (r in the Liberty resistance unit per um, c in its capacitance
+    unit per um: kohm and fF for ASAP7, so r * c * um^2 is ps). set_wire_rc -layers averages the layers' RC."""
+    out = {'layer': {}, 'via': {}}
+    text = open(path).read().replace('\\\n', ' ')
+    for line in text.splitlines():
+        t = re.findall(r'\{[^}]*\}|\S+', line.split('#')[0])
+        if not t:
+            continue
+        o, i = {}, 1
+        while i < len(t):
+            nxt = t[i + 1] if i + 1 < len(t) else None
+            if t[i].startswith('-') and nxt is not None and not re.match(r'-[a-z]', nxt):
+                o[t[i]] = nxt.strip('{}'); i += 2
+            else:
+                o[t[i]] = True; i += 1
+        if t[0] == 'set_layer_rc':
+            if '-via' in o:
+                out['via'][o['-via']] = float(o.get('-resistance', 0))
+            elif '-layer' in o:
+                out['layer'][o['-layer']] = [float(o.get('-resistance', 0)), float(o.get('-capacitance', 0))]
+        elif t[0] == 'set_wire_rc':
+            kinds = [k for k in ('signal', 'clock') if o.get('-' + k)] or ['signal', 'clock']
+            if '-layers' in o or '-layer' in o:
+                ls = (o.get('-layers') or o.get('-layer')).split()
+                rc = [float(np.mean([out['layer'][l][k] for l in ls])) for k in (0, 1)]
+            else:
+                rc = [float(o.get('-resistance', 0)), float(o.get('-capacitance', 0))]
+            for k in kinds:
+                out[k] = rc
+    return out
+
+
+def _pack_tables(arcs, K):
+    """arcs' table dicts -> ix1 [A, 4, K], ix2 [A, 4, K], val [A, 4, K, K], n [A, 4, 2] (n = 0: no table)."""
+    A = len(arcs)
+    ix1 = np.zeros((A, 4, K), np.float32); ix2 = np.zeros((A, 4, K), np.float32)
+    val = np.zeros((A, 4, K, K), np.float32); n = np.zeros((A, 4, 2), np.int8)
+    for a, arc in enumerate(arcs):
+        slots = CHECK_SLOTS if TYPE_CODE.get(arc['type'], T_OTHER) in (T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F) else DELAY_SLOTS
+        for s, kind in enumerate(slots):
+            if kind not in arc['tables']:
+                continue
+            i1, i2, v = arc['tables'][kind]
+            n1, n2 = len(i1), len(i2)
+            ix1[a, s, :n1] = i1; ix2[a, s, :n2] = i2
+            ix1[a, s, n1:] = i1[-1]; ix2[a, s, n2:] = i2[-1]
+            vv = np.asarray(v, np.float32).reshape(n1, n2)
+            val[a, s, :n1, :n2] = vv
+            n[a, s] = (n1, n2)
+    return ix1, ix2, val, n
+
+
+def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None):
+    """Distill timing facts into the IR at ir_dir (see the module doc). Returns a summary dict."""
+    with gzip.open(os.path.join(ir_dir, 'names.json.gz'), 'rt') as f:
+        names = json.load(f)
+    a, _ = st.load(os.path.join(ir_dir, 'core.safetensors'))
+    masters, mpins = names['masters'], names['master_pins']
+    m_ptr = a['m_pin_ptr'].astype(np.int64)
+    n_mp = int(m_ptr[-1])
+    # libraries: the first definition of a cell wins (OpenSTA warns on duplicates)
+    cells, lib_refs, cell_thr, default_thr = {}, [], {}, None
+    for p in lib_paths:
+        lib = liberty.read(p)
+        lib_refs.append(source_ref(p))
+        default_thr = default_thr or lib['thresholds']          # OpenSTA: ports use the first library read
+        for k, v in lib['cells'].items():
+            if k not in cells:
+                cells[k] = v; cell_thr[k] = lib['thresholds']
+    mp_cap = np.zeros((n_mp, 2), np.float32); mp_cap_min = np.zeros((n_mp, 2), np.float32)
+    mp_maxcap = np.zeros(n_mp, np.float32)
+    mp_ctp = np.zeros((n_mp, 2, 2), np.float32)        # min / max clock tree path (macro clock pins), rise / fall
+    # thresholds per rise / fall: (input threshold, slew lower, slew upper, slew derate) of the pin's library, for loads
+    mp_thr = np.tile(np.array([.5, .2, .8, 1.0], np.float32), (n_mp, 2, 1))
+    T4 = lambda t, key: np.array([[t[key][i], t['slew_lower'][i], t['slew_upper'][i], t['slew_derate']] for i in (0, 1)],
+                                 np.float32)
+    mp_dir = np.full(n_mp, LD_NONE, np.uint8); mp_clock = np.zeros(n_mp, np.uint8)
+    used = set(a['c_master'][a['c_master'] >= 0].tolist())
+    arcs, a_master, a_from, a_to, a_type, a_sense, a_thr = [], [], [], [], [], [], []
+    missing_cells = []
+    for m, mname in enumerate(masters):
+        lc = cells.get(mname)
+        local = {pn: int(m_ptr[m]) + i for i, pn in enumerate(mpins[m])}
+        if lc is None:
+            if m in used:
+                missing_cells.append(mname)
+            continue
+        for pn, pa in lc['pins'].items():
+            if pn in local:
+                k = local[pn]
+                mp_cap[k] = pa['cap']; mp_cap_min[k] = pa.get('cap_min', pa['cap']); mp_maxcap[k] = pa['max_cap'] or 0.0
+                mp_dir[k] = LIB_DIR.get(pa['dir'], LD_NONE); mp_clock[k] = pa['clock']
+                for i, mm in enumerate(('min', 'max')):
+                    if mm in pa.get('ctp', {}):
+                        mp_ctp[k, i] = pa['ctp'][mm]
+                mp_thr[k] = T4(cell_thr[mname], 'input')
+        if m not in used:
+            continue
+        for arc in lc['arcs']:
+            if arc['from'] not in local or arc['to'] not in local:
+                continue
+            t = TYPE_CODE.get(arc['type'], T_OTHER)
+            if t == T_OTHER:
+                continue
+            arcs.append(arc); a_master.append(m); a_from.append(local[arc['from']]); a_to.append(local[arc['to']])
+            a_thr.append(T4(cell_thr[mname], 'output'))
+            a_type.append(t); a_sense.append(SENSE_CODE.get(arc['sense'], S_NON))
+    K = max([len(t[0]) for arc in arcs for t in arc['tables'].values()] + [len(t[1]) for arc in arcs for t in arc['tables'].values()] + [1])
+    ix1, ix2, val, n = _pack_tables(arcs, K)
+    tens = {'mp_cap': mp_cap, 'mp_cap_min': mp_cap_min, 'mp_maxcap': mp_maxcap, 'mp_ctp': mp_ctp, 'mp_dir': mp_dir, 'mp_clock': mp_clock,
+            'a_master': np.asarray(a_master, np.int32), 'a_from': np.asarray(a_from, np.int32),
+            'a_to': np.asarray(a_to, np.int32), 'a_type': np.asarray(a_type, np.uint8),
+            'a_sense': np.asarray(a_sense, np.uint8), 'a_ix1': ix1, 'a_ix2': ix2, 'a_val': val, 'a_n': n,
+            # driver thresholds per arc and output rise / fall: (output threshold, slew lower, slew upper, slew derate)
+            'a_thr': np.asarray(a_thr, np.float32).reshape(-1, 2, 4), 'mp_thr': mp_thr}
+    st.save(os.path.join(ir_dir, 'timing.safetensors'), tens, {'schema': 'attar-timing/0.1'})
+
+    # constraints, by IO cell index
+    io_cell, io_dir = a['io_cell'], a['io_dir']
+    cell_names = names['cells']
+    pin_in = [cell_names[i] for i, d in zip(io_cell, io_dir) if d == 0]
+    pin_out = [cell_names[i] for i, d in zip(io_cell, io_dir) if d == 1]
+    port_idx = {cell_names[i]: int(i) for i in io_cell}
+    info = {'clocks': {}, 'input_delay': [], 'output_delay': [], 'input_transition': {}, 'load': {},
+            'clock_groups': [], 'path_delays': [], 'unsupported': {}}
+    if sdc_path or sdc_text:
+        s = sdc_mod.read(sdc_text if sdc_text else sdc_path, pin_in, pin_out, names.get('design', ''), is_text=bool(sdc_text))
+        for k, c in s['clocks'].items():
+            info['clocks'][k] = dict(c, sources=[port_idx[p] for p in c['sources'] if p in port_idx])
+        for w in ('input_delay', 'output_delay'):
+            info[w] = [dict(e, cell=port_idx[e['port']]) for e in s[w] if e['port'] in port_idx]
+        info['input_transition'] = {str(port_idx[p]): v for p, v in s['input_transition'].items() if p in port_idx}
+        info['load'] = {str(port_idx[p]): v for p, v in s['load'].items() if p in port_idx}
+        info['clock_groups'] = s['clock_groups']
+        # path delays: endpoints of -from / -to as cell indices (cells: instances; ports: their IO cell)
+        cell_idx = {n.replace('\\', ''): i for i, n in enumerate(cell_names)}    # DEF escapes ('a\\[0\\]'), SDC does not
+        def cells_of(objs):
+            if objs is None:
+                return None
+            out = []
+            for k, n in objs:
+                n = n.replace('\\', '')
+                if k in ('cell', 'port') and n in cell_idx:
+                    out.append(cell_idx[n])
+                elif k == 'pin' and '/' in n and n.rsplit('/', 1)[0] in cell_idx:
+                    out.append(cell_idx[n.rsplit('/', 1)[0]])
+            return out
+        info['path_delays'] = [dict(e, **{'from': cells_of(e['from']), 'to': cells_of(e['to'])}) for e in s['path_delays']]
+        info['unsupported'] = s['unsupported']
+    # Liberty `when` conditions of the conditional arcs, by arc index (OpenSTA's sim disables them under constants)
+    info['arc_when'] = {str(i): arc['when'] for i, arc in enumerate(arcs) if arc.get('when')}
+    # output pin functions of the masters used (constant propagation from tie cells, as OpenSTA's sim does)
+    info['functions'] = {}
+    for m, mname in enumerate(masters):
+        lc = cells.get(mname)
+        if lc is None or m not in used:
+            continue
+        fs = {pn: pa['function'] for pn, pa in lc['pins'].items() if pa.get('function') and pa['dir'] in ('output', 'inout')}
+        if fs:
+            info['functions'][str(m)] = fs
+    info['rc'] = read_rc_tcl(rc_tcl) if rc_tcl else None
+    # OpenROAD est::computeAverageCutResistance: the mean resistance of the cut layers between the block's lowest and
+    # highest routing layer (via Vk joins Mk and Mk+1); every pin hangs off the estimated tree through it
+    rl = (json.load(open(os.path.join(ir_dir, 'manifest.json'))).get('routing') or {}).get('layers')
+    if info['rc'] and rl and info['rc'].get('via'):
+        lo, hi = (int(re.sub(r'\D', '', x)) for x in rl)
+        vs = [info['rc']['via'][v] for v in ('V%d' % k for k in range(lo, hi)) if v in info['rc']['via']]
+        info['rc']['cut_res'] = float(np.mean(vs)) if vs else 0.0
+    info['units'] = {'time': 'ps', 'cap': 'fF', 'res': 'kohm'}
+    info['default_thresholds'] = default_thr
+    info['missing_cells'] = missing_cells
+    info['sources'] = {'lib': lib_refs, 'sdc': source_ref(sdc_path) if sdc_path else None,
+                       'rc': source_ref(rc_tcl) if rc_tcl else None}
+    with open(os.path.join(ir_dir, 'timing.json'), 'w') as f:
+        json.dump(info, f, indent=1)
+
+    mf = os.path.join(ir_dir, 'manifest.json')
+    m = json.load(open(mf))
+    m.setdefault('facts', {})['timing'] = 'liberty+sdc' + ('+rc' if rc_tcl else '')
+    m['timing'] = {'arcs': len(arcs), 'clocks': list(info['clocks']), 'missing_cells': missing_cells,
+                   'unsupported_sdc': info['unsupported'], 'sources': info['sources']}
+    json.dump(m, open(mf, 'w'), indent=1)
+    return m['timing']
