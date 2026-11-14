@@ -49,18 +49,28 @@ class Evaluator:
         self._rows = None
         self._prepare()
 
+    def __repr__(self):
+        return '<Evaluator of %s on %s: %s>' % (self.d.manifest.get('design'), self.dev, ', '.join(self.available()))
+
     # -- what can be measured ---------------------------------------------------------------------------------------
     def available(self):
         have = self.d.present
         return sorted(m for m, (req, impl) in METRICS.items() if impl and req <= have)
 
+    @staticmethod
+    def _metric(metric):
+        if metric not in METRICS:
+            from .design import _unknown
+            raise _unknown('metric', metric, METRICS)
+        return METRICS[metric]
+
     def missing(self, metric):
-        req, impl = METRICS[metric]
+        req, impl = self._metric(metric)
         miss = sorted(req - self.d.present)
         return miss + ([] if impl else ['(not implemented yet)'])
 
     def _require(self, metric, pos):
-        req, impl = METRICS[metric]
+        req, impl = self._metric(metric)
         if not impl:
             raise NotImplementedError('metric %r is listed but not implemented yet' % metric)
         miss = req - self.d.present - ({'placement'} if pos is not None else set())
@@ -302,6 +312,8 @@ class Evaluator:
 
     def evaluate(self, pos=None, metrics=('hpwl',)):
         """A report: metric values plus what they rest on (fidelity, provenance of the facts used)."""
+        if isinstance(metrics, str):
+            metrics = (metrics,)
         out = {}
         for m in metrics:
             self._require(m, pos)
@@ -313,10 +325,17 @@ class Evaluator:
                         if f in self.d.facts}
         return out
 
-    def status(self):
+    def status(self, show=False):
+        """Which metrics the design's facts allow (✅) and what the others need (❌). Returned as text; printed too
+        when show (in color on a terminal)."""
+        from .status import OK, NO, styled
         lines = ['Evaluator for %s' % self.d.manifest.get('design')]
         for m, (req, impl) in METRICS.items():
-            miss = self.missing(m)
-            ok = impl and not [x for x in miss if not x.startswith('(')]
-            lines.append('  %s %-20s %s' % ('✅' if ok else '❌', m, '' if ok else 'needs ' + ', '.join(miss)))
-        return '\n'.join(lines)
+            miss = sorted(req - self.d.present)
+            ok = impl and not miss
+            note = '' if ok else 'not implemented yet' if not impl else 'needs ' + ', '.join(miss)
+            lines.append(('  %s %-20s %s' % (OK if ok else NO, m, note)).rstrip())
+        s = '\n'.join(lines)
+        if show:
+            print(styled(s))
+        return s

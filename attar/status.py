@@ -1,13 +1,17 @@
 """Design reports: status (which facts a design has (✅) or lacks (❌), what it can do, and what a hand-off to ORFS
 still needs), summary (a few lines of numbers), tier and the hand-off command. Everything here follows from the IR;
-nothing on disk outside it is looked at."""
+nothing on disk outside it is looked at. The text is plain; styled() colors it for a terminal."""
 import os
+import re
+import sys
 
 import torch
 
 from .facts import CAPABILITIES, DESCRIBE, FACTS, HINTS, DEFAULT_HINT, PLACE_STEPS
 
 OK, NO = '✅', '❌'   # ✅ ❌
+PROV_WIDTH = 18       # provenance column; longer provenances push their detail right
+SECTIONS = ('Problem facts', 'Solution state', 'Capabilities', 'Hand-off to ORFS needs')
 
 TIERS = {
     'A': 'can be validated in ORFS (slow loop), given an ORFS run of it',
@@ -81,7 +85,36 @@ def _why_missing(d, fact):
     return ''
 
 
-def status(d, color=True):
+def _line(mark, w, name, note='', pw=None, prov=None):
+    """One checklist line: mark, name padded to w, [provenance padded to pw,] note; no trailing blanks."""
+    if pw is None:
+        return ('  %s %-*s  %s' % (mark, w, name, note)).rstrip()
+    return ('  %s %-*s  %-*s  %s' % (mark, w, name, pw, prov, note)).rstrip()
+
+
+def styled(text, stream=None):
+    """The report text with ANSI styles when `stream` (default stdout) is a terminal: section titles bold, the
+    reasons on ❌ lines and the tier line dimmed, the closing '->' advice bold. Unchanged otherwise."""
+    stream = stream or sys.stdout
+    if not getattr(stream, 'isatty', lambda: False)():
+        return text
+    B, D, R = '\033[1m', '\033[2m', '\033[0m'
+    out = []
+    for i, ln in enumerate(text.split('\n')):
+        if i == 0 or ln in SECTIONS:
+            ln = B + ln + R
+        elif ln.lstrip().startswith('->'):
+            ln = B + ln + R
+        elif ln.startswith('  tier '):
+            ln = D + ln + R
+        elif ln.startswith('  ' + NO):
+            m = re.match(r'(  %s \S+)(.*)' % NO, ln)
+            ln = m.group(1) + D + m.group(2) + R if m else ln
+        out.append(ln)
+    return '\n'.join(out)
+
+
+def status(d):
     m = d.manifest
     t = tier(d)
     have = d.present
@@ -94,35 +127,36 @@ def status(d, color=True):
         L.append('  placement target density %.3g (%s)' % (m['target_density'], m.get('target_density_source', 'the source')))
     L += ['', 'Problem facts']
     w = max(len(f) for f in FACTS)
+    pw = min(PROV_WIDTH, max([len(str(v)) for v in d.facts.values()] + [1]))
     for f in FACTS:
         if f == 'placement':
             continue
         if f in d.facts:
-            L.append('  %s %-*s  %-10s %s' % (OK, w, f, d.facts[f], _detail(d, f)))
+            L.append(_line(OK, w, f, _detail(d, f), pw, d.facts[f]))
         else:
-            L.append('  %s %-*s  %-10s %s' % (NO, w, f, '-', _why_missing(d, f)))
+            L.append(_line(NO, w, f, _why_missing(d, f), pw, '-'))
     L += ['', 'Solution state']
     n_unplaced = int((~d.placed & d.movable).sum())
     snaps = ', '.join(d.snapshots) or 'none'
     if 'placement' in have:
-        L.append('  %s %-*s  all movable cells placed  (snapshots: %s)' % (OK, w, 'placement', snaps))
+        L.append(_line(OK, w, 'placement', 'all movable cells placed  (snapshots: %s)' % snaps))
     else:
-        L.append('  %s %-*s  %d movable cells unplaced  (snapshots: %s)' % (NO, w, 'placement', n_unplaced, snaps))
+        L.append(_line(NO, w, 'placement', '%d movable cells unplaced  (snapshots: %s)' % (n_unplaced, snaps)))
     fp_ok, fp_issues = d.floorplan_legal()
-    L.append('  %s %-*s  %s' % (OK if fp_ok else NO, w, 'floorplan', 'legal (checked now: macros in place and apart, IO '
-                                 'pins in the die)' if fp_ok else 'not legal: ' + '; '.join(fp_issues)))
+    L.append(_line(OK if fp_ok else NO, w, 'floorplan', 'legal (checked now: macros in place and apart, IO pins in the '
+                                                         'die)' if fp_ok else 'not legal: ' + '; '.join(fp_issues)))
     L += ['', 'Capabilities']
     shown = {c: req for c, req in CAPABILITIES.items() if c not in PLACE_STEPS}
     cw = max(len(DESCRIBE.get(c, c)) for c in shown)
     for c, req in shown.items():
         miss, why = sorted(req - have), d.blocked(c)
         note = why or ('needs ' + ', '.join(miss) if miss else '')
-        L.append('  %s %-*s  %s' % (NO if note else OK, cw, DESCRIBE.get(c, c), note))
+        L.append(_line(NO if note else OK, cw, DESCRIBE.get(c, c), note))
     # hand-off to ORFS: the requirement list, then what to do
     L += ['', 'Hand-off to ORFS needs']
     for f in sorted(CAPABILITIES['orfs_handoff']):
         ok = f in have
-        L.append('  %s %-*s  %s' % (OK if ok else NO, w, f, '' if ok else (_why_missing(d, f) or HINTS.get(f, DEFAULT_HINT))))
+        L.append(_line(OK if ok else NO, w, f, '' if ok else (_why_missing(d, f) or HINTS.get(f, DEFAULT_HINT))))
     stage = m.get('orfs', {}).get('stage')
     ex = 'd.export("out.def")'
     if t == 'A':

@@ -233,6 +233,8 @@ def plot(d, path=None, die=0, pos=None, max_cells=30_000, rows=None, labels=None
     macro, 40 to 400). Returns the matplotlib figure; saved to path if given."""
     from types import SimpleNamespace
     d.require('plot')
+    if theme not in THEMES:
+        raise ValueError('theme must be one of %s, got %r' % (', '.join(THEMES), theme))
     t = THEMES[theme]
     own = pos is None                                    # drawing the design's own placement (HPWL applies)
     placed = d.placed.cpu().numpy() if pos is None else np.ones(len(d.flags), bool)  # caller's positions count as placed

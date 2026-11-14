@@ -8,6 +8,7 @@ Coordinates in microns (float32); `scale` = 1 / dbu.
 The Design holds the state and answers questions about it; the larger jobs live in their own modules and are reached
 through its methods: status.py (status, tier, hand-off), export.py (DEF write-back), sizing.py (resize), sta.py
 (timing), routing.py (GROV), viz.py (plot), naive (engines)."""
+import difflib
 import gzip
 import json
 import os
@@ -35,6 +36,23 @@ def _orient_offset(o, px, py, w, h):
         torch.stack([py, px], -1),          # FE (MX R90)
     ], 0)
     return cand[o.long(), torch.arange(len(o), device=o.device)]
+
+
+def _unknown(kind, name, known):
+    """A KeyError for an unknown fact / capability name, with the closest known names."""
+    near = difflib.get_close_matches(name, list(known), n=3)
+    return KeyError('unknown %s %r%s (known: %s)' % (kind, name, ', did you mean %s?' % ' or '.join(map(repr, near))
+                                                     if near else '', ', '.join(known)))
+
+
+def _similar_designs(name, names, n=3):
+    """Zoo names close to `name`: by the design part first (in the same suite first), then by the whole name."""
+    head, _, base = name.rpartition('/')
+    r = lambda a, b: difflib.SequenceMatcher(None, a, b).ratio()  # noqa: E731
+    cand = [m for m in names if r(base, m.rpartition('/')[2]) >= 0.75] or \
+        difflib.get_close_matches(name, names, n=n, cutoff=0.8)
+    cand.sort(key=lambda m: (m.rpartition('/')[0] != head, -r(base, m.rpartition('/')[2]), -r(name, m)))
+    return cand[:n]
 
 
 class Design:
@@ -161,7 +179,7 @@ class Design:
         if fact == 'core':  # schema 0.1 name
             return {'netlist', 'cell_geometry'} <= set(self.facts)
         if fact not in FACTS:
-            raise KeyError('unknown fact %r (known: %s)' % (fact, ', '.join(FACTS)))
+            raise _unknown('fact', fact, FACTS)
         return fact in self.present
 
     @property
@@ -183,9 +201,13 @@ class Design:
         return sorted(c for c, req in CAPABILITIES.items() if req <= have and not self.blocked(c))
 
     def missing(self, capability):
+        if capability not in CAPABILITIES:
+            raise _unknown('capability', capability, CAPABILITIES)
         return sorted(CAPABILITIES[capability] - self.present)
 
     def require(self, capability, ignore=()):
+        if capability not in CAPABILITIES:
+            raise _unknown('capability', capability, CAPABILITIES)
         why = self.blocked(capability)
         if why:
             raise MissingFacts(self.manifest.get('design', self.path), capability, set(), blocked=why)
@@ -194,11 +216,12 @@ class Design:
             raise MissingFacts(self.manifest.get('design', self.path), capability, miss)
 
     def status(self, show=True):
-        """Checklist of facts (✅ / ❌), solution state, capabilities, and what a hand-off to ORFS still needs."""
-        from .status import status
+        """Checklist of facts (✅ / ❌), solution state, capabilities, and what a hand-off to ORFS still needs.
+        Printed when show (in color on a terminal); returned as text either way."""
+        from .status import status, styled
         s = status(self)
         if show:
-            print(s)
+            print(styled(s))
         return s
 
     def tier(self):
@@ -283,7 +306,10 @@ class Design:
     def restore(self, name):
         """Restore a saved solution state; 'reference' is the placement kept at distillation (e.g. the ORFS GP)."""
         if name not in self.snapshots:
-            raise KeyError('%s has no snapshot %r (have: %s)' % (self.manifest['design'], name, ', '.join(self.snapshots) or 'none'))
+            near = difflib.get_close_matches(name, list(self.snapshots), n=1)
+            raise KeyError('%s has no snapshot %r (have: %s)%s' % (
+                self.manifest['design'], name, ', '.join(self.snapshots) or 'none',
+                '; did you mean %r?' % near[0] if near else ''))
         snap = self.snapshots[name]
         if isinstance(snap[0], np.ndarray):  # stored at distillation, in DBU
             self.pos = torch.as_tensor(snap[0].astype(np.float64) * self.scale, device=self.device, dtype=torch.float32)
@@ -658,8 +684,10 @@ def load(name, device='cpu', download=True, root=None):
             from .hub import fetch
             fetch(name, root=root)
     if not os.path.exists(os.path.join(path, 'manifest.json')):
-        raise FileNotFoundError('no distilled design %r (looked in %s%s)' % (
-            name, path, ' and on the Hugging Face Hub' if download and not os.path.isdir(name) else ''))
+        near = [] if os.path.isabs(name) else _similar_designs(name, zoo(root=root))
+        raise FileNotFoundError('no distilled design %r (looked in %s%s)%s' % (
+            name, path, ' and on the Hugging Face Hub' if download and not os.path.isdir(name) else '',
+            '; did you mean %s?' % ' or '.join(map(repr, near)) if near else ''))
     return Design(path, device)
 
 

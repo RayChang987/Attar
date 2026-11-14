@@ -12,16 +12,18 @@ from attar import naive
 | `attar.zoo(suite=None, remote=False, root=None)` | names `<mode>/<suite>/<design>` of the distilled designs (`'after_fp/ispd2005/adaptec1'`, ...; `suite`: a prefix such as `'before_fp'` or `'after_fp/ns3k'`) in the local zoo, or on the Hugging Face Hub |
 | `attar.load(name_or_path, device='cpu', download=True, root=None)` | a `Design`; a zoo name missing locally is downloaded first |
 | `attar.fetch(*names, root=None)` | download designs or whole suites (`'ispd2015'`) into the local zoo; everything when no name is given |
+| `attar.distill(def_path, lef_paths, out_dir, lib_paths=(), ...)` | distill a LEF/DEF design; returns the manifest |
 
 The zoo is `zoo/` in a source checkout, else `~/.cache/attar/zoo`; `root=` picks another folder. Attar reads no
-environment variables.
-| `attar.distill(def_path, lef_paths, out_dir, lib_paths=(), ...)` | distill a LEF/DEF design; returns the manifest |
+environment variables. A name that is not in the zoo (nor on the Hub) raises `FileNotFoundError` with the closest
+names; an unknown fact, capability, metric or snapshot raises `KeyError` with the known ones.
 
 ## Design
 
 | method | what it does |
 | --- | --- |
-| `status(show=True)` | facts, solution state, capabilities, what an ORFS hand-off needs |
+| `status(show=True)` | facts, solution state, capabilities, what an ORFS hand-off needs; printed (in color on a terminal) and returned as plain text |
+| `summary()` | a few lines: counts, dies with core, rows and utilization, IO pins, facts |
 | `capabilities()`, `missing(cap)`, `require(cap)`, `has(fact)`, `tier()` | facts and what follows from them |
 | `place(target_density=None, macro_halo=0, **kw)` | `naive.place`: global placement + legalization (default density: the source's own, else 0.9) |
 | `floorplan(utilization=None, aspect_ratio=1.0, packing=False, **kw)` | `naive.floorplan`, for `before_fp` problems (see below) |
@@ -34,6 +36,9 @@ environment variables.
 | `pin_pos(pos=None)` | (P, 2) pin locations |
 | `utilization()` | per die: standard-cell area / (core - macro area inside the core) |
 | `snapshot(name)`, `restore(name)`, `unplace()` | solution state |
+| `timing(pos=None)`, `timing_report(pos=None, endpoints=10, path=True)` | static timing (`attar.sta`): a `TimingResult` (`summary()`, `path()`, `report()`); the report prints WNS / TNS, the worst endpoints and path |
+| `gr_overflow(pos=None, adjustment=None, maps=False)` | global-routing overflow (GROV): RUDY demand against OpenROAD's gcell capacities |
+| `equivalents(cell)`, `resize(cells, masters)` | gate sizing within a master's equivalence class (`attar.sizing`) |
 | `macro_grid(mac)` | step and per-macro offset that put macro pins on their routing tracks (from the IR) |
 | `tracks()` | `{(axis, layer): (start, step)}` routing tracks |
 | `set_io(xy, provenance)`, `fix_macros(provenance)`, `release_macros()`, `set_floorplan(die, rows, provenance)` | for engines: write an answer as a fact |
@@ -50,8 +55,8 @@ environment variables.
 | `star_wirelength(pos)`, `steiner_wirelength(pos)` | star model; rectilinear Steiner estimate |
 | `rudy(pos)`, `density_overflow(pos)` | congestion and density maps / scalars |
 | `legality(pos)` | counts: wrong_rail, off_row, outside_rows, off_site, overlapping, pdn_blocked (fact `pdn`); `legal` |
-| `evaluate(pos, metrics=(...))` | a report dict |
-| `status()`, `available()`, `missing(metric)` | which metrics the design's facts allow |
+| `evaluate(pos, metrics=(...))` | a report dict (`metrics`: names, or one name) |
+| `status(show=False)`, `available()`, `missing(metric)` | which metrics the design's facts allow |
 
 ## attar.naive
 
@@ -72,3 +77,17 @@ and handed to a flow that draws the power grid):
 | `place_macros(d, halo=None, target_density=0.9, legalizer='auto' \| 'sweep' \| 'push' \| 'lp', packing=False, packing_args=None)` | default: GP, then `lp` (= `auto`): constraint graphs from the better of sweep / push, positions by linear programming (HiGHS, scipy); never overlapping, in the core when it can (`res['fits_outline']`, `res['outside_core']`). `packing=True`: no GP, B*-tree packing + annealing (into the core, then HPWL), block-level designs only (no rows); `packing_args`: `moves` (per macro and phase, default 200), `seed` |
 
 Each engine checks its facts first (`MissingFacts` otherwise) and writes its answer back into the design.
+
+## Where the code is
+
+| module | what |
+| --- | --- |
+| `attar/design.py` | `Design`: the state (facts, positions, floorplan), checks, wirelength; `load`, `zoo` |
+| `attar/status.py` | `status`, `summary`, `tier`, the hand-off command |
+| `attar/export.py` | DEF write-back into the source frame |
+| `attar/sizing.py` | gate sizing (`resize`, `equivalents`) |
+| `attar/evaluator.py`, `metrics.py`, `kernels.py` | metrics and the tensor kernels they share with the engines |
+| `attar/sta.py`, `timing.py`, `routing.py` | static timing, the timing fact, global-routing overflow |
+| `attar/naive/` | engines: `floorplan.py` (die, IO, macros), `gp.py`, `lg.py`, `flow.py` (`floorplan`, `place`) |
+| `attar/viz.py` | `plot` |
+| readers | `lef.py`, `deffile.py`, `bookshelf.py`, `fpformats.py`, `liberty.py`, `sdc.py`, `distill.py` |

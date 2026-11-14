@@ -8,7 +8,7 @@ Place and evaluate a 100k-cell design in seconds.
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
 [![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](docs/validation/orfs_check.md)
-[![Tests](https://img.shields.io/badge/tests-77%20passing-5f7f1e?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/tests-89%20passing-5f7f1e?style=flat-square)](tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
 [Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
@@ -193,14 +193,14 @@ legal including power rails and the PDN; OpenROAD's <code>check_placement</code>
 aes_cipher_top  (orfs/asap7, fidelity F1)
   placement target density 0.71 (orfs 3_3 global_place (GPL-0023))
 Problem facts
-  ✅ netlist           def        12268 nets, 42885 pins
-  ✅ cell_geometry     lef        12420 cells (12009 movable, 0 macros), 56 masters
-  ✅ floorplan.die     def        1 die(s), 48.71 x 48.71 um
-  ✅ floorplan.io      def        388 IO pins placed
-  ✅ rows              def        164 rows, height 0.27 um
-  ✅ pdn               def        1815 wire and 4785 via shapes on M1, M2, M3
-  ✅ def_frame         def        PDN, pins, fixed cells of the source DEF, kept verbatim (849 kB)
-  ✅ slow_loop         orfs:asap7 ORFS aes, stage 3_3_place_gp
+  ✅ netlist           def             12268 nets, 42885 pins
+  ✅ cell_geometry     lef             12420 cells (12009 movable, 0 macros), 56 masters
+  ✅ floorplan.die     def             1 die(s), 48.71 x 48.71 um
+  ✅ floorplan.io      def             388 IO pins placed
+  ✅ rows              def             164 rows, height 0.27 um
+  ✅ pdn               def             1815 wire and 4785 via shapes on M1, M2, M3
+  ✅ def_frame         def             PDN, pins, fixed cells of the source DEF, kept verbatim (849 kB)
+  ✅ slow_loop         orfs:asap7      ORFS aes, stage 3_3_place_gp
   ...
 Solution state
   ❌ placement         12009 movable cells unplaced  (snapshots: reference)
