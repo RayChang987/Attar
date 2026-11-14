@@ -35,7 +35,7 @@ names; an unknown fact, capability, metric or snapshot raises `KeyError` with th
 | `pin_pos(pos=None)` | (P, 2) pin locations |
 | `utilization()` | per die: standard-cell area / (core - macro area inside the core) |
 | `snapshot(name)`, `restore(name)`, `unplace()` | solution state |
-| `timing(pos=None)`, `timing_report(pos=None, endpoints=10, path=True)` | static timing (`attar.sta`): a `TimingResult` (`summary()`, `path()`, `report()`); the report prints WNS / TNS, the worst endpoints and path |
+| `timing(pos=None)`, `timing_report(pos=None, endpoints=10, path=True)` | static timing (`attar.sta`): a `TimingResult` (`summary()`, `path()`, `report()`, `pin_slack()`, `net_slack()`); the report prints WNS / TNS, the worst endpoints and path; `pin_slack()` / `net_slack()` give every pin's / net's setup slack (inf where unconstrained), as OpenSTA's, from the required times of the run (computed on first use) |
 | `gr_overflow(pos=None, adjustment=None, maps=False)` | global-routing overflow (GROV): RUDY demand against OpenROAD's gcell capacities |
 | `equivalents(cell)`, `resize(cells, masters)` | gate sizing within a master's equivalence class (`attar.sizing`) |
 | `macro_grid(mac)` | step and per-macro offset that put macro pins on their routing tracks (from the IR) |

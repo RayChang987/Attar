@@ -968,6 +968,7 @@ class Timer:
         cw, elm = self.wires(pos) if self.parasitics == 'placement' else (None, None)
         if elm is None:
             elm = torch.zeros(len(self.n_fr), 4, device=dev)
+        self._elm = elm                                       # the run's wire delays, for required()
         # loads per driver pin (net wire cap + sink pin caps), max and min pin capacitances
         net_load = torch.zeros(len(self.d.n_ptr) - 1, 2, device=dev)
         net_load.index_add_(0, self.n_net, self.pin_cap[self.n_to])
@@ -996,6 +997,8 @@ class Timer:
                     wd, ls = dmp.input_port_load(S[f * 2 + rf], w, lt[:, 0], lt[:, 1], lt[:, 2], lt[:, 3])
                     A.index_reduce_(0, t_ * 2 + rf, A[f * 2 + rf] + wd[:, None], red)
                     S.scatter_reduce_(0, t_ * 2 + rf, ls, red)
+
+        rec = []                                      # per stage, the max gate and wire delays (required())
 
         def stage(lib, fi, t_, orf, t0, tag, ea, en, sx, sn):
             """Arcs into drivers t_ (output transition orf): gate delays and driver slews (DMP), arrivals at the
@@ -1041,11 +1044,11 @@ class Timer:
                 r = reach[ea]
                 smax.scatter_reduce_(0, si, torch.where(r, lsx, torch.zeros_like(lsx)), 'amax')
                 smin.scatter_reduce_(0, si, torch.where(r, lsn, torch.full_like(lsn, INF)), 'amin')
+            rec.append((dmax.float(), wx.float() if len(ea) else torch.zeros(0, device=dev)))
         if self.triton is not None and self.fused:               # one fused kernel per level
             pic, elc = pi.contiguous(), elm.contiguous()
-            for lv in self.tri_lev:
-                self.triton.stage(self.tri_tables, lv, self.tri_sthr, pic, elc, self.tri_nto, amax, amin, smax, smin,
-                                  self.precision)
+            self._rec = [self.triton.stage(self.tri_tables, lv, self.tri_sthr, pic, elc, self.tri_nto, amax, amin,
+                                           smax, smin, self.precision) for lv in self.tri_lev]
             smin = torch.where(torch.isfinite(smin), smin, smax)
             self.amax, self.amin = amax.view(P, 2, NT), amin.view(P, 2, NT)
             self.smax, self.smin = smax.view(P, 2), smin.view(P, 2)
@@ -1060,6 +1063,7 @@ class Timer:
                 fi = f * 2 + irf
                 sx = smax[fi]; sn = smin[fi]; sn = torch.where(torch.isfinite(sn), sn, sx)
                 stage(lib, fi, t_, orf, None, None, ea, en, sx, sn)
+        self._rec = rec
         smin = torch.where(torch.isfinite(smin), smin, smax)
         self.amax, self.amin = amax.view(P, 2, NT), amin.view(P, 2, NT)
         self.smax, self.smin = smax.view(P, 2), smin.view(P, 2)
@@ -1072,27 +1076,46 @@ class Timer:
         lt = self.launch_t
         fin = lambda x: torch.where(torch.isnan(x) | ~torch.isfinite(x), torch.full_like(x, INF), x)
         sp = torch.full((P,), INF, device=dev); hp = torch.full((P,), INF, device=dev)
+        A = amax.reshape(P * 2, -1)
+        for rows, req in self._setup_required():                 # setup: required time less arrival, per launch tag
+            sp.scatter_reduce_(0, rows // 2, fin(req - A[rows]).amin(1), 'amin')
         if len(self.k_lib):
             for rf in (0, 1):
                 ok = self.t_n[self.k_lib, rf, 0] > 0
-                cmax = self._lookup(self.k_lib, rf, smax[self.k_to, rf], self.k_cslew)
                 cmin = self._lookup(self.k_lib, rf, smin[self.k_to, rf], self.k_cslew)
                 lat = self.lat[self.k_ck][:, None]
-                req_s = (lt[None] + self.rel_setup[:, self.k_ctag].T + lat - cmax[:, None] - self.unc_s[self.k_ck][:, None]
-                         - self.k_ctp_min[:, None])
                 req_h = (lt[None] + self.rel_hold[:, self.k_ctag].T + lat + cmin[:, None] + self.unc_h[self.k_ck][:, None]
                          - self.k_ctp_max[:, None])
-                s = fin(req_s - amax[self.k_to, rf]).amin(1); h = fin(amin[self.k_to, rf] - req_h).amin(1)
-                sp.scatter_reduce_(0, self.k_to, torch.where(ok & self.k_setup, s, torch.full_like(s, INF)), 'amin')
+                h = fin(amin[self.k_to, rf] - req_h).amin(1)
                 hp.scatter_reduce_(0, self.k_to, torch.where(ok & ~self.k_setup, h, torch.full_like(h, INF)), 'amin')
-        p, rf, ct, off = self.op_su
-        if len(p):
-            s = fin(lt[None] + self.rel_setup[:, ct].T + off[:, None] - amax[p, rf]).amin(1)
-            sp.scatter_reduce_(0, p, s, 'amin')
         p, rf, ct, off = self.op_ho
         if len(p):
             h = fin(amin[p, rf] - (lt[None] + self.rel_hold[:, ct].T + off[:, None])).amin(1)
             hp.scatter_reduce_(0, p, h, 'amin')
+        return sp, hp
+
+    def _setup_required(self):
+        """Setup required times at the endpoints of the last run, per launch tag: [(rows pin * 2 + transition,
+        required (n, NT))], inf where a check does not apply. Register checks (setup time from the data and clock
+        slews), output delays, and path delay exceptions (their own tag). An endpoint's setup slack is its required
+        time less its arrival (_checks); every other pin's goes back from here (required)."""
+        dev, smax, lt, NT = self.dev, self.smax, self.launch_t, self.NT
+        out = []
+        if len(self.k_lib):
+            for rf in (0, 1):
+                ok = self.t_n[self.k_lib, rf, 0] > 0
+                cmax = self._lookup(self.k_lib, rf, smax[self.k_to, rf], self.k_cslew)
+                lat = self.lat[self.k_ck][:, None]
+                req = (lt[None] + self.rel_setup[:, self.k_ctag].T + lat - cmax[:, None] - self.unc_s[self.k_ck][:, None]
+                       - self.k_ctp_min[:, None])
+                out.append((self.k_to * 2 + rf, torch.where((ok & self.k_setup)[:, None], req, torch.full_like(req, INF))))
+        p, rf, ct, off = self.op_su
+        if len(p):
+            out.append((p * 2 + rf, lt[None] + self.rel_setup[:, ct].T + off[:, None]))
+
+        def one_tag(rows, tag, v):                                  # a required time for one tag only
+            req = torch.full((len(rows), NT), INF, device=dev)
+            return rows, req.scatter_(1, tag[:, None], v[:, None])
         # path delay exceptions: registers (setup time from the constrained slew) and output ports
         if len(self.k_lib) and len(self.kx[0]):
             a_, tg, rq = self.kx
@@ -1100,20 +1123,76 @@ class Timer:
             for rf in (0, 1):
                 ok = self.t_n[self.k_lib[a_], rf, 0] > 0
                 cst = self._lookup(self.k_lib[a_], rf, smax[to, rf], self.k_cslew[a_])
-                s = fin(rq - cst - self.k_ctp_min[a_] - amax[to, rf, tg])
-                sp.scatter_reduce_(0, to, torch.where(ok, s, torch.full_like(s, INF)), 'amin')
+                v = rq - cst - self.k_ctp_min[a_]
+                out.append(one_tag(to * 2 + rf, tg, torch.where(ok, v, torch.full_like(v, INF))))
         p, rf, tg, rq = self.op_ex
         if len(p):
-            sp.scatter_reduce_(0, p, fin(rq - amax[p, rf, tg]), 'amin')
-        return sp, hp
+            out.append(one_tag(p * 2 + rf, tg, rq))
+        return out
+
+    # -- required times: pin and net slack (setup) ------------------------------------------------------------------------
+    def required(self):
+        """Setup required times of the last run (OpenSTA's, max analysis): (r, through) with r (P * 2, NT) at every
+        net sink, cell input and input port (pin * 2 + transition, per launch tag), and through (P * 2,) at every
+        driver pin the worst slack of the paths through it (wire delays depend on the arc that drives, as in the
+        forward pass, so a driver is timed per arc). Lazy: d.timing() only keeps the gate and wire delays it computed
+        (one float per arc and per load); this goes back through the levels with index reductions only."""
+        dev, P, NT = self.dev, self.P, self.NT
+        A = self.amax.reshape(P * 2, NT); S = self.smax.reshape(-1)
+        r = torch.full((P * 2, NT), INF, device=dev)
+        for rows, req in self._setup_required():
+            r.index_reduce_(0, rows, torch.where(torch.isnan(req), INF, req), 'amin')   # NaN: no relationship
+        through = torch.full((P * 2,), INF, device=dev)
+        levs = []                                   # as the forward pass ran them: launch arcs, then level by level
+        if self.lc is not None:
+            lib, to, orf, tag, t0, cks = self.lc
+            levs.append((lib, None, to, orf, cks, (tag, t0), *self.lc_ex))
+        for cb in self.cb_lev:
+            if cb is not None:
+                lib, f, t_, orf, irf, ea, en = cb
+                fi = f * 2 + irf
+                levs.append((lib, fi, t_, orf, None, None, ea, en))
+        if levs:
+            assert len(self._rec) == len(levs), 'the delays of the last run do not match its levels'
+            cat = lambda k: torch.cat([L[k] for L in levs])  # noqa: E731
+            t_, orf, en = cat(2), cat(3), cat(7)
+            off = np.cumsum([0] + [len(L[0]) for L in levs])
+            ea = torch.cat([L[6] + int(o) for L, o in zip(levs, off)])
+            dmax = torch.cat([x[0] for x in self._rec]); wx = torch.cat([x[1] for x in self._rec])
+            si = self.n_to[en] * 2 + orf[ea]
+            loff = np.searchsorted(ea.cpu().numpy(), off)          # the loads of each level (ea ascends)
+            for i in range(len(levs) - 1, -1, -1):
+                a0, a1, l0, l1 = int(off[i]), int(off[i + 1]), int(loff[i]), int(loff[i + 1])
+                fi, launch = levs[i][1], levs[i][5]
+                d_ = dmax[a0:a1, None]
+                ra = torch.full((a1 - a0, NT), INF, device=dev)     # required at the driver, through each arc
+                ra.index_reduce_(0, ea[l0:l1] - a0, r[si[l0:l1]] - wx[l0:l1, None], 'amin')
+                if launch is None:
+                    ax = A[fi] + d_
+                else:                                              # launch: one tag, the clock edge's arrival
+                    tag, t0 = launch
+                    ax = torch.full_like(ra, -INF).scatter_(1, tag[:, None], (t0 + dmax[a0:a1])[:, None])
+                through.scatter_reduce_(0, t_[a0:a1] * 2 + orf[a0:a1], (ra - ax).amin(1), 'amin')
+                if fi is not None:
+                    r.index_reduce_(0, fi, ra - d_, 'amin')
+        if len(self.pa):                                           # nets driven by input ports: the wire alone
+            from . import dmp
+            f, t_, w4 = self.n_fr[self.pa], self.n_to[self.pa], self._elm[self.pa]
+            for rf in (0, 1):
+                lt = self.sink_thr[t_, rf]
+                wd, _ = dmp.input_port_load(S[f * 2 + rf], w4[:, rf], lt[:, 0], lt[:, 1], lt[:, 2], lt[:, 3])
+                r.index_reduce_(0, f * 2 + rf, r[t_ * 2 + rf] - wd[:, None], 'amin')
+        return r, through
 
 
 class TimingResult:
-    """Per-endpoint setup / hold slack (ps; inf where not constrained) and their summaries."""
+    """Per-endpoint setup / hold slack (ps; inf where not constrained) and their summaries; per-pin and per-net
+    setup slack on demand (pin_slack, net_slack)."""
 
     def __init__(self, timer, setup, hold):
         self.timer = timer
         self.setup, self.hold = setup, hold
+        self._pin_slack = None
         ep = torch.isfinite(setup)
         self.endpoints = torch.nonzero(ep).flatten()
         s = setup[ep]
@@ -1125,6 +1204,26 @@ class TimingResult:
         self.whs = float(min(0.0, h.min().item())) if len(h) else 0.0
         self.ths = float(h.clamp(max=0).sum().item())
         self.hold_violations = int((h < 0).sum().item())
+
+    def pin_slack(self):
+        """Setup slack of every pin (P,), ps; inf where no constrained path passes: the worst path through the pin,
+        required time less arrival, as OpenSTA's pin slack (max analysis). An endpoint's is its setup slack (a latch
+        D pin: also the paths through it); the pins of the worst path have the WNS. Computed on the first call
+        (Timer.required: one batched delay evaluation, then index reductions back through the levels); valid for the
+        last run of this result's timer, as path()."""
+        if self._pin_slack is None:
+            T = self.timer
+            r, through = T.required()
+            s = torch.minimum((r - T.amax.reshape(T.P * 2, -1)).amin(1), through)
+            self._pin_slack = s.view(T.P, 2).amin(1)
+        return self._pin_slack
+
+    def net_slack(self):
+        """Setup slack of every net (E,), ps; inf where unconstrained: the worst slack of its pins, as OpenSTA's
+        Sta::netSlack, by which OpenROAD's timing-driven placement weights nets."""
+        s = self.pin_slack()
+        d = self.timer.d
+        return torch.full((len(d.n_ptr) - 1,), INF, device=s.device).scatter_reduce_(0, d.p_net, s, 'amin')
 
     def summary(self):
         return {'wns': self.wns, 'tns': self.tns, 'worst_slack': self.worst_slack, 'setup_violations': self.violations,

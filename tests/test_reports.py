@@ -77,5 +77,30 @@ class ReportsTest(unittest.TestCase):
         self.assertIn('ICGx2_ASAP7_75t_R', L.class_of('ICGx1_ASAP7_75t_R'))   # same statetable: still one class
 
 
+
+class SlackTest(unittest.TestCase):
+    def test_pin_and_net_slack_agree_with_the_endpoints(self):
+        """Required times go back from the endpoints: an endpoint's pin slack is its setup slack, the worst pin and
+        the worst net have the WNS, and a net's slack is its worst pin's."""
+        import torch
+        d = need(MEDIUM).restore('reference')
+        if 'sta' not in d.capabilities():
+            raise unittest.SkipTest('no timing fact')
+        r = d.timing()
+        s = r.pin_slack()
+        self.assertEqual(s.shape, (len(d.p_net),))
+        ep = r.endpoints
+        self.assertTrue(bool((s[ep] == r.setup[ep]).all()))
+        self.assertAlmostEqual(float(s.min()), r.worst_slack, delta=1e-3)
+        n = r.net_slack()
+        self.assertEqual(len(n), len(d.n_ptr) - 1)
+        self.assertAlmostEqual(float(n.min()), r.worst_slack, delta=1e-3)
+        k = int(torch.argmin(n))
+        self.assertEqual(float(n[k]), float(s[d.p_net == k].min()))
+        self.assertTrue(bool(torch.isinf(s).any()) and not bool(torch.isnan(s).any()))   # unconstrained: inf
+        d.pos = d.pos + 0.0                                        # a new run: its own slacks
+        self.assertIsNot(d.timing().pin_slack(), s)
+
+
 if __name__ == '__main__':
     unittest.main()
