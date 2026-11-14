@@ -2,11 +2,13 @@
 
 
 class Macro:
-    __slots__ = ('name', 'cls', 'w', 'h', 'pins', 'pin_layer', 'pin_dir', 'sym', 'shapes')
+    __slots__ = ('name', 'cls', 'w', 'h', 'pins', 'pin_loc', 'pin_layer', 'pin_dir', 'sym', 'shapes')
 
     def __init__(self, name):
         self.name, self.cls, self.w, self.h = name, '', 0.0, 0.0
         self.pins = {}  # pin name -> (x0, y0, x1, y1) in microns: bbox of all port shapes; use
+        self.pin_loc = {}  # pin name -> (x, y) microns: the mean of its port rectangles' centers (OpenROAD's pin
+        #                    location, dbITerm::getAvgXY, which estimate_parasitics and the timer use)
         self.pin_layer = {}  # pin name -> layer of its first port shape
         self.pin_dir = {}  # pin name -> DIRECTION (INPUT, OUTPUT, INOUT, FEEDTHRU) when the LEF states it
         self.sym = set()   # SYMMETRY: 'X', 'Y', 'R90'
@@ -21,7 +23,7 @@ def read_lef(paths, macros=None, tech=None):
     tech.setdefault('vias', {})
     for path in paths:
         mac = pin = layer = site = via = None; via_layer = None
-        box = None; use = 'SIGNAL'; props = False; shape_layer = None; obs = False
+        box = None; use = 'SIGNAL'; props = False; shape_layer = None; obs = False; loc = [0.0, 0.0, 0]
         with open(path) as f:
             for line in f:
                 t = line.split()
@@ -48,6 +50,7 @@ def read_lef(paths, macros=None, tech=None):
                             v = [float(x) for x in t[1:5]] if t[1] != 'MASK' else [float(x) for x in t[3:7]]
                             x0, y0, x1, y1 = min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3])
                             box = [x0, y0, x1, y1] if box is None else [min(box[0], x0), min(box[1], y0), max(box[2], x1), max(box[3], y1)]
+                            loc[0] += (x0 + x1) / 2; loc[1] += (y0 + y1) / 2; loc[2] += 1
                             if shape_layer:
                                 mac.shapes.append((shape_layer, (x0, y0, x1, y1), 'PIN'))
                         elif k == 'USE':
@@ -60,11 +63,13 @@ def read_lef(paths, macros=None, tech=None):
                                 mac.pin_layer[pin] = shape_layer
                         elif k == 'END' and len(t) > 1 and t[1] == pin:
                             mac.pins[pin] = (tuple(box) if box else (0.0, 0.0, 0.0, 0.0), use)
+                            if loc[2]:
+                                mac.pin_loc[pin] = (loc[0] / loc[2], loc[1] / loc[2])
                             pin = None
                     elif k == 'OBS':
                         obs, shape_layer = True, None
                     elif k == 'PIN':
-                        pin, box, use, shape_layer = t[1], None, 'SIGNAL', None
+                        pin, box, use, shape_layer, loc = t[1], None, 'SIGNAL', None, [0.0, 0.0, 0]
                         # attributes may follow on the PIN line (ISPD 2015: 'PIN o DIRECTION OUTPUT ;')
                         for kw in ('DIRECTION', 'USE'):
                             if kw in t[2:] and t.index(kw, 2) + 1 < len(t):

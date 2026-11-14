@@ -4,7 +4,8 @@ A Library holds every cell of a set of Liberty files (the first definition of a 
   library.safetensors  per cell: area, leakage (nW), sequential kind, the Liberty thresholds of its file (input /
                        output, slew lower / upper, derate), LEF size and class; per pin (CSR l_pin_ptr): direction,
                        rise / fall capacitance (and the lower bounds of their ranges), max capacitance, clock flag,
-                       macro clock tree path, LEF box / use / layer; per timing arc: cell, from / to pin, type, sense,
+                       macro clock tree path, LEF box / use / layer and location (the mean of its rectangles'
+                       centers, OpenROAD's; NaN when unknown); per timing arc: cell, from / to pin, type, sense,
                        NLDM tables padded to K x K, in ps / fF.
   library.json         cell and pin names, output functions, arc `when` conditions, dont_use, footprints, equivalence
                        classes (cells that can replace each other: same signal pins, same per-output logic, same
@@ -106,6 +107,7 @@ class Library:
              'lp_dir': np.full(L, LD_NONE, np.uint8), 'lp_clock': np.zeros(L, np.uint8),
              'lp_ctp': np.zeros((L, 2, 2), np.float32), 'lp_has_ctp': np.zeros((L, 2), np.uint8),
              'lp_lef': np.zeros(L, np.uint8), 'lp_box': np.zeros((L, 4), np.float32),
+             'lp_loc': np.full((L, 2), np.nan, np.float32),
              'lp_use': np.full(L, U_SIGNAL, np.uint8), 'lp_layer': np.full(L, -1, np.int16),
              'lp_lefdir': np.full(L, D_UNKNOWN, np.uint8)}
         arcs, la = [], {'la_cell': [], 'la_from': [], 'la_to': [], 'la_type': [], 'la_sense': []}
@@ -160,6 +162,8 @@ class Library:
                         box, use = m.pins[pn]
                         k = base + j
                         a['lp_lef'][k] = 1; a['lp_box'][k] = box; a['lp_use'][k] = _USE.get(use, U_SIGNAL)
+                        if pn in m.pin_loc:
+                            a['lp_loc'][k] = m.pin_loc[pn]
                         a['lp_layer'][k] = lid.get(m.pin_layer.get(pn), -1)
                         a['lp_lefdir'][k] = LEF_DIR.get(m.pin_dir.get(pn), D_UNKNOWN)
         from .timing import _pack_tables
@@ -316,3 +320,22 @@ def design_arrays(chain, masters, mpins, m_ptr, used):
         if w:
             arc_when[str(i)] = w
     return tens, functions, arc_when, missing
+
+
+def pin_locations(chain, masters, mpins, m_ptr):
+    """Per master pin of a design (m_ptr CSR over masters, mpins their pin names), its LEF location in microns from
+    the master's lower-left in orientation N: the mean of its rectangles' centers, as OpenROAD's dbITerm::getAvgXY
+    (estimate_parasitics puts the pin there), looked up along chain; NaN where no library has it (a bundle distilled
+    before lp_loc, a cell without LEF)."""
+    m_ptr = np.asarray(m_ptr, np.int64)
+    out = np.full((int(m_ptr[-1]), 2), np.nan)
+    for m, mname in enumerate(masters):
+        hit = next(((L, L.cid[mname]) for L in chain if mname in L.cid and 'lp_loc' in L.a), None)
+        if hit is None:
+            continue
+        L, c = hit
+        for i, pn in enumerate(mpins[m]):
+            k = L.pid[c].get(pn)
+            if k is not None:
+                out[m_ptr[m] + i] = L.a['lp_loc'][k]
+    return out

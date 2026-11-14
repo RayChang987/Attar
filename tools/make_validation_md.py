@@ -66,15 +66,15 @@ def summary(rows):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('--sta', default=os.path.join(R, 'sta', 'v17_bundle.json'))
-    ap.add_argument('--ng45', default=os.path.join(R, 'sta', 'ng45_v3_bundle.json'))
-    ap.add_argument('--ns3k', default=os.path.join(R, 'sta_ns3k', 'v6.json'))
-    ap.add_argument('--sizing-asap7', default=os.path.join(R, 'sizing', 'asap7_v1.json'))
-    ap.add_argument('--sizing-ng45', default=os.path.join(R, 'sizing', 'ng45_v1.json'))
+    ap.add_argument('--sta', default=os.path.join(R, 'sta', 'v19_pinloc.json'))
+    ap.add_argument('--ng45', default=os.path.join(R, 'sta', 'ng45_v5_pinloc.json'))
+    ap.add_argument('--ns3k', default=os.path.join(R, 'sta_ns3k', 'v7_pinloc.json'))
+    ap.add_argument('--sizing-asap7', default=os.path.join(R, 'sizing', 'asap7_v2.json'))
+    ap.add_argument('--sizing-ng45', default=os.path.join(R, 'sizing', 'ng45_v2.json'))
     ap.add_argument('--gr', default=os.path.join(R, 'gr', 'v2.json'))
-    ap.add_argument('--edit', default=os.path.join(R, 'sta_ns3k_edit', 'edit.json'))
-    ap.add_argument('--debuffer-asap7', default=os.path.join(R, 'sta_def', 'asap7debuffer.json'))
-    ap.add_argument('--debuffer-ng45', default=os.path.join(R, 'sta_def', 'ng45debuffer.json'))
+    ap.add_argument('--edit', default=os.path.join(R, 'sta_ns3k_edit', 'edit_v2.json'))
+    ap.add_argument('--debuffer-asap7', default=os.path.join(R, 'sta_def', 'asap7debuffer_v2.json'))
+    ap.add_argument('--debuffer-ng45', default=os.path.join(R, 'sta_def', 'ng45debuffer_v2.json'))
     ap.add_argument('--out', default=os.path.join(ROOT, 'docs', 'validation', 'timing_routing.md'))
     a = ap.parse_args()
     sta, ng, ns = json.load(open(a.sta)), json.load(open(a.ng45)), json.load(open(a.ns3k))
@@ -114,7 +114,12 @@ def main():
     L += ['', '## Timing (STA)', '',
           'Setup / hold slack of every endpoint (register data pins, outputs) against OpenSTA after `estimate_parasitics '
           '-placement`, at the ORFS 3_3_place_gp placement (`tools/validate_sta.py`) or an Attar placement exported as '
-          'DEF (NS3K, `tools/validate_sta_ns3k.py`).', '', '### ORFS asap7', '']
+          'DEF (NS3K, `tools/validate_sta_ns3k.py`). Attar puts each pin where `estimate_parasitics` does: OpenROAD\'s '
+          'pin location, the mean of the centers of its LEF rectangles truncated to the database unit (not the center '
+          'of their bounding box, which differs on most multi-rectangle ASAP7 and Nangate45 pins). The residuals: '
+          'nangate45 ibex, one clock-gate latch D pin (latches are not modeled), all its other endpoints within '
+          '0.11 ps; riscv32i-mock-sram, up to 0.3 ps at SRAM macro pins (a design\'s own macros keep the box center).',
+          '', '### ORFS asap7', '']
     L += timing_table(sta, lambda d: 'after_fp/orfs_asap7/' + d)
     L += ['', '### ORFS nangate45', '']
     L += timing_table(ng, lambda d: 'after_fp/orfs_nangate45/' + d)
@@ -147,10 +152,9 @@ def main():
           '`d.debuffer()` at the ORFS 3_3_place_gp placement removes the buffers and double inversions ORFS put in '
           '(%d buffers, %d inverters over %d designs); OpenSTA reads the DEF Attar exports with the run\'s LEFs '
           '(`tools/validate_sta.py --debuffer`; `--via-def` is the same path without the edit). The nets grow: '
-          'loads that a buffer tree split come back onto one net. aes: OpenSTA\'s DMP fails to find the driver '
-          'waveform\'s 90%% crossing on one 302-pin net (its waveform reaches 0.8992 V/V by the search bound) and falls '
-          'back to the table slew, where Attar\'s pi model, a few percent off on that net, reaches 0.9003 and keeps '
-          'the waveform slew (twice the table\'s); the slew difference carries to the worst path.'
+          'loads that a buffer tree split come back onto one net. A DEF does not carry the routing layers the run\'s odb '
+          'has, so the truth sets them (`set_routing_layers -signal`, the run\'s): `estimate_parasitics` hangs every '
+          'pin off its tree through the mean cut resistance between them, the middle of the stack without them.'
           % (nb, ni, len(db7) + len(dbn)), '', '#### asap7', '']
     L += timing_table(db7, lambda d: 'after_fp/orfs_asap7/' + d)
     L += ['', '#### nangate45', '']

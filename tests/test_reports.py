@@ -2,6 +2,8 @@
 import io
 import unittest
 
+import torch
+
 from common import SMALL, MEDIUM, need, attar
 
 
@@ -116,6 +118,60 @@ class DelayCalcTest(unittest.TestCase):
             _, s, _, _ = dmp.gate(tab, one(s_in), one(1.5), one(0.0), one(0.0), one(1.5), one(0.5), one(0.2),
                                   one(0.8), one(1.0))
             self.assertAlmostEqual(float(s), want, places=4)
+
+
+
+class PinLocationTest(unittest.TestCase):
+    """The timer puts a pin where OpenROAD's estimate_parasitics does: dbITerm::getAvgXY, the mean of the centers of
+    its LEF rectangles, truncated to the database unit (the Evaluator keeps their bounding box's center)."""
+
+    def test_lef_pin_location_is_the_mean_of_its_rectangles(self):
+        import os
+        import tempfile
+        from attar.lef import read_lef
+        lef = ('MACRO X\n CLASS CORE ;\n SIZE 1 BY 1 ;\n PIN A\n  DIRECTION INPUT ;\n  PORT\n   LAYER M1 ;\n'
+               '    RECT 0 0 0.1 1 ;\n    RECT 0 0.9 1 1 ;\n  END\n END A\nEND X\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            f = os.path.join(tmp, 'x.lef')
+            with open(f, 'w') as fh:
+                fh.write(lef)
+            m = read_lef([f])[0]['X']
+        self.assertEqual(m.pins['A'][0], (0.0, 0.0, 1.0, 1.0))
+        self.assertAlmostEqual(m.pin_loc['A'][0], 0.275)
+        self.assertAlmostEqual(m.pin_loc['A'][1], 0.725)
+
+    def test_timer_pins_are_openroads(self):
+        import numpy as np
+        d = need(SMALL).restore('reference')
+        d.timing()
+        t = d._timer
+        loc = attar.timing.pin_locations(d)
+        pm = d.raw['p_mpin'].astype(np.int64)
+        c = d.raw['p_cell'].astype(np.int64)
+        o = d.orient.cpu().numpy()[c]
+        ok = (pm >= 0) & np.isin(o, (0, 5))                       # N, FS (the rows' orientations)
+        ok[ok] &= np.isfinite(loc[pm[ok]]).all(1)
+        self.assertGreater(ok.sum(), 100)
+        lx, ly = loc[pm[ok], 0], loc[pm[ok], 1]
+        h = d.size_n.cpu().numpy().astype(np.float64)[c[ok], 1]
+        ly = np.where(o[ok] == 5, h - ly, ly)
+        ll = np.round(d.pos.cpu().numpy().astype(np.float64)[c[ok]] * d.dbu)
+        want = ll + np.floor(np.stack([lx, ly], 1) * d.dbu + 1e-3)
+        got = torch.round(t.ev._pins(None) * d.dbu).cpu().numpy()[ok]
+        self.assertTrue(np.array_equal(got, want))
+        box = torch.round(attar.Evaluator(d)._pins(None) * d.dbu).cpu().numpy()[ok]
+        self.assertTrue((box != got).any())                     # multi-rectangle ASAP7 pins
+
+    def test_timer_follows_orientation_changes(self):
+        from attar.sta import Timer
+        d = need(SMALL).restore('reference')
+        d.timing()
+        d.orient = torch.where(d.orient == 0, torch.full_like(d.orient, 4), d.orient)   # N -> FN
+        d.update_orient()
+        r = d.timing()
+        fresh = Timer(d)
+        self.assertTrue(torch.equal(d._timer.ev.off, fresh.ev.off))
+        self.assertTrue(torch.equal(r.setup, fresh.run().setup))
 
 
 if __name__ == '__main__':

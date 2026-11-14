@@ -170,6 +170,17 @@ def arrays(d, c_master=None):
     return t, functions, arc_when
 
 
+def pin_locations(d):
+    """Per master pin, OpenROAD's pin location (attar.library.pin_locations: the mean of its LEF rectangles'
+    centers, microns from the master's lower-left, N) from the design's library chain; NaN where unknown (no chain,
+    a bundle without lp_loc)."""
+    from .library import pin_locations as look
+    n = int(d.raw['m_pin_ptr'][-1])
+    if 'library' not in d.manifest:
+        return np.full((n, 2), np.nan)
+    return look(chain(d.path, d.manifest), d.names['masters'], d.names['master_pins'], d.raw['m_pin_ptr'])
+
+
 def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=None):
     """Distill timing facts into the IR at ir_dir (see the module doc). Returns a summary dict.
     bundle: a shared library folder (attar.library, zoo/libraries/<name>). The design's Liberty files that are in it

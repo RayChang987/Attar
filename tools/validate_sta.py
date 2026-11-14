@@ -129,14 +129,17 @@ def truth(design, plat, libs, sdc, rc):
     return ep, m
 
 
-def truth_def(design, plat, libs, sdc, rc, def_path, out_dir):
+def truth_def(design, plat, libs, sdc, rc, def_path, out_dir, routing=None):
     """OpenSTA's endpoint slacks on a DEF Attar exported (the run's LEFs and Liberty, the DEF, the SDC, setRC): as
-    truth(), never cached (the DEF changes with the edits)."""
+    truth(), never cached (the DEF changes with the edits). routing: the run's routing layers (lowest, highest), set
+    as the run's odb has them: a DEF does not carry them, and estimate_parasitics hangs every pin off its tree through
+    the mean cut resistance between them (computeAverageCutResistance; without them, the middle of the stack)."""
     from orfs_roundtrip import inputs
     lefs = inputs(base_dir(run_key(plat, design)))[0]
     tsv = os.path.join(out_dir, 'truth_def.tsv')
     tcl = [DUMP_TCL] + ['read_lef %s' % w(l) for l in lefs] + ['read_liberty %s' % w(l) for l in libs] + [
-        'read_def %s' % w(def_path), 'read_sdc %s' % w(sdc), 'source %s' % w(rc),
+        'read_def %s' % w(def_path)] + (['set_routing_layers -signal %s-%s' % tuple(routing)] if routing else []) + [
+        'read_sdc %s' % w(sdc), 'source %s' % w(rc),
         'set t0 [clock milliseconds]', 'estimate_parasitics -placement',
         'set wns [sta::worst_slack -max]', 'set tns [sta::total_negative_slack -max]',
         'puts "STA_DONE [expr {([clock milliseconds] - $t0) / 1000.0}] $wns $tns"', 'dump_ep %s' % w(tsv)]
@@ -285,7 +288,8 @@ def main():
             out_dir = os.path.join(RUNS, 'sta_def', a.platform, design); os.makedirs(out_dir, exist_ok=True)
             def_path = os.path.join(out_dir, 'debuffered.def' if a.debuffer else 'exported.def')
             d.export(def_path)
-            ref, meta = truth_def(design, a.platform, libs, sdc, rc, def_path, out_dir)
+            ref, meta = truth_def(design, a.platform, libs, sdc, rc, def_path, out_dir,
+                                  (src.manifest.get('routing') or {}).get('layers'))
             if edits is not None:
                 print('%s: %s' % (design, edits), flush=True)
         else:

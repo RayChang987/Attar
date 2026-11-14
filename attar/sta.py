@@ -4,10 +4,13 @@ Graph: a node per pin and transition (rise, fall); net arcs (driver -> sink) and
 and instance). Clocks are ideal (pre-CTS): a register clock pin sees its clock's edge plus the ideal latency, slew 0
 Arrivals are kept per tag (launching clock, launching edge), so setup and hold
 use OpenSTA's edge relationships between any two clocks. Delays: NLDM tables, bilinear with linear extrapolation
-(OpenSTA's rule), on the net's total load (no effective capacitance). Wires (parasitics='placement'): net capacitance
-= Steiner length x c per um; a sink's delay is the Elmore delay of a wire of its Manhattan distance from the driver
-(r, c per um: the RC script's set_wire_rc -signal), and its slew sqrt(s^2 + (ln 9 x delay)^2).
-Not modeled: path exceptions (set_false_path, set_max_delay, ...), clock gating checks, recovery / removal, latches.
+(OpenSTA's rule), at the effective capacitance of the driver's pi model (OpenSTA's DmpCeff, attar.dmp). Wires
+(parasitics='placement'): OpenROAD's estimate_parasitics -placement: per net its Steiner tree (pdr::primDijkstra,
+alpha 0.3), a pi segment per branch (set_wire_rc -signal), each pin at OpenROAD's location (the mean of its LEF
+rectangles' centers, _pin_setup) behind its via resistance; reduced as OpenSTA does to the driver's pi model and
+every sink's Elmore delay.
+Path delays: set_max_delay -from / -to. Not modeled: other path exceptions (set_false_path, ...), clock gating
+checks, recovery / removal, latches.
 """
 import json
 import re
@@ -703,10 +706,12 @@ class Timer:
 
     # -- wires ------------------------------------------------------------------------------------------------------
     def _wire_setup(self):
-        """Placement-independent parts of the wire model: the Evaluator's pin offsets, Steiner (RMST) buckets and the
-        tree plan, so that wires() has no host sync (CUDA-graph capturable)."""
+        """Placement-independent parts of the wire model: the pins' locations (_pin_setup), Steiner (RMST) buckets
+        and the tree plan, so that wires() has no host sync (CUDA-graph capturable)."""
         from .evaluator import Evaluator
         ev = self.ev = Evaluator(self.d)
+        ev.off = ev.off.clone()                         # the timer's own pin offsets (_pin_setup), updated in place
+        self._pin_setup()
         drv = torch.as_tensor(self.net_driver, device=self.dev)
         drv_local = torch.where(drv >= 0, drv - ev.ptr[:-1], torch.full_like(drv, -1))
         self.plan = tree_plan(ev.ptr, ev.deg, drv_local)
@@ -731,13 +736,50 @@ class Timer:
             pins_t = torch.as_tensor(pins, device=self.dev)
             self._big = {'ptr': np.concatenate([[0], np.cumsum(deg[bn])]), 'drv': drv_local.cpu().numpy()[bn],
                          'cap': caps[pins], 'rv': self.pin_rvia.cpu().numpy()[pins], 'cell': ev.cell[pins_t],
-                         'off': ev.off[pins_t]}
+                         'off': ev.off[pins_t], 'pins': pins_t}
             self.plan['big_buf'] = (big, pins_t, torch.zeros(len(pins), 4, device=self.dev),
                                     torch.zeros(len(bn), 4, 3, device=self.dev), torch.zeros(len(bn), device=self.dev))
         elif big is not None and not steiner_big.available():
             warnings.warn('attar.sta: %d nets above %d pins use a lumped wire model (%s)'
                           % (len(big), TREE_BUCKETS[-1][1], steiner_big.error()))
         self.big_steiner = ev.deg > M.RMST_MAX_DEGREE
+
+    def _pin_setup(self):
+        """Where estimate_parasitics puts each pin: OpenROAD's dbNetwork::location, dbITerm::getAvgXY, the mean of the
+        centers of the pin's LEF rectangles (not the center of their bounding box, the Evaluator's pin offset: they
+        differ on pins of several rectangles, most ASAP7 pins), oriented with the cell and truncated to the database
+        unit as OpenROAD's int(). From the library chain (attar.timing.pin_locations); pins it does not locate (no
+        chain, a bundle without lp_loc) and ports keep the Evaluator's offsets."""
+        d = self.d
+        loc = timing_mod.pin_locations(d)
+        pm = d.raw['p_mpin'].astype(np.int64)
+        ok = pm >= 0
+        lp = np.full((len(pm), 2), np.nan)
+        lp[ok] = loc[pm[ok]]
+        ok &= np.isfinite(lp).all(1)
+        self._loc_n = torch.as_tensor(np.nan_to_num(lp), dtype=torch.float64, device=self.dev)
+        self._loc_ok = torch.as_tensor(ok, device=self.dev)
+        self._pin_key = None
+        self._sync_pins()
+
+    def _sync_pins(self):
+        """The pins' offsets from their cells' lower-left, into ev.off in place (a static input of the CUDA graph):
+        again whenever the design's orientations or sizes change (Design.update_orient makes a new pin_off)."""
+        d = self.d
+        key = (id(d.pin_off), id(d.size))
+        if key == self._pin_key:
+            return
+        self._pin_key = key
+        from .design import _orient_offset
+        c = d.p_cell
+        w, h = d.size_n[c, 0].double(), d.size_n[c, 1].double()
+        o = _orient_offset(d.orient[c], self._loc_n[:, 0], self._loc_n[:, 1], w, h)
+        o = torch.floor(o * d.dbu + 1e-3) / d.dbu        # OpenROAD truncates the mean; the cell origin is on the grid
+        base = d.size[c] / 2 + d.pin_off                # the Evaluator's (box centers)
+        self.ev.off.copy_(torch.where(self._loc_ok[:, None], o.to(base.dtype), base))
+        b = getattr(self, '_big', None)
+        if b is not None:
+            b['off'].copy_(self.ev.off[b['pins']])
 
     def _reachable(self):
         """Pins a data arrival can reach (structural): from launch arcs, constrained inputs and the input ports a
@@ -976,6 +1018,7 @@ class Timer:
         """Time the design at pos (default: the design's placement). Returns a TimingResult. On CUDA the whole
         computation is recorded once as a CUDA graph and replayed (positions copied into a static buffer)."""
         pos = self.d.pos if pos is None else pos
+        self._sync_pins()
         if not self.use_graph:
             return TimingResult(self, *self._run_core(pos))
         with torch.cuda.device(self.dev):

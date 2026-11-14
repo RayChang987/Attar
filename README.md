@@ -8,7 +8,7 @@ Place and evaluate a 100k-cell design in seconds.
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
 [![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](docs/validation/orfs_check.md)
-[![Tests](https://img.shields.io/badge/tests-103%20passing-5f7f1e?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/tests-106%20passing-5f7f1e?style=flat-square)](tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
 [Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
@@ -51,10 +51,10 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 | --- | --- | --- | --- |
 | **HPWL** | `ev.hpwl` | OpenROAD's HPWL from its database; 23 ORFS designs (ASAP7, Nangate45) up to 1.05M cells | within **0.00002%** on every design ([table](docs/validation/orfs_check.md)) |
 | **Legality** | `ev.legality` | OpenROAD `check_placement` | same verdict on all **23** ORFS designs and the **62** NS3K floorplans OpenROAD can check; placements broken by half a site rejected by both |
-| **Timing** | `d.timing()` | OpenSTA after `estimate_parasitics -placement`; 31 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells | WNS median error **0.06-0.20%**, max **1.19%**; hold slack MAE at most 0.36 ps; 5-30x faster than OpenSTA |
+| **Timing** | `d.timing()` | OpenSTA after `estimate_parasitics -placement`; 31 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells | WNS median error **0.00%** (ORFS) and **0.11%** (NS3K), max **0.34%**; hold slack MAE at most 0.36 ps; 5-30x faster than OpenSTA |
 | **Pin and net slack** | `d.timing().pin_slack()`, `.net_slack()` | OpenSTA's `slack_max` of every pin; 8 designs (ASAP7, Nangate45) up to 384k pins | Pearson at least **0.9995**; on the pins with negative slack, MAE at most **1.03 ps**; 7-32 ms after a timing run |
 | **Timing after sizing** | `d.resize` + `d.timing()` | OpenROAD `replace_cell` + OpenSTA, 20% of the cells swapped at random; 16 designs | WNS error at most **0.23%**, TNS at most 0.37% |
-| **Timing after netlist edits** | `d.edit()`, `d.debuffer()` + `d.timing()` | OpenSTA on the DEF Attar exports: after 1,548 buffers and 443 clones inserted (10 NS3K designs up to 163k cells), and after `d.debuffer()` removed 45,991 buffers and 83 inverters (10 ORFS designs) | setup Pearson at least **0.9997**, WNS error at most **1.18%** except debuffered aes (7.4%: a [DMP corner case](docs/validation/timing_routing.md#debuffer)); hold MAE at most 0.36 ps |
+| **Timing after netlist edits** | `d.edit()`, `d.debuffer()` + `d.timing()` | OpenSTA on the DEF Attar exports: after 1,548 buffers and 443 clones inserted (10 NS3K designs up to 163k cells), and after `d.debuffer()` removed 45,991 buffers and 83 inverters (10 ORFS designs) | setup Pearson at least **0.9997**, WNS error at most **0.04%** after debuffer and **1.18%** after the NS3K edits; hold MAE at most 0.36 ps |
 | **Global routing OVF** | `d.gr_overflow()` | OpenROAD's gcell capacities and global route; 13 ORFS designs | capacities exact without macros, within **0.16%** with them; ranks designs as OpenROAD does (Spearman **0.97**); a pre-route estimate: reads mild congestion high and heavy congestion low |
 | **Steiner wirelength, RUDY, density overflow** | `ev.steiner_wirelength`, `ev.rudy`, `ev.density_overflow` |  | |
 
