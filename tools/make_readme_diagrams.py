@@ -137,7 +137,7 @@ def roadmap():
             ('NS3K', [(99, PL)])]
     naive = [('Floorplan', [('Packing', 'Done'), ('Macro placement', 'Done'), ('IO placement', 'Done')]),
              ('Placement', [('Placer', 'Done'), ('Legalizer', 'Done'), ('PDN-aware refinement', 'Done')])]
-    ev = [('HPWL', 'Done'), ('OVF', 'Done'), ('Timing', 'Done'), ('Blocked pin checking', 'Not yet'),
+    ev = [('HPWL', 'Done'), ('Global routing OVF', 'Done'), ('Timing', 'Done'), ('Blocked pin checking', 'Not yet'),
           ('Detailed routing', "Won't have"), ('DRV checks', "Won't have")]
 
     FL, FM, FC = 23, 23, 27                               # font: leaf, middle, category
@@ -281,7 +281,7 @@ def roadmap():
     s.append('<ellipse cx="%g" cy="%g" rx="%g" ry="%g" fill="url(#glow)"/>' % (CX, cy, RX * 2.1, RY * 2.6))
     s.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="url(#brand)" filter="url(#soft)"/>'
              % (CX - RX, cy - RY, 2 * RX, 2 * RY, RY))
-    s.append(t(CX, cy + 16, 'attar', 46, K['ink'], 'bold', ls=1))
+    s.append(t(CX, cy + 16, 'Attar', 46, K['ink'], 'bold', ls=1))
 
     # ---- legend
     ly = H - 58

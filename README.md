@@ -40,7 +40,7 @@ Place and evaluate a 100k-cell design in seconds.
 
 ## Roadmap
 
-<p align="center"><img src="docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement) and placement (placer, legalizer, PDN-aware refinement), all done. Right, Evaluation: HPWL, OVF and timing done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
+<p align="center"><img src="docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement) and placement (placer, legalizer, PDN-aware refinement), all done. Right, Evaluation: HPWL, global routing OVF and timing done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
 
 Attar's built-in GPU engines, `attar.naive`, let a flow run end to end even when you bring only one part of it: to
 work on timing optimization, you need a placement, not a placer of your own. Every engine is fully tensorized,
