@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Figures for README.md (docs/images):
   proxy_agreement.png               how often routed WL moves the same way as HPWL, by HPWL gap (pa_pdn, spec 7.1)
-  gallery/*.png                     designs placed by attar.naive (run with --gallery [name ...]: all, or those
-                                    figures, e.g. --gallery bp_quad; needs the zoo and a GPU)"""
+  gallery/*.png                     what the Evaluator sees, on designs placed by attar.naive (run with
+                                    --gallery [name ...]: all, or those figures, e.g. --gallery eval_grov; needs the
+                                    zoo and a GPU)"""
 import io
 import contextlib
 import os
@@ -53,30 +54,51 @@ def proxy_agreement(mode):
 
 
 def gallery(only=()):
+    """What the Evaluator sees, one view per figure (attar.viz tiles), from real runs of attar.naive:
+      eval_grov         cva6 (ASAP7) placed: global-routing load on OpenROAD's gcells (d.gr_overflow)
+      eval_pin_access   ariane136 (NS3K) after global placement: cells with a signal pin on the PDN
+      eval_placed       the same after legalization: legal, rails and PDN included
+      fp_n300           GSRC n300 floorplanned by B*-tree packing: legality and the macro / IO connections"""
     sys.path.insert(0, ROOT)
     import time
     import attar
-    # (zoo name, file, what runs, its arguments): two floorplan problems (the die for a block area, IO pins and blocks
-    # by B*-tree packing; the cva6 placement comes from tools/make_demo_gif.py) and a placement problem
-    jobs = [('before_fp/gsrc_hard/n300', 'fp_n300.png', 'floorplan', dict(utilization=0.85, packing=True)),
-            ('before_fp/mcnc/ami49', 'fp_ami49.png', 'floorplan', dict(utilization=0.80, packing=True)),
-            ('after_fp/ns3k_pl_u80/ariane136', 'ariane136.png', 'place', {})]
-    for name, fn, how, kw in jobs:
-        if only and fn[:-4] not in only:
-            continue
-        d = attar.load(name, 'cuda'); t = time.time()
-        with contextlib.redirect_stdout(io.StringIO()):
-            if how == 'floorplan':
-                d.floorplan(**kw)
-            else:
-                d.unplace(); d.place(**kw)
-        sec = time.time() - t
-        title = '%s    %s in %.1f s' % (name, {'floorplan': 'floorplan', 'place': 'placement'}[how], sec)
-        os.makedirs(os.path.join(IMG, 'gallery'), exist_ok=True)
-        d.plot(os.path.join(IMG, 'gallery', fn), title=title, dpi=160)
-        print('wrote', fn, title)
-        del d
+    from attar import naive
+    out = os.path.join(IMG, 'gallery')
+    os.makedirs(out, exist_ok=True)
 
+    def quiet(fn):
+        t = time.time()
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = fn()
+        return r, time.time() - t
+
+    def save(d, fn, title, **kw):
+        d.plot(os.path.join(out, fn + '.png'), title=title, dpi=160, **kw).clf()
+        print('wrote', fn, '|', title)
+
+    if not only or 'eval_grov' in only:
+        d = attar.load('after_fp/orfs_asap7/cva6', 'cuda')
+        _, sec = quiet(d.place)
+        g = d.gr_overflow()
+        save(d, 'eval_grov', 'cva6    global-routing overflow after placement (%.1f s)' % sec, tiles='gr_overflow')
+        print('   GROV %.2f%%' % g['grov_%'])
+        del d
+    if not only or {'eval_pin_access', 'eval_placed'} & set(only):
+        d = attar.load('after_fp/ns3k_pl_u80/ariane136', 'cuda')
+        ev = attar.Evaluator(d)
+        _, sec = quiet(lambda: naive.global_place(d))
+        save(d, 'eval_pin_access', 'ariane136    pin access after global placement (%.1f s)' % sec, tiles='pin_access')
+        _, sec = quiet(lambda: naive.legalize(d))
+        lg = ev.legality()
+        save(d, 'eval_placed', 'ariane136    legalized (%.1f s)' % sec)
+        print('   legality', lg)
+        del d
+    if not only or 'fp_n300' in only:
+        d = attar.load('before_fp/gsrc_hard/n300', 'cuda')
+        _, sec = quiet(lambda: d.floorplan(utilization=0.85, packing=True))
+        save(d, 'fp_n300', 'n300    floorplan by B*-tree packing (%.1f s)' % sec)
+        print('   legal', d.floorplan_legal(), 'HPWL %.4g' % d.hpwl().item())
+        del d
 
 if __name__ == '__main__':
     os.makedirs(IMG, exist_ok=True)

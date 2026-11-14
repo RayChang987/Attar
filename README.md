@@ -130,26 +130,31 @@ More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [API](
 
 ## Gallery
 
+What the Evaluator sees: each view is `d.plot(tiles=...)` on a real run of `attar.naive`.
+
 <table>
 <tr>
-<td width="50%"><img src="docs/images/gallery/fp_n300.png" alt="GSRC n300 floorplanned by attar.naive with B*-tree packing"></td>
-<td width="50%"><img src="docs/images/gallery/fp_ami49.png" alt="MCNC ami49 floorplanned by attar.naive with B*-tree packing"></td>
+<td width="50%"><img src="docs/images/gallery/eval_grov.png" alt="cva6 after placement, colored by global-routing load on OpenROAD's gcells"></td>
+<td width="50%"><img src="docs/images/gallery/eval_pin_access.png" alt="ariane136 after global placement: cells with a signal pin on the PDN, in stripes along the power grid"></td>
 </tr>
 <tr>
-<td><sub><b>GSRC n300</b> (floorplan mode): 300 hard blocks and 569 IO pins, no die given. Attar sizes one for 85% block
-area and packs the blocks (B*-tree) in 46 s: legal, HPWL 565k.</sub></td>
-<td><sub><b>MCNC ami49</b> (floorplan mode): 49 blocks of very different sizes in a die sized for 80% block area,
-packed in 2.3 s: legal, HPWL 948k.</sub></td>
+<td><sub><b>Global-routing overflow</b> (<code>d.gr_overflow()</code>, <code>tiles='gr_overflow'</code>): cva6 (ASAP7)
+placed in 2.4 s, RUDY demand against OpenROAD's gcell capacities. GROV 0.73%: the channel left of the SRAMs and
+the dense logic at the lower right are where the router will struggle.</sub></td>
+<td><sub><b>Pin access</b> (<code>tiles='pin_access'</code>): ariane136 (NS3K, 136 SRAMs) right after global
+placement. 12,165 cells have a signal pin on the PDN's via metal, in stripes along the power grid: NS3K's via
+stacks cross the M1 pin layer.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/gallery/cva6.png" alt="cva6 placed by attar.naive"></td>
-<td><img src="docs/images/gallery/ariane136.png" alt="ariane136 on NS3K at 80% density placed by attar.naive"></td>
+<td><img src="docs/images/gallery/eval_placed.png" alt="ariane136 legalized: legal, rails and PDN included"></td>
+<td><img src="docs/images/gallery/fp_n300.png" alt="GSRC n300 floorplanned by B*-tree packing, with the strongest connections between blocks and IO pins"></td>
 </tr>
 <tr>
-<td><sub><b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs in 2.4 s. ORFS routes it with
-0 DRC and 7.4% less wire than its own placement.</sub></td>
-<td><sub><b>ariane136</b> (NS3K, Innovus floorplan at 80% std-cell density): 170k cells around 136 SRAMs in 5.2 s,
-legal including power rails and the PDN; OpenROAD's <code>check_placement</code> and global routing pass.</sub></td>
+<td><sub><b>Legality</b> (<code>ev.legality()</code>): the same design legalized in 2.4 s. Rows, sites, overlaps,
+power-rail parity and the PDN all check out: 0 cells left on the PDN.</sub></td>
+<td><sub><b>Floorplan legality and connections</b> (<code>d.floorplan_legal()</code>, <code>nets</code>): GSRC n300,
+300 hard blocks and 569 IO pins, no die given. Attar sizes one for 85% block area and packs the blocks (B*-tree) in
+43 s: legal, HPWL 565k. The lines are the strongest connections between blocks and IO pins.</sub></td>
 </tr>
 </table>
 
