@@ -214,13 +214,55 @@ class VizTest(unittest.TestCase):
         lines = [c for c in fig.axes[0].collections if isinstance(c, LineCollection)]
         self.assertEqual(len(lines), 1)
         self.assertLessEqual(len(lines[0].get_segments()), 2 * len(d.macros) if 2 * len(d.macros) > 40 else 40)
-        self.assertTrue(any(x.get_text() == 'legal' for x in fig.texts))
+        self.assertTrue(any(x.get_text().split()[-1:] == ['legal'] and 'not' not in x.get_text() for x in fig.texts))
         fig = plot(d, nets=False)
         self.assertFalse(any(isinstance(c, LineCollection) for c in fig.axes[0].collections))
         nodes = np.zeros(len(d.size), bool); nodes[d.macros.cpu().numpy()] = True
         seg, st = _connections(d, d.pos.cpu().numpy(), d.size.cpu().numpy(), nodes, 10)
         self.assertEqual((len(seg), float(st.max())), (10, 1.0))
         self.assertTrue((np.diff(st) >= 0).all())                     # strongest last
+
+    def test_tiles_gr_overflow_and_density(self):
+        import numpy as np
+        from attar.viz import tiles_density, tiles_gr_overflow
+        d = need(SMALL).restore('reference')
+        r = d.gr_overflow()
+        m, xe, ye, _ = tiles_gr_overflow(d)
+        self.assertEqual(m.shape, (len(ye) - 1, len(xe) - 1))
+        self.assertEqual(m.shape, r['gcells'][::-1])
+        self.assertAlmostEqual(float(m.max()), r['max_util'], places=6)          # the worst edge, on its gcells
+        self.assertEqual((xe[-1], ye[-1]), tuple(d.die_box[0, 2:].tolist()))     # last gcells reach the die edge
+        m, xe, ye, _ = tiles_density(d)
+        ok = np.isfinite(m)
+        self.assertGreater(ok.mean(), 0.5)
+        self.assertGreater(float(m[ok].max()), 1.0)                             # ORFS's GP: bins overfull
+        d.place(verbose=False)
+        m, xe, ye, _ = tiles_density(d)
+        self.assertLessEqual(float(np.nanmax(m)), 1.0 + 1e-3)                   # legal: no bin overfull
+        with tempfile.TemporaryDirectory() as t:
+            for k in ('gr_overflow', 'density'):
+                d.plot(t + '/%s.png' % k, tiles=k)
+                self.assertGreater(os.path.getsize(t + '/%s.png' % k), 10000)
+        with self.assertRaises(ValueError):
+            d.plot(tiles='thermal')
+
+    def test_tiles_pin_access_is_the_dp_penalty(self):
+        import numpy as np
+        from attar import pdn as PDN
+        from attar.facts import MissingFacts
+        from attar.distill import ASIDE, TERMINAL
+        from attar.naive.lg import W_PA
+        from attar.viz import tiles_pin_access
+        d = need('after_fp/ns3k/gcd')
+        d.place(verbose=False)
+        pos = d.pos.clone(); pos[:, 0] += 0.5 * float(d.row_site_w.min())     # off the DP's spots: pins hit the PDN
+        n = int((PDN.conflicts(d, pos=pos) & ((d.flags & (TERMINAL | ASIDE)) == 0)).sum())
+        self.assertGreater(n, 0)
+        m, _, _, _ = tiles_pin_access(d, pos)
+        self.assertAlmostEqual(float(np.nansum(m)), W_PA * n)
+        self.assertEqual(float(np.nansum(tiles_pin_access(d)[0])), 0.0)           # after the DP: nothing blocked
+        with self.assertRaises(MissingFacts):
+            need(BOOKSHELF).plot(tiles='pin_access')                            # no PDN
 
 class WritebackTest(unittest.TestCase):
     def test_unchanged_reference_exports_the_source_design(self):

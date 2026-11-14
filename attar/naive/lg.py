@@ -347,7 +347,10 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
 
 
 
-def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=20.0, w_disp=0.05, w_mirror=1e-3):
+W_PA = 20.0                    # pin-access penalty of the PDN-aware DP: a cell with a signal pin on a PDN pin blockage
+
+
+def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_disp=0.05, w_mirror=1e-3):
     """Signal pins clear of the PDN (attar.pdn) by a row-wise dynamic program on the GPU, after the PDN-aware detailed
     placement refinement of pa_pdn (Xplace pinaccess/dp_refine.py): every single-row movable cell may shift by
     -S..S sites and be mirrored left to right (N <-> FN, FS <-> S: the same rails; only where the LEF SYMMETRY allows

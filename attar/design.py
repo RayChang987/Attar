@@ -634,7 +634,8 @@ class Design:
 
     # -- output: plot, DEF write-back ---------------------------------------------------------------------------
     def plot(self, path=None, **kw):
-        """Draw die, core, rows, cells, macros and IO pins (attar.viz.plot); saved to path if given."""
+        """Draw die, core, rows, cells, macros and IO pins (attar.viz.plot); saved to path if given.
+        tiles='gr_overflow' | 'pin_access' | 'density' draws that tile map in place of the cells."""
         from .viz import plot
         return plot(self, path, **kw)
 
