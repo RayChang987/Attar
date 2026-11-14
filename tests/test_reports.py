@@ -102,5 +102,21 @@ class SlackTest(unittest.TestCase):
         self.assertIsNot(d.timing().pin_slack(), s)
 
 
+class DelayCalcTest(unittest.TestCase):
+    def test_extrapolated_negative_slew_clips_to_zero(self):
+        # OpenSTA GateTableModel::gateDelay: a table slew extrapolated below 0 (a huge input slew off an unbuffered
+        # net) is 0; a negative one used to drive min slews and arrivals negative downstream (hold off by ~60 ns)
+        import torch
+        from attar import dmp
+        ax1 = torch.tensor([[10.0, 20.0]]); ax2 = torch.tensor([[1.0, 2.0]]); n = torch.tensor([[2, 2]])
+        delay = torch.tensor([[[5.0, 6.0], [7.0, 8.0]]]); slew = torch.tensor([[[30.0, 32.0], [20.0, 22.0]]])
+        tab = (ax1, ax2, delay, n, ax1, ax2, slew, n)
+        one = lambda v: torch.tensor([v])  # noqa: E731
+        for s_in, want in ((15.0, 26.0), (100.0, 0.0)):                       # inside the table; far beyond it
+            _, s, _, _ = dmp.gate(tab, one(s_in), one(1.5), one(0.0), one(0.0), one(1.5), one(0.5), one(0.2),
+                                  one(0.8), one(1.0))
+            self.assertAlmostEqual(float(s), want, places=4)
+
+
 if __name__ == '__main__':
     unittest.main()

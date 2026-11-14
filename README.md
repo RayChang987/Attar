@@ -51,7 +51,7 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 | --- | --- | --- | --- |
 | **HPWL** | `ev.hpwl` | OpenROAD's HPWL from its database; 23 ORFS designs (ASAP7, Nangate45) up to 1.05M cells | within **0.00002%** on every design ([table](docs/validation/orfs_check.md)) |
 | **Legality** | `ev.legality` | OpenROAD `check_placement` | same verdict on all **23** ORFS designs and the **62** NS3K floorplans OpenROAD can check; placements broken by half a site rejected by both |
-| **Timing** | `d.timing()` | OpenSTA after `estimate_parasitics -placement`; 30 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells | WNS median error **0.06-0.20%**, max **1.19%**; hold slack MAE at most 2.6 ps; 5-30x faster than OpenSTA |
+| **Timing** | `d.timing()` | OpenSTA after `estimate_parasitics -placement`; 31 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells | WNS median error **0.06-0.20%**, max **1.19%**; hold slack MAE at most 0.36 ps; 5-30x faster than OpenSTA |
 | **Pin and net slack** | `d.timing().pin_slack()`, `.net_slack()` | OpenSTA's `slack_max` of every pin; 8 designs (ASAP7, Nangate45) up to 384k pins | Pearson at least **0.9995**; on the pins with negative slack, MAE at most **1.03 ps**; 7-32 ms after a timing run |
 | **Timing after sizing** | `d.resize` + `d.timing()` | OpenROAD `replace_cell` + OpenSTA, 20% of the cells swapped at random; 16 designs | WNS error at most **0.23%**, TNS at most 0.37% |
 | **Global routing OVF** | `d.gr_overflow()` | OpenROAD's gcell capacities and global route; 13 ORFS designs | capacities exact without macros, within **0.16%** with them; ranks designs as OpenROAD does (Spearman **0.97**); a pre-route estimate: reads mild congestion high and heavy congestion low |

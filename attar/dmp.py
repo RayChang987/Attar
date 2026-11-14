@@ -78,7 +78,7 @@ def _gate_delays(tab, slew_in, ce, vth, vl, vh, derate):
     """DmpAlg::gateDelays: t_vth, t_vl and the measured slew at load ce. tab: the arc's delay and slew tables."""
     d_ix1, d_ix2, d_val, d_n, s_ix1, s_ix2, s_val, s_n = tab
     tv = nldm(d_ix1, d_ix2, d_val, d_n, slew_in, ce)
-    s = nldm(s_ix1, s_ix2, s_val, s_n, slew_in, ce) * derate
+    s = nldm(s_ix1, s_ix2, s_val, s_n, slew_in, ce).clamp(min=0) * derate    # GateTableModel::gateDelay clips at 0
     return tv, tv - s * (vth - vl) / (vh - vl), s
 
 
@@ -234,7 +234,8 @@ def gate(tab, slew_in, ctot, c2, rpi, c1, vth, vl, vh, derate, steps=EAGER):
     vth, vl, vh, derate: the driver library's output threshold, slew thresholds and slew derate.
     Returns (gate delay, driver slew, ceff, state) where state holds what its loads need (DmpAlg::loadDelaySlew)."""
     one = torch.ones_like(ctot)
-    look = lambda c: (nldm(*tab[:4], slew_in, c), nldm(*tab[4:], slew_in, c))  # noqa: E731
+    # the table's delay and slew at load c (GateTableModel::gateDelay: a negative slew, extrapolated, clipped to 0)
+    look = lambda c: (nldm(*tab[:4], slew_in, c), nldm(*tab[4:], slew_in, c).clamp(min=0))  # noqa: E731
     # gateModelRd: the table's slope at the total load
     d1, _ = look(ctot); d2, _ = look(ctot + CAP_STEP)
     rd = -torch.log(vth) * (d1 - d2).abs() / CAP_STEP

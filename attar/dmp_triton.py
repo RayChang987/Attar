@@ -86,7 +86,7 @@ def _dy(t, t0, dt, cl, rd):
 @triton.jit
 def _gate_delays(ix1, ix2, val, nn, bd, bs, slew, ce, vth, vl, vh, der, mask, K):
     tv = _nldm(ix1, ix2, val, nn, bd, slew, ce, mask, K)
-    s = _nldm(ix1, ix2, val, nn, bs, slew, ce, mask, K) * der
+    s = tl.maximum(_nldm(ix1, ix2, val, nn, bs, slew, ce, mask, K), 0.0) * der   # gateDelay clips at 0
     return tv, tv - s * (vth - vl) / (vh - vl), s
 
 
@@ -302,7 +302,7 @@ def _gate_core(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, de
     dt = tl.where(zc2, dtz, dt)
     ceff = tl.where(pi_ok, cep, tl.where(zc2, c1, ctot))
     tab_d = _nldm(ix1, ix2, val, nn, bd, slew, tl.maximum(ceff, 1e-9), mask, K)
-    tab_s = _nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(ceff, 1e-9), mask, K)
+    tab_s = tl.maximum(_nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(ceff, 1e-9), mask, K), 0.0)
     dt = tl.where(dt > 0, dt, 1.0)
     ub = tl.where(pia, t0 + dt + (c1 + c2) * (rd_ + rpi_) * 2.0, t0 + dt + c1 * (rd_ + rpi_) * 2.0)
     one = ub * 0.0 + 1.0
@@ -316,7 +316,7 @@ def _gate_core(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, de
     dslew = tl.where(wave_ok, (thi - tlo) / der, tab_s)
     zc_bad = zc2 & (fz | vo_fail)
     zd = _nldm(ix1, ix2, val, nn, bd, slew, tl.maximum(c1_, 1e-9), mask, K)
-    zs = _nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(c1_, 1e-9), mask, K)
+    zs = tl.maximum(_nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(c1_, 1e-9), mask, K), 0.0)
     delay = tl.where(zc_bad, zd, delay)
     dslew = tl.where(zc_bad, zs, dslew)
     return delay, dslew, wave_ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, pia | zc2
