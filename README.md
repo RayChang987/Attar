@@ -12,7 +12,7 @@ Place and evaluate a 100k-cell design in seconds.
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
 [Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
-[Quickstart](#quickstart) &nbsp;·&nbsp; [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery)
+[How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery)
 
 </div>
 
@@ -42,11 +42,23 @@ Place and evaluate a 100k-cell design in seconds.
 
 <p align="center"><img src="docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement) and placement (placer, legalizer, PDN-aware refinement), all done. Right, Evaluation: HPWL, global routing OVF and timing done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
 
-Attar's built-in GPU engines, `attar.naive`, let a flow run end to end even when you bring only one part of it: to
-work on timing optimization, you need a placement, not a placer of your own. Every engine is fully tensorized,
-states the facts it needs, and writes its answer back into the design with provenance (`placement: naive`).
+### Evaluation
 
-| engine | mode | call | what it does |
+Each evaluator against OpenROAD on the same netlist and placement; full tables in
+[docs/validation](docs/validation/timing_routing.md).
+
+| Evaluator | Call | Compared with | Accuracy |
+| --- | --- | --- | --- |
+| **HPWL** | `ev.hpwl` | OpenROAD's HPWL from its database; 23 ORFS designs (ASAP7, Nangate45) up to 1.05M cells | within **0.00002%** on every design ([table](docs/validation/orfs_check.md)) |
+| **Legality** | `ev.legality` | OpenROAD `check_placement` | same verdict on all **23** ORFS designs and the **62** NS3K floorplans OpenROAD can check; placements broken by half a site rejected by both |
+| **Timing** | `d.timing()` | OpenSTA after `estimate_parasitics -placement`; 30 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells | WNS median error **0.06-0.20%**, max **1.19%**; hold slack MAE at most 2.6 ps; 5-30x faster than OpenSTA |
+| **Timing after sizing** | `d.resize` + `d.timing()` | OpenROAD `replace_cell` + OpenSTA, 20% of the cells swapped at random; 16 designs | WNS error at most **0.23%**, TNS at most 0.37% |
+| **Global routing OVF** | `d.gr_overflow()` | OpenROAD's gcell capacities and global route; 13 ORFS designs | capacities exact without macros, within **0.16%** with them; ranks designs as OpenROAD does (Spearman **0.97**); a pre-route estimate: reads mild congestion high and heavy congestion low |
+| **Steiner wirelength, RUDY, density overflow** | `ev.steiner_wirelength`, `ev.rudy`, `ev.density_overflow` |  | |
+
+### Naive Engine
+
+| Engine | Mode | Call | What it does |
 | --- | --- | --- | --- |
 | **Packing** | `before_fp` | `naive.place_macros(packing=True)` | block-level designs: B*-tree packing, annealed into the core, then for HPWL |
 | **Macro placement** | `before_fp` | `naive.place_macros` | mixed-size global placement, then macros legalized on their routing tracks with a halo |
@@ -93,51 +105,6 @@ with the PDN its flow drew.
 | in the zoo | 55 designs, 6 suites | 192 designs, 17 suites |
 
 Attar measures wirelength, congestion (RUDY, GROV), density, legality and timing; see the [roadmap](#roadmap).
-
-## Quickstart
-
-```bash
-git clone https://github.com/RayChang987/Attar.git attar && cd attar
-pip install -e .                # torch (a CUDA build), numpy, matplotlib
-```
-
-```python
-import attar
-
-d = attar.load('after_fp/orfs_asap7/cva6', device='cuda')
-d.status()                   # what it has, what it can do
-d.plot('floorplan.png')      # die, macros, IO pins, PDN: given
-
-d.place()                    # global placement + legalization
-d.plot('placed.png')
-d.export('placed.def')       # a DEF, back to the slow loop
-```
-
-`examples/quickstart_placement.py` is this program with a design name argument; `examples/quickstart_floorplan.py` is the same for
-`before_fp` problems (`d.floorplan(utilization=0.6)` instead of `d.place()`, then `d.export` for ORFS). The designs come from the *zoo*, distilled from public
-benchmarks and published on the Hugging Face Hub, where `attar.load` fetches a design on first use
-([more](docs/benchmarks.md#building-the-zoo)); Attar ships the readers, the zoo the data.
-`d.export` needs no raw file: the design keeps what it does not model of its source DEF (PDN, IO pin shapes, fixed
-cells) and writes the cells and nets around it.
-
-Your own algorithm takes the same few lines, because every engine is a function of the tensors:
-
-```python
-import torch, attar
-from attar import naive
-
-d = attar.load('after_fp/ispd2005/adaptec1', device='cuda').restore('dreamplace_lg')
-ev = attar.Evaluator(d)
-
-pos = d.pos.clone().requires_grad_(True)              # (N, 2) lower-left corners
-opt = torch.optim.Adam([pos], lr=0.5)
-for _ in range(100):                                  # e.g. wirelength descent on the differentiable WA model
-    opt.zero_grad(); d.wa_wirelength(pos, gamma=2.0).backward(); opt.step()   # 100 steps: 0.2 s
-
-print(ev.hpwl(pos.detach()))                          # exact HPWL in milliseconds
-print(ev.legality(pos.detach()))                      # rows, sites, overlaps, power rails: not legal any more
-d.pos = pos.detach(); naive.legalize(d)               # ... so legalize (multi-row-height, rail aware)
-```
 
 ## How it works
 
@@ -226,4 +193,10 @@ PDK. Benchmarks are from the ISPD, ICCAD and GSRC contests, MCNC and ORFS.
 
 ## License
 
-[MIT](LICENSE)
+<div align="center">
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-a8946f?style=for-the-badge" alt="MIT License"></a>
+<br><br>
+<sub>Copyright &copy; 2026 RayChang987 &nbsp;·&nbsp; free to use, modify and distribute; see <a href="LICENSE">LICENSE</a></sub>
+<br><br>
+<img src="docs/images/logo.png" alt="Attar" width="180">
+</div>
