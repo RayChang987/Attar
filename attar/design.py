@@ -6,7 +6,8 @@ from the facts it has: capabilities(), missing(capability), require(capability).
 Coordinates in microns (float32); `scale` = 1 / dbu.
 
 The Design holds the state and answers questions about it; the larger jobs live in their own modules and are reached
-through its methods: status.py (status, summary), export.py (DEF write-back), sizing.py (resize), sta.py
+through its methods: status.py (status, summary), export.py (DEF write-back), sizing.py (resize), netlist.py
+(edit: buffers, clones, nets), sta.py
 (timing), routing.py (GROV), viz.py (plot), naive (engines)."""
 import difflib
 import gzip
@@ -623,6 +624,40 @@ class Design:
         replace_cell); size and pin offsets follow the new master. The timer is rebuilt on the next timing().
         Returns the previous master names."""
         return _sizing.resize(self, cells, masters, check)
+
+    # -- netlist edits (attar/netlist.py) ------------------------------------------------------------------------------
+    def edit(self):
+        """A batch of netlist edits (attar.netlist.Edit): `with d.edit() as e:` e.insert_buffer, e.clone, e.add_cell,
+        e.add_net, e.connect, e.move; applied when the block ends. New cells and nets are appended (no cell or net
+        index moves); pins are renumbered (e.pin_map); the timer is rebuilt on the next timing()."""
+        from .netlist import Edit
+        return Edit(self)
+
+    def buffers(self):
+        """Buffer cells of the design's library (one input passed to one output), smallest first, without dont_use."""
+        from .netlist import library_cells
+        self.require('netlist_edit')
+        return library_cells(self, inverting=False)
+
+    def inverters(self):
+        """Inverter cells of the design's library, smallest first, without dont_use."""
+        from .netlist import library_cells
+        self.require('netlist_edit')
+        return library_cells(self, inverting=True)
+
+    def debuffer(self, buffers=True, inverters=True):
+        """Remove the buffers and double inversions of the netlist (attar.netlist.debuffer, as OpenROAD's
+        remove_buffers): loads go back onto the net that fed them; removed cells stay as tombstones (no index moves).
+        Returns counts."""
+        from .netlist import debuffer
+        return debuffer(self, buffers=buffers, inverters=inverters)
+
+    def _netlist_changed(self, why):
+        """The netlist or a master changed: the timer is released (its GPU memory freed before the next one is built;
+        TimingResults that hold it say why when asked for paths or pin slacks)."""
+        if self._timer is not None:
+            self._timer.release(why)
+        self._timer = None
 
     # -- names ----------------------------------------------------------------------------------------------------
     @property

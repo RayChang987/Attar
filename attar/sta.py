@@ -277,6 +277,18 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
 class Timer:
     """Build once per design (graph, levels, constraints); run() times a placement."""
 
+    def release(self, why):
+        """Drop everything the timer holds (tables, buffers, CUDA graphs: their GPU memory goes back before the next
+        timer is built). The timer can no longer run; anything that still holds it (a TimingResult) gets `why`."""
+        self.__dict__.clear()
+        self._stale = why
+
+    def __getattr__(self, name):
+        stale = self.__dict__.get('_stale')
+        if stale is not None:
+            raise RuntimeError('this timing result is stale: %s since; time the design again (d.timing())' % stale)
+        raise AttributeError(name)
+
     def __init__(self, d, parasitics='placement', exact_trees=True, precision='double'):
         """exact_trees: every net that can carry a data arrival gets OpenROAD's tree on the host (attar.steiner_big,
         an exact port including its tie-breaks); False: the GPU kernel for nets up to 256 pins (faster; its ties
@@ -540,21 +552,26 @@ class Timer:
         funcs = {int(m): {pn: parse_function(f) for pn, f in fs.items()} for m, fs in fdefs.items()}
         o = np.argsort(p_cell, kind='stable'); cptr = np.searchsorted(p_cell[o], np.arange(len(c_master) + 1))
         pins_of = lambda c: o[cptr[c]:cptr[c + 1]]
+        pin_memo, out_memo = {}, {}      # per instance: its pins; per (master, constant inputs): constant outputs
         def evaluate(c):
             """Constant outputs of instance c: {pin: value}, and {input pin name: its constant}."""
-            pins = {names[p_mpin[p]]: p for p in pins_of(c) if p_mpin[p] >= 0}
+            pins = pin_memo.get(c)
+            if pins is None:
+                pins = pin_memo[c] = {names[p_mpin[p]]: p for p in pins_of(c) if p_mpin[p] >= 0}
             known = {n: int(cn[p_net[p]]) for n, p in pins.items() if cn[p_net[p]] >= 0 and pdir[p] != D_OUT}
-            out = {}
-            for pn, (vs, f) in funcs.get(int(c_master[c]), {}).items():
-                if pn not in pins:
-                    continue
-                unk = [v for v in vs if v not in known]
-                if len(unk) > 12:
-                    continue
-                vals = {f(dict(known, **dict(zip(unk, bits)))) for bits in product((0, 1), repeat=len(unk))}
-                if len(vals) == 1:
-                    out[pins[pn]] = vals.pop()
-            return out, known, pins
+            key = (int(c_master[c]), tuple(sorted(known.items())))
+            res = out_memo.get(key)
+            if res is None:
+                res = {}
+                for pn, (vs, f) in funcs.get(key[0], {}).items():
+                    unk = [v for v in vs if v not in known]
+                    if len(unk) > 12:
+                        continue
+                    vals = {f(dict(known, **dict(zip(unk, bits)))) for bits in product((0, 1), repeat=len(unk))}
+                    if len(vals) == 1:
+                        res[pn] = vals.pop()
+                out_memo[key] = res
+            return {pins[pn]: v for pn, v in res.items() if pn in pins}, known, pins
         # seeds: tie cells (an output function without variables)
         queue = []
         for m, fs in funcs.items():
@@ -584,6 +601,12 @@ class Timer:
             conds.setdefault((int(t['a_master'][k]), int(t['a_from'][k]), int(t['a_to'][k])), []).append(w)
         def value(expr, known):
             """An expression under the constants: 0 / 1, or -1 when it depends on a non-constant pin."""
+            mk = (id(expr), tuple(sorted(known.items())))
+            if mk not in val_memo:
+                val_memo[mk] = _value(expr, known)
+            return val_memo[mk]
+        val_memo, sense_memo = {}, {}   # per (expression | master, output, input; constant inputs)
+        def _value(expr, known):
             vs, f = expr
             unk = [v for v in vs if v not in known]
             if len(unk) > 12:
@@ -609,21 +632,27 @@ class Timer:
                 off[a] = True; continue
             fn = funcs.get(int(c_master[c]), {}).get(names[p_mpin[y]])
             if fn is not None:
-                vs, f = fn
-                unk = [v for v in vs if v not in known and v != xn]
-                if len(unk) <= 12:
-                    inc = dec = True
-                    for bits in product((0, 1), repeat=len(unk)):
-                        e = dict(known, **dict(zip(unk, bits)))
-                        f0, f1 = f(dict(e, **{xn: 0})), f(dict(e, **{xn: 1}))
-                        inc &= f1 >= f0; dec &= f1 <= f0
+                mk = (int(c_master[c]), names[p_mpin[y]], xn, tuple(sorted(known.items())))
+                if mk not in sense_memo:
+                    vs, f = fn
+                    unk = [v for v in vs if v not in known and v != xn]
+                    inc = dec = None
+                    if len(unk) <= 12:
+                        inc = dec = True
+                        for bits in product((0, 1), repeat=len(unk)):
+                            e = dict(known, **dict(zip(unk, bits)))
+                            f0, f1 = f(dict(e, **{xn: 0})), f(dict(e, **{xn: 1}))
+                            inc &= f1 >= f0; dec &= f1 <= f0
+                    sense_memo[mk] = (inc, dec)
+                inc, dec = sense_memo[mk]
+                if inc is not None:
                     if inc and dec:                                # functionSense none: no dependence
                         off[a] = True; continue
-                    if inc != dec:                                 # positive / negative unate under the constants
+                    if inc != dec:                             # positive / negative unate under the constants
                         s_sim = S_POS if inc else S_NEG
                         if asense[a] == S_NON:
                             asense[a] = s_sim; n_sense += 1
-                        elif asense[a] != s_sim:                   # the arc's transitions are all excluded
+                        elif asense[a] != s_sim:               # the arc's transitions are all excluded
                             off[a] = True; continue
             # Sim::isDisabledCond
             k = int(lib_id[a])
@@ -711,12 +740,13 @@ class Timer:
         self.big_steiner = ev.deg > M.RMST_MAX_DEGREE
 
     def _reachable(self):
-        """Pins a data arrival can reach (structural): from launch arcs and constrained inputs over net and
-        combinational arcs, level by level."""
+        """Pins a data arrival can reach (structural): from launch arcs, constrained inputs and the input ports a
+        path delay exception starts from (set_max_delay -from), over net and combinational arcs, level by level."""
         g_fr, g_to, seeds = self._g_edges
         reach = np.zeros(self.P, bool)
         reach[seeds] = True
         reach[[p for p, _, _ in self.in_delay]] = True
+        reach[sorted(getattr(self, 'ex_ports', ()))] = True
         o = np.argsort(self.level[g_fr], kind='stable')
         g_fr, g_to = g_fr[o], g_to[o]
         bounds = np.searchsorted(self.level[g_fr], np.arange(int(self.level.max(initial=0)) + 2))
@@ -799,10 +829,12 @@ class Timer:
         ex_ix, ex_v = [], []
         tp = np.nonzero(self.d.raw['p_mpin'] < 0)[0]
         port_pins = dict(zip(cell_of[tp].tolist(), tp.tolist()))
+        self.ex_ports = set()                                      # where data starts too (_reachable)
         for i, e in enumerate(self.ex):
             for c in ex_from[i]:
                 p = port_pins.get(c)
                 if p is not None and self.clk_of[p] < 0:
+                    self.ex_ports.add(p)
                     for rf in (0, 1):
                         ex_ix.append((p * 2 + rf) * NT + 2 * C + i); ex_v.append(in_d.get(p, 0.0))
         self.in_ix_max = torch.cat([self.in_ix_max, T(ex_ix)]); self.in_v_max = torch.cat([self.in_v_max, T(ex_v, torch.float32)])

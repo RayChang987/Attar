@@ -27,13 +27,15 @@ LEF_DIR = {'INPUT': D_IN, 'OUTPUT': D_OUT, 'INOUT': D_INOUT, 'FEEDTHRU': D_INOUT
 PORT_DIR = {'INPUT': D_OUT, 'OUTPUT': D_IN, 'INOUT': D_INOUT, 'FEEDTHRU': D_INOUT}
 
 # c_flags bits
-FIXED, MACRO, PLACED, TERMINAL, PHYSICAL, ASIDE = 1, 2, 4, 8, 16, 32
+FIXED, MACRO, PLACED, TERMINAL, PHYSICAL, ASIDE, REMOVED = 1, 2, 4, 8, 16, 32, 64
 # ASIDE: a movable cell without connections (fill, spacer) set aside by Design.unplace: engines do not place it,
 # it is no obstacle and no utilization; export writes it UNPLACED
+# REMOVED (with ASIDE): a cell a netlist edit removed (attar.netlist): no pins, kept as a tombstone so that no index
+# moves; export does not write it
 # m_class / pin use / net flags
 M_CORE, M_BLOCK, M_PAD, M_OTHER = 0, 1, 2, 3
 U_SIGNAL, U_POWER, U_GROUND, U_CLOCK = 0, 1, 2, 3
-N_CLOCK, N_POWER = 1, 2
+N_CLOCK, N_POWER, N_REMOVED = 1, 2, 4      # N_REMOVED: a net a netlist edit emptied (export does not write it)
 _USE = {'SIGNAL': U_SIGNAL, 'POWER': U_POWER, 'GROUND': U_GROUND, 'CLOCK': U_CLOCK}
 
 

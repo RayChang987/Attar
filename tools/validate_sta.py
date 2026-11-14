@@ -129,6 +129,40 @@ def truth(design, plat, libs, sdc, rc):
     return ep, m
 
 
+def truth_def(design, plat, libs, sdc, rc, def_path, out_dir):
+    """OpenSTA's endpoint slacks on a DEF Attar exported (the run's LEFs and Liberty, the DEF, the SDC, setRC): as
+    truth(), never cached (the DEF changes with the edits)."""
+    from orfs_roundtrip import inputs
+    lefs = inputs(base_dir(run_key(plat, design)))[0]
+    tsv = os.path.join(out_dir, 'truth_def.tsv')
+    tcl = [DUMP_TCL] + ['read_lef %s' % w(l) for l in lefs] + ['read_liberty %s' % w(l) for l in libs] + [
+        'read_def %s' % w(def_path), 'read_sdc %s' % w(sdc), 'source %s' % w(rc),
+        'set t0 [clock milliseconds]', 'estimate_parasitics -placement',
+        'set wns [sta::worst_slack -max]', 'set tns [sta::total_negative_slack -max]',
+        'puts "STA_DONE [expr {([clock milliseconds] - $t0) / 1000.0}] $wns $tns"', 'dump_ep %s' % w(tsv)]
+    path = os.path.join(RUNS, 'tmp_sta_def_%s.tcl' % design)
+    open(path, 'w').write('\n'.join(tcl) + '\nexit\n')
+    try:
+        log = orfs('/OpenROAD-flow-scripts/tools/install/OpenROAD/bin/openroad -no_init -no_splash %s' % w(path))
+    finally:
+        os.remove(path)
+    line = [l for l in log.splitlines() if l.startswith('STA_DONE')]
+    if not line:
+        raise RuntimeError(log[-3000:])
+    _, sec, wns, tns = line[-1].split()
+    from attar import liberty
+    tu = liberty.read(libs[0])['time_unit_ps']
+    ep = {}
+    for l in open(tsv):
+        t = l.split()
+        if len(t) == 3:
+            try:
+                ep[t[0]] = (float(t[1]) * tu, float(t[2]) * tu)
+            except ValueError:
+                pass
+    return ep, {'seconds': float(sec), 'worst_slack': float(wns) * tu, 'tns': float(tns) * tu}
+
+
 def truth_pins(design, plat, libs, sdc, rc):
     """OpenSTA's setup slack of every pin and port: {name (no backslashes): slack ps}, inf where unconstrained."""
     out_dir = os.path.join(RUNS, 'sta', design) if plat == 'asap7' else os.path.join(RUNS, 'sta', plat, design)
@@ -227,6 +261,10 @@ def main():
     ap.add_argument('--work', default=os.path.join(RUNS, 'sta', '_ir'))
     ap.add_argument('--json')
     ap.add_argument('--pins', action='store_true', help="also every pin's setup slack (TimingResult.pin_slack)")
+    ap.add_argument('--debuffer', action='store_true',
+                    help='d.debuffer() at the reference placement, then OpenSTA on the DEF Attar exports')
+    ap.add_argument('--via-def', action='store_true',
+                    help='no edit, but OpenSTA on the DEF Attar exports (the control for --debuffer)')
     a = ap.parse_args()
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     rows = {}
@@ -238,9 +276,20 @@ def main():
         src = attar.load(os.path.join(attar.paths.zoo_dir(), 'after_fp', 'orfs_' + a.platform, design), 'cpu')
         libs = lib_paths(src, a.platform, design)
         sdc = sdc_path(design, a.platform)
-        ref, meta = truth(design, a.platform, libs, sdc, rc)
         d = attar_design(design, a.platform, libs, sdc, rc, a.work, dev)
         d.restore('reference')
+        edits = None
+        if a.debuffer or a.via_def:                                  # OpenSTA reads the DEF Attar exports
+            if a.debuffer:
+                edits = d.debuffer()
+            out_dir = os.path.join(RUNS, 'sta_def', a.platform, design); os.makedirs(out_dir, exist_ok=True)
+            def_path = os.path.join(out_dir, 'debuffered.def' if a.debuffer else 'exported.def')
+            d.export(def_path)
+            ref, meta = truth_def(design, a.platform, libs, sdc, rc, def_path, out_dir)
+            if edits is not None:
+                print('%s: %s' % (design, edits), flush=True)
+        else:
+            ref, meta = truth(design, a.platform, libs, sdc, rc)
         from attar.sta import Timer
         sync = torch.cuda.synchronize if dev == 'cuda' else (lambda: None)
         t = time.time(); T = Timer(d); res = T.run(); sync(); build = time.time() - t   # build + first run (capture)
@@ -250,7 +299,7 @@ def main():
         ours = res.endpoint_slacks()
         r, *_ = compare(ours, ref)
         r.update({'attar_s': sec, 'attar_build_s': build, 'ref_s': meta['seconds'],
-                  'ref_worst_reported': meta['worst_slack']})
+                  'ref_worst_reported': meta['worst_slack'], 'edits': edits})
         rows[design] = r
         f = lambda v, p='%.3f': '-' if v is None else p % v  # noqa: E731
         print(hdr % (design, r['endpoints_ref'], r['matched'], f(r['setup_pearson'], '%.4f'), f(r['setup_mae'], '%.2f'),

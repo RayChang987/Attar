@@ -38,6 +38,9 @@ names; an unknown fact, capability, metric or snapshot raises `KeyError` with th
 | `timing(pos=None)`, `timing_report(pos=None, endpoints=10, path=True)` | static timing (`attar.sta`): a `TimingResult` (`summary()`, `path()`, `report()`, `pin_slack()`, `net_slack()`); the report prints WNS / TNS, the worst endpoints and path; `pin_slack()` / `net_slack()` give every pin's / net's setup slack (inf where unconstrained), as OpenSTA's, from the required times of the run (computed on first use) |
 | `gr_overflow(pos=None, adjustment=None, maps=False)` | global-routing overflow (GROV): RUDY demand against OpenROAD's gcell capacities |
 | `equivalents(cell)`, `resize(cells, masters)` | gate sizing within a master's equivalence class (`attar.sizing`) |
+| `edit()` | a batch of netlist edits (`attar.netlist.Edit`), applied when its `with` block ends: `insert_buffer(net, loads=None, master=None, xy=None)` and `clone(cell, loads)` return (new cell, new net); `add_cell`, `add_net`, `connect`, `move`, `remove_cell` are the primitives. New cells and nets are appended (no cell or net index moves); pins are renumbered (`e.pin_map[old]`); a TimingResult of before is stale; new cells sit where put (`insert_buffer`: on its loads), legalize them. Clock nets are refused (clocks are ideal) |
+| `debuffer(buffers=True, inverters=True)` | remove the netlist's buffers and double inversions (OpenROAD's `remove_buffers`, plus inverter pairs: an even chain goes whole, an odd one keeps one inverter); loads go back onto the net that fed them, which keeps the name of the net with the IO pin, else of the driver's. Not touched: clock nets, fixed cells, joins that would put two IO pins on one net. Removed cells stay as tombstones (flags `ASIDE | REMOVED`, not placed, not exported). Returns counts |
+| `buffers()`, `inverters()` | the library's buffer / inverter cells (one input, one output; no dont_use, no tri-state), smallest first; `insert_buffer` defaults to the smallest buffer the design already uses |
 | `macro_grid(mac)` | step and per-macro offset that put macro pins on their routing tracks (from the IR) |
 | `tracks()` | `{(axis, layer): (start, step)}` routing tracks |
 | `set_io(xy, provenance)`, `fix_macros(provenance)`, `release_macros()`, `set_floorplan(die, rows, provenance)` | for engines: write an answer as a fact |
@@ -85,6 +88,7 @@ Each engine checks its facts first (`MissingFacts` otherwise) and writes its ans
 | `attar/status.py` | `status`, `summary` |
 | `attar/export.py` | DEF write-back into the source frame |
 | `attar/sizing.py` | gate sizing (`resize`, `equivalents`) |
+| `attar/netlist.py` | netlist edits (`Edit`: buffers, clones, cells, nets, pins; `debuffer`; `check`) |
 | `attar/evaluator.py`, `metrics.py`, `kernels.py` | metrics and the tensor kernels they share with the engines |
 | `attar/sta.py`, `timing.py`, `routing.py` | static timing, the timing fact, global-routing overflow |
 | `attar/naive/` | engines: `floorplan.py` (die, IO, macros), `gp.py`, `lg.py`, `flow.py` (`floorplan`, `place`) |

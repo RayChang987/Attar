@@ -116,5 +116,5 @@ def resize(d, cells, masters, check=True):
         ctr = np.stack([(box[:, 0] + box[:, 2]) / 2, (box[:, 1] + box[:, 3]) / 2], -1)
         d._p_ctr_n[torch.as_tensor(tp, device=d.device)] = torch.as_tensor(ctr, dtype=torch.float32, device=d.device)
     d.update_orient()
-    d._timer = None
+    d._netlist_changed('cells were resized')
     return old_names

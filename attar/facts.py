@@ -46,6 +46,7 @@ CAPABILITIES = {
     'global_route': {'netlist', 'cell_geometry', 'pin_offsets', 'floorplan.die', 'routing', 'placement'},
     'sta': {'netlist', 'pin_direction', 'timing'},
     'resize': {'netlist', 'cell_library', 'pin_offsets', 'timing', 'library'},   # sizing / Vt swap within a class
+    'netlist_edit': {'netlist', 'cell_library', 'pin_offsets', 'timing', 'library'},   # buffers, clones, nets
     'gr_overflow': {'netlist', 'pin_offsets', 'placement', 'floorplan.die', 'tracks', 'routing'},   # GROV (RUDY)
     'export': {'netlist', 'cell_library', 'def_frame'},    # the source DEF's frame + the IR
     'plot': {'cell_geometry', 'floorplan.die'},
@@ -69,6 +70,7 @@ DESCRIBE = {
     'die_size': 'size the die for a utilization', 'io_place': 'IO pin placement', 'macro_place': 'macro placement', 'place': 'cell placement (global + legalization)',
     'global_place': 'global placement', 'legalize': 'legalization', 'detailed_place': 'detailed placement',
     'global_route': 'global routing', 'sta': 'static timing analysis', 'resize': 'gate sizing (resize)',
+    'netlist_edit': 'netlist edits (buffers, clones, nets)',
     'gr_overflow': 'global-routing overflow (GROV)', 'export': 'write a DEF (source frame + IR)',
     'plot': 'plot the design',
 }

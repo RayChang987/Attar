@@ -11,7 +11,11 @@ The NS3K zoo designs are floorplans (no placement), so per design:
   truth:  OpenROAD (the ORFS image) reads the LEFs, Liberty, the exported DEF, the SDC and the RC script, runs
           estimate_parasitics -placement and dumps every endpoint's setup / hold slack (cached).
 Reports what tools/validate_sta.py reports.
-usage: validate_sta_ns3k.py <design> ... [--work DIR] [--json out]"""
+--edit: netlist edits (attar.netlist) before the export, the same on both sides through the DEF (edit_recipe: buffers
+on the big signal nets, a second buffer on some of those, clones of cells with several loads, a buffer behind an input
+port), then attar.naive.legalize; OpenSTA always runs again (work dir sta_ns3k_edit). The placement before the edits
+is the plain run's (sta_ns3k/<design>/pos.pt) when there is one.
+usage: validate_sta_ns3k.py <design> ... [--work DIR] [--json out] [--edit]"""
 import argparse
 import glob
 import json
@@ -25,7 +29,7 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import attar  # noqa: E402
-from attar import timing  # noqa: E402
+from attar import naive, timing  # noqa: E402
 from orfs_roundtrip import RUNS, orfs, w  # noqa: E402
 from validate_sta import DUMP_TCL, INF, compare  # noqa: E402
 
@@ -144,12 +148,65 @@ def truth(design, out_dir, lefs, libs, def_path, sdc, rc):
     return ep, m
 
 
+def edit_recipe(d, max_nets=200, chain=10, clones=50, fanout=16):
+    """Deterministic edits for validation: a buffer on each signal net with >= fanout sinks (at most max_nets, the
+    biggest first) taking the half of its loads farthest right; on the first `chain` of those a second buffer on the new
+    net (edits on a net and pins of the same batch); clones of cells with one output driving >= 4 loads, taking half of
+    them; a buffer behind the first input port that drives >= 2 loads. Returns counts."""
+    import numpy as np
+    from attar.distill import D_OUT, TERMINAL
+    n = {'buffers': 0, 'chained': 0, 'clones': 0, 'port_buffers': 0}
+    e = d.edit()
+    clk = e.clock_nets()
+    deg = (d.n_ptr[1:] - d.n_ptr[:-1]).cpu().numpy()
+    pdir = d.pin_dir.cpu().numpy(); pcell = d.raw['p_cell']; term = (d.raw['c_flags'] & TERMINAL) != 0
+    px = d.pin_pos()[:, 0].cpu().numpy()
+    def split(k):
+        pins = np.arange(int(d.n_ptr[k]), int(d.n_ptr[k + 1]))
+        drv = pins[pdir[pins] == D_OUT]; loads = pins[pdir[pins] != D_OUT]
+        return drv, loads[np.argsort(px[loads], kind='stable')]
+    used = set()
+    for k in np.argsort(-deg, kind='stable'):
+        k = int(k)
+        if n['buffers'] >= max_nets or deg[k] - 1 < fanout:
+            break
+        drv, loads = split(k)
+        if k in clk or len(drv) != 1 or term[pcell[drv[0]]]:
+            continue
+        b, n2 = e.insert_buffer(k, loads[len(loads) // 2:].tolist()); n['buffers'] += 1; used.add(k)
+        if n['chained'] < chain:
+            moved = loads[len(loads) // 2:]
+            e.insert_buffer(n2, moved[len(moved) // 2:].tolist()); n['chained'] += 1
+    for k in np.argsort(-deg, kind='stable'):
+        k = int(k)
+        if n['clones'] >= clones or deg[k] - 1 < 4:
+            break
+        drv, loads = split(k)
+        if k in clk or k in used or len(drv) != 1 or term[pcell[drv[0]]]:
+            continue
+        c0 = int(pcell[drv[0]])
+        if int((pdir[np.nonzero(pcell == c0)[0]] == D_OUT).sum()) != 1:
+            continue
+        e.clone(c0, loads[:len(loads) // 2].tolist()); n['clones'] += 1; used.add(k)
+    for k in np.argsort(-deg, kind='stable'):
+        k = int(k)
+        drv, loads = split(k)
+        if k not in clk and k not in used and len(drv) == 1 and term[pcell[drv[0]]] and len(loads) >= 2:
+            e.insert_buffer(k, loads.tolist()); n['port_buffers'] += 1
+            break
+    e.apply()
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('designs', nargs='+')
     ap.add_argument('--work', default=os.path.join(RUNS, 'sta_ns3k'))
     ap.add_argument('--json')
+    ap.add_argument('--edit', action='store_true', help='netlist edits before the export (edit_recipe)')
     a = ap.parse_args()
+    if a.edit and a.work == os.path.join(RUNS, 'sta_ns3k'):
+        a.work = os.path.join(RUNS, 'sta_ns3k_edit')
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     os.makedirs(os.path.join(a.work, 'inputs'), exist_ok=True)
     rc = rc_tcl(os.path.join(LEF_DIR, TECH_LEF), os.path.join(a.work, 'inputs', 'setRC_ns3k.tcl'))
@@ -168,16 +225,31 @@ def main():
         tj = os.path.join(ir, 'timing.json')
         if not os.path.exists(tj) or 'arc_when' not in json.load(open(tj)):
             shutil.rmtree(ir, ignore_errors=True); shutil.copytree(zsrc, ir)
-            timing.attach(ir, libs, sdc, rc)
+            # edits take new masters from the zoo's shared library (as the zoo design does); its arrays are checked to
+            # be the design's own Liberty files' (attach falls back to them otherwise, and edits are then refused)
+            bundle = os.path.join(attar.paths.zoo_dir(), 'libraries', src.manifest['library']['bundle']) \
+                if a.edit and src.manifest.get('library') else None
+            timing.attach(ir, libs, sdc, rc, bundle=bundle)
         d = attar.load(ir, dev)
         pos_pt, def_path = os.path.join(out, 'pos.pt'), os.path.join(out, 'placed.def')
+        if a.edit:                                                   # the plain run's placement, if any
+            pos_pt = os.path.join(RUNS, 'sta_ns3k', design, 'pos.pt')
         if os.path.exists(pos_pt):                                   # the placement: positions and orientations
             sv = torch.load(pos_pt, weights_only=True)
             d.pos = sv['pos'].to(d.pos.device); d.orient = sv['orient'].to(d.orient.device); d.update_orient()
         else:
             d.place(verbose=False)
             torch.save({'pos': d.pos.cpu(), 'orient': d.orient.cpu()}, pos_pt)
-        if not os.path.exists(def_path):
+        edits = None
+        if a.edit:                                                   # edit, legalize, export; OpenSTA runs again
+            edits = edit_recipe(d)
+            naive.legalize(d, verbose=False)
+            for f in ('truth.tsv', 'truth.json'):
+                if os.path.exists(os.path.join(out, f)):
+                    os.remove(os.path.join(out, f))
+            d.export(def_path)
+            print('%s: %s, legal %s' % (design, edits, attar.Evaluator(d).legality()['legal']), flush=True)
+        elif not os.path.exists(def_path):
             d.export(def_path)
         ref, meta = truth(design, out, lefs, libs, def_path, sdc, rc)
         sync = torch.cuda.synchronize if dev == 'cuda' else (lambda: None)
@@ -188,7 +260,7 @@ def main():
             t = time.time(); res = T.run(); sync(); sec = min(sec, time.time() - t)
         r, *_ = compare(res.endpoint_slacks(), ref)
         r.update({'attar_s': sec, 'ref_s': meta['seconds'], 'ref_worst_reported': meta['worst_slack'],
-                  'top': top, 'unsupported_sdc': json.load(open(tj))['unsupported']})
+                  'top': top, 'unsupported_sdc': json.load(open(tj))['unsupported'], 'edits': edits})
         rows[design] = r
         f = lambda v, p='%.3f': '-' if v is None else p % v  # noqa: E731
         print(hdr % (design, r['endpoints_ref'], r['matched'], f(r['setup_pearson'], '%.4f'), f(r['setup_mae'], '%.2f'),

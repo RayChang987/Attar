@@ -354,11 +354,13 @@ def comp_statement(name, master, status, x, y, orient, attrs=''):
     return '    - %s %s%s%s ;\n' % (name, master, attrs, place)
 
 
-def net_statements(net_names, n_ptr, p_cell, p_mpin, cell_names, is_term, mpin_flat, attrs):
+def net_statements(net_names, n_ptr, p_cell, p_mpin, cell_names, is_term, mpin_flat, attrs, skip=None):
     """NETS statements from CSR arrays: pins of net k are n_ptr[k]:n_ptr[k+1]; an IO terminal cell is '( PIN name )',
-    a cell pin '( cell master_pin )'. attrs(k) -> ' + USE ...' of net k."""
+    a cell pin '( cell master_pin )'. attrs(k) -> ' + USE ...' of net k. skip: nets not to write (mask)."""
     out = []
     for k, name in enumerate(net_names):
+        if skip is not None and skip[k]:
+            continue
         a, b = int(n_ptr[k]), int(n_ptr[k + 1])
         conns = ['( PIN %s )' % cell_names[c] if is_term[c] else '( %s %s )' % (cell_names[c], mpin_flat[m])
                  for c, m in zip(p_cell[a:b].tolist(), p_mpin[a:b].tolist())]

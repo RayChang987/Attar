@@ -13,7 +13,7 @@ import torch
 
 from . import st
 from .deffile import ORIENTS, comp_statement, net_statements, write_def, write_framed
-from .distill import ASIDE, FIXED, MACRO, TERMINAL
+from .distill import ASIDE, FIXED, MACRO, N_REMOVED, REMOVED, TERMINAL
 
 
 def export(d, out_def):
@@ -28,9 +28,8 @@ def export(d, out_def):
     xy = torch.round(d.pos * dbu).to(torch.int64).cpu().numpy()
     o = d.orient.cpu().numpy(); fl = d.flags.cpu().numpy(); placed = d.placed.cpu().numpy()
     a = d.raw; names = d.names; cells = names['cells']
-    n_comp = int(len(cells) - len(d.io)) if d.io is not None else len(cells)
     raw_fl = a['c_flags']
-    owned = [i for i in range(n_comp) if not (raw_fl[i] & FIXED)]
+    owned = np.nonzero((raw_fl & (FIXED | TERMINAL | REMOVED)) == 0)[0].tolist()   # appended cells too; not removed
     # what an engine changed of the floorplan goes onto the frame first (IO pins, die, rows, fixed macros)
     site = next((ln.split()[2] for ln in frame.splitlines() if ln.startswith('ROW ')), 'core')
     comps, pins, die, rows = floorplan_changes(d, dbu, d.tracks(), site)
@@ -45,6 +44,8 @@ def export(d, out_def):
                              rows=rows)
             with open(os.path.join(t, 'out.def')) as fi:
                 frame = fi.read()
+    frame = _port_nets(frame, d)
+    frame = _drop_removed(frame, d)
     ca = names.get('cell_attrs') or {'default': '', 'except': {}}
     na = names.get('net_attrs') or {'default': '', 'except': {}}
     masters = names['masters']; cm = a['c_master']
@@ -59,10 +60,63 @@ def export(d, out_def):
     mpin_flat = [p for ms in names['master_pins'] for p in ms]
     is_term = (raw_fl & TERMINAL) != 0
     nets = net_statements(names['nets'], a['n_ptr'], a['p_cell'], a['p_mpin'], cells, is_term, mpin_flat,
-                          lambda k: na['except'].get(str(k), na['default']))
+                          lambda k: na['except'].get(str(k), na['default']), skip=(a['n_flags'] & N_REMOVED) != 0)
     n = write_framed(frame, out_def, lines, nets)
     done.update({'components': sum(1 for ln in lines if '+ UNPLACED' not in ln), 'nets': n['NETS']})
     return done
+
+
+def _drop_removed(frame, d):
+    """The frame without the connections of cells a netlist edit removed (attar.netlist): a source may list every
+    component's power pins in SPECIALNETS ('( inst VDD )'), and a DEF reader rejects a component that is not defined.
+    Unchanged otherwise."""
+    import re
+    gone = np.nonzero(d.raw['c_flags'] & REMOVED)[0]
+    if not len(gone):
+        return frame
+    names = {d.names['cells'][int(c)] for c in gone}
+    conn = re.compile(r'\(\s*(\S+)\s+\S+\s*\)\s?')
+    lines = frame.splitlines(True)
+    sec = False
+    for i, ln in enumerate(lines):
+        t = ln.split()
+        if t[:1] == ['SPECIALNETS']:
+            sec = True
+        elif t[:2] == ['END', 'SPECIALNETS']:
+            break
+        elif sec and '(' in ln:
+            new = conn.sub(lambda m: '' if m.group(1) in names else m.group(0), ln)
+            if new != ln:
+                lines[i] = new if new.strip() else ''
+    return ''.join(lines)
+
+
+def _port_nets(frame, d):
+    """The frame with each IO pin's '+ NET' (PINS) naming the net the IR has it on: a netlist edit (attar.netlist) may
+    move a port to another net, and a DEF reader connects a port by its PINS statement. Unchanged lines otherwise."""
+    a, names = d.raw, d.names
+    term = np.nonzero((a['c_flags'] & TERMINAL) != 0)[0]
+    if not len(term):
+        return frame
+    pc = a['p_cell']
+    hit = np.isin(pc, term)
+    net_of = {names['cells'][int(c)]: names['nets'][int(k)]
+              for c, k in zip(pc[hit].tolist(), d.p_net[torch.as_tensor(np.nonzero(hit)[0], device=d.device)].tolist())}
+    lines = frame.splitlines(True)
+    sec, changed = False, False
+    for i, ln in enumerate(lines):
+        t = ln.split()
+        if t[:1] == ['PINS']:
+            sec = True
+        elif t[:2] == ['END', 'PINS']:
+            break
+        elif sec and t[:1] == ['-'] and len(t) > 4 and t[2:4] == ['+', 'NET'] and '+ SPECIAL' not in ln:
+            new = net_of.get(t[1])
+            if new is not None and new != t[4]:
+                lines[i] = ln.replace('+ NET %s ' % t[4], '+ NET %s ' % new, 1) if '+ NET %s ' % t[4] in ln else \
+                    ln.replace('+ NET %s' % t[4], '+ NET %s' % new, 1)
+                changed = True
+    return ''.join(lines) if changed else frame
 
 
 def floorplan_changes(d, dbu, tracks, site):

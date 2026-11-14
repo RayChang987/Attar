@@ -190,7 +190,7 @@ class FloorplanTest(unittest.TestCase):
             d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)         # ORFS floorplan: IO pins and macros unplaced
         except FileNotFoundError:
             raise unittest.SkipTest('no 2_1 zoo')
-        self.assertEqual(d.capabilities(), ['die_size', 'export', 'io_place', 'plot', 'resize', 'sta', 'wirelength_model'])
+        self.assertEqual(d.capabilities(), ['die_size', 'export', 'io_place', 'netlist_edit', 'plot', 'resize', 'sta', 'wirelength_model'])
         naive.place_io(d, verbose=False)
         self.assertIn('macro_place', d.capabilities())
         self.assertNotIn('global_place', d.capabilities())          # macros still unplaced
