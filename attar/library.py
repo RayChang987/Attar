@@ -8,7 +8,8 @@ A Library holds every cell of a set of Liberty files (the first definition of a 
                        NLDM tables padded to K x K, in ps / fF.
   library.json         cell and pin names, output functions, arc `when` conditions, dont_use, footprints, equivalence
                        classes (cells that can replace each other: same signal pins, same per-output logic, same
-                       sequential kind, same height), buffers and inverters, sources (name + sha256), units.
+                       sequentials and statetable, as OpenSTA's equivCells; same height), buffers and inverters,
+                       sequentials and statetables, sources (name + sha256), units.
 Designs reference a shared bundle per platform and corner (zoo/libraries/<name>) and keep the cells only they have
 (macros) in a local library in their own folder; design_arrays() looks a design's masters up along that chain and
 returns the per-master-pin and per-arc arrays the timer reads (attar.timing.attach writes the same arrays).
@@ -41,6 +42,19 @@ def _truth(expr, inputs):
     for bits in itertools.product((0, 1), repeat=len(inputs) + len(extra)):
         rows.append(f(dict(zip(list(inputs) + extra, bits))))
     return tuple(extra), tuple(rows)
+
+
+def _seq_key(s, inputs):
+    """What OpenSTA's equivCellSequentials and equivCellStatetables compare: per sequential (in order) its kind,
+    internal state names, clock, data, clear and preset functions (truth tables here); the statetable's input and
+    internal node names and rows. A rising-edge flop is no replacement for a falling-edge one, nor a high latch for a low one."""
+    if not s:
+        return ()
+    t = lambda e: _truth(e, inputs) if e else None  # noqa: E731
+    seqs = tuple((q['kind'], tuple(q['vars']), t(q['clock']), t(q['data']), t(q['clear']), t(q['preset']))
+                 for q in s.get('seq', []))
+    st = s.get('statetable')
+    return seqs, (tuple(st['inputs']), tuple(st['internals']), tuple(st['rows'])) if st else None
 
 
 class Library:
@@ -95,7 +109,7 @@ class Library:
              'lp_use': np.full(L, U_SIGNAL, np.uint8), 'lp_layer': np.full(L, -1, np.int16),
              'lp_lefdir': np.full(L, D_UNKNOWN, np.uint8)}
         arcs, la = [], {'la_cell': [], 'la_from': [], 'la_to': [], 'la_type': [], 'la_sense': []}
-        functions, whens, dont_use, footprint, lef_class = {}, [], [], {}, {}
+        functions, whens, dont_use, footprint, lef_class, sequentials = {}, [], [], {}, {}, {}
         for c, cn in enumerate(names):
             lc = cells.get(cn)
             base = ptr[c]
@@ -107,6 +121,8 @@ class Library:
                     dont_use.append(cn)
                 if lc.get('footprint'):
                     footprint[cn] = lc['footprint']
+                if lc.get('sequentials') or lc.get('statetable'):
+                    sequentials[cn] = {'seq': lc.get('sequentials', []), 'statetable': lc.get('statetable')}
                 fs = {}
                 for j, pn in enumerate(pin_names[c]):
                     pa = lc['pins'].get(pn)
@@ -154,8 +170,8 @@ class Library:
         a.update({'la_ix1': ix1, 'la_ix2': ix2, 'la_val': val, 'la_n': n})
         meta = {'schema': SCHEMA, 'name': name, 'cells': names, 'pins': pin_names, 'functions': functions,
                 'when': {str(i): w for i, w in enumerate(whens) if w}, 'dont_use': dont_use, 'footprint': footprint,
-                'lef_class': lef_class, 'layers': layers, 'units': units or {}, 'default_thresholds': default_thr,
-                'sources': {'lib': refs}}
+                'lef_class': lef_class, 'sequentials': sequentials, 'layers': layers, 'units': units or {},
+                'default_thresholds': default_thr, 'sources': {'lib': refs}}
         lib = cls(a, meta)
         lib.meta.update(lib._classes())
         return lib
@@ -176,16 +192,17 @@ class Library:
             fs = self.meta['functions'].get(cn, {})
             try:
                 logic = tuple(sorted((o, _truth(f, ins)) for o, f in fs.items()))
+                seqk = _seq_key(self.meta.get('sequentials', {}).get(cn), ins)
             except Exception:  # noqa: BLE001  (an unparsable function: the cell is its own class)
-                logic = (cn,)
-            key = (tuple(sorted(sig)), logic, int(a['lc_seq'][c]), round(float(a['lc_size'][c][1]), 4))
+                logic, seqk = None, cn
+            key = (tuple(sorted(sig)), logic, seqk, int(a['lc_seq'][c]), round(float(a['lc_size'][c][1]), 4))
             groups.setdefault(key, []).append(cn)
         classes = [sorted(v) for v in groups.values()]
         classes.sort()
         bufs, invs = [], []
         for key, v in groups.items():
-            sig, logic, seq, _h = key
-            if seq or len(sig) != 2 or len(logic) != 1 or logic[0][1][0]:
+            sig, logic, seqk, seq, _h = key
+            if logic is None or seq or seqk or len(sig) != 2 or len(logic) != 1 or logic[0][1][0]:
                 continue
             rows = logic[0][1][1]
             if rows == (0, 1):

@@ -59,6 +59,23 @@ class ReportsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             d.resize(i, 'NOT_A_CELL')
 
+    def test_equivalents_keep_clock_edge(self):
+        """Sequentials must match (OpenSTA's equivCellSequentials): a rising-edge flop never resizes to a falling-edge
+        one, nor a high latch to a low one, nor a 2-bit flop bank to a 4-bit one."""
+        d = need(MEDIUM)
+        if 'resize' not in d.capabilities():
+            raise unittest.SkipTest('no library fact')
+        from attar import sizing
+        L, _ = sizing.lib_cell(d, 'DFFHQNx1_ASAP7_75t_R')
+        if L is None:
+            raise unittest.SkipTest('not an ASAP7 library')
+        fam = lambda c: {m.split('_')[0].rstrip('0123456789').rstrip('x') for m in L.class_of(c)}  # noqa: E731
+        self.assertEqual(fam('DFFHQNx1_ASAP7_75t_R'), {'DFFHQN'})
+        self.assertEqual(fam('DHLx1_ASAP7_75t_R'), {'DHL'})
+        self.assertEqual(fam('SDFHx1_ASAP7_75t_R'), {'SDFH'})
+        self.assertNotIn('DFFHQNH2V2Xx1_ASAP7_75t_R', L.class_of('DFFHQNV2Xx1_ASAP7_75t_R'))
+        self.assertIn('ICGx2_ASAP7_75t_R', L.class_of('ICGx1_ASAP7_75t_R'))   # same statetable: still one class
+
 
 if __name__ == '__main__':
     unittest.main()

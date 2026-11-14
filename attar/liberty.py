@@ -2,7 +2,8 @@
 
 Per cell: pin direction, capacitance (rise / fall), clock flag, max_capacitance, and every timing group (related_pin,
 timing_sense, timing_type, when) with its NLDM tables: cell_rise / cell_fall / rise_transition / fall_transition for
-delay arcs, rise_constraint / fall_constraint for checks. Internal power, noise and CCS groups are skipped while parsing.
+delay arcs, rise_constraint / fall_constraint for checks; its sequentials (ff, latch and their banks) and statetable,
+which decide what may replace the cell. Internal power, noise and CCS groups are skipped while parsing.
 Units are normalized to ps and fF; table axes to (input slew, load) for delays and (constrained pin slew, related pin
 slew) for checks, whatever order the library's templates use.
 """
@@ -13,9 +14,10 @@ _TOK = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:[^"\\]|\\.)*"|\\\n|[{}();:,]|[^\s{}()
 # groups never needed for timing (large: power tables, noise, CCS)
 SKIP = {'internal_power', 'power', 'ccsn_first_stage', 'ccsn_last_stage', 'output_current_rise',
         'output_current_fall', 'receiver_capacitance', 'pg_pin', 'dynamic_current', 'leakage_current',
-        'intrinsic_parasitic', 'gate_leakage', 'normalized_driver_waveform', 'test_cell', 'statetable',
+        'intrinsic_parasitic', 'gate_leakage', 'normalized_driver_waveform', 'test_cell',
         'power_lut_template', 'output_voltage', 'input_voltage', 'operating_conditions', 'wire_load',
-        'wire_load_selection', 'ff', 'latch', 'bundle', 'memory'}
+        'wire_load_selection', 'bundle', 'memory'}
+SEQUENTIALS = ('ff', 'latch', 'ff_bank', 'latch_bank')
 TABLES = ('cell_rise', 'cell_fall', 'rise_transition', 'fall_transition', 'rise_constraint', 'fall_constraint')
 TIME_SCALE = {'1ps': 1.0, '10ps': 10.0, '100ps': 100.0, '1ns': 1000.0, '10ns': 1e4, '100ns': 1e5}
 CAP_SCALE = {'ff': 1.0, 'pf': 1000.0, 'nf': 1e6}
@@ -103,6 +105,30 @@ def finish(g, pending):
         g.attrs.setdefault(pending[0], []).append(vals)
 
 
+def _sequentials(cell):
+    """A cell's ff / latch / ff_bank / latch_bank groups, in file order (OpenSTA's Sequential: clock, data, clear,
+    preset and the internal state names)."""
+    out = []
+    for g in cell.groups:
+        if g.kind in SEQUENTIALS:
+            a, ff = g.attrs, g.kind.startswith('ff')
+            out.append({'kind': g.kind, 'vars': list(g.args),
+                        'clock': a.get('clocked_on' if ff else 'enable'),
+                        'data': a.get('next_state' if ff else 'data_in'),
+                        'clear': a.get('clear'), 'preset': a.get('preset')})
+    return out
+
+
+def _statetable(cell):
+    """A cell's statetable: input and internal node names, and its rows with blanks removed (None without one)."""
+    for g in cell.groups:
+        if g.kind == 'statetable':
+            names = [x.split() for x in g.args] + [[], []]
+            rows = [re.sub(r'[\s\\]+', '', r) for r in g.attrs.get('table', '').split(',')]
+            return {'inputs': names[0], 'internals': names[1], 'rows': [r for r in rows if r]}
+    return None
+
+
 def _floats(s):
     return [float(v) for v in re.split(r'[,\s]+', s.strip()) if v]
 
@@ -135,10 +161,14 @@ def _table(g, templates, kind):
 
 def read(path):
     """A Liberty file -> {'name', 'time_unit_ps', 'cap_unit_ff', 'cells': {cell: {'pins': {...}, 'arcs': [...], 'area',
-    'leakage' (nW), 'dont_use', 'footprint', 'seq' ('ff' | 'latch' | ''), 'macro'}}}.
+    'leakage' (nW), 'dont_use', 'footprint', 'seq' ('ff' | 'latch' | ''), 'sequentials', 'statetable', 'macro'}}}.
     Pin: {'dir': 'input'|'output'|'inout'|'internal', 'cap': (rise, fall) fF, 'cap_min': the *_capacitance_range lower
     bounds (min analysis), 'clock': bool, 'max_cap': fF or None}.
-    Arc: {'from', 'to', 'sense', 'type', 'when', 'tables': {kind: (index_1, index_2, values)}} in ps / fF."""
+    Arc: {'from', 'to', 'sense', 'type', 'when', 'tables': {kind: (index_1, index_2, values)}} in ps / fF.
+    Sequentials, in file order, as OpenSTA's Sequential: {'kind': 'ff' | 'latch' | 'ff_bank' | 'latch_bank', 'vars'
+    (the internal state names, e.g. IQ IQN; a bank's width last), 'clock' (clocked_on / enable), 'data' (next_state /
+    data_in), 'clear', 'preset'} (functions as written, None when absent). Statetable: {'inputs', 'internals', 'rows'}
+    (the table's rows with blanks removed) or None."""
     op = gzip.open if path.endswith('.gz') else open
     with op(path, 'rt', errors='replace') as f:
         lib = parse(f.read())
@@ -212,12 +242,14 @@ def read(path):
                         arcs.append({'from': rp, 'to': name, 'sense': ta.get('timing_sense', ''),
                                      'type': ta.get('timing_type', 'combinational'), 'when': ta.get('when', ''),
                                      'tables': tables})
-        skipped = c.attrs.get('@skipped', set())
+        seqs = _sequentials(c)
+        kinds = {q['kind'].split('_')[0] for q in seqs}
         cells[c.args[0]] = {'pins': pins, 'arcs': arcs, 'area': _num(c.attrs.get('area', 0.0)),
                             'leakage': _leakage(c) * lu,
                             'dont_use': c.attrs.get('dont_use', 'false') == 'true',
                             'footprint': c.attrs.get('cell_footprint', ''),
-                            'seq': 'ff' if 'ff' in skipped else 'latch' if 'latch' in skipped else '',
+                            'seq': 'ff' if 'ff' in kinds else 'latch' if 'latch' in kinds else '',
+                            'sequentials': seqs, 'statetable': _statetable(c),
                             'macro': c.attrs.get('is_macro_cell', 'false') == 'true'}
     # thresholds (fractions of the supply), OpenSTA's defaults when absent: 50% delay, 20% / 80% slew, derate 1
     pct = lambda k, d: float(lib.attrs[k]) / 100.0 if k in lib.attrs else d
