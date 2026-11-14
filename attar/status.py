@@ -1,30 +1,16 @@
-"""Design reports: status (which facts a design has (✅) or lacks (❌), what it can do, and what a hand-off to ORFS
-still needs), summary (a few lines of numbers), tier and the hand-off command. Everything here follows from the IR;
-nothing on disk outside it is looked at. The text is plain; styled() colors it for a terminal."""
-import os
+"""Design reports: status (which facts a design has (✅) or lacks (❌), what it can do, and what is left before the
+answer goes out as a DEF) and summary (a few lines of numbers). Everything here follows from the IR; nothing on disk
+outside it is looked at. The text is plain; styled() colors it for a terminal."""
 import re
 import sys
 
 import torch
 
-from .facts import CAPABILITIES, DESCRIBE, FACTS, HINTS, DEFAULT_HINT, PLACE_STEPS
+from .facts import CAPABILITIES, DESCRIBE, FACTS, INTERNAL_FACTS, PLACE_STEPS
 
 OK, NO = '✅', '❌'   # ✅ ❌
 PROV_WIDTH = 18       # provenance column; longer provenances push their detail right
-SECTIONS = ('Problem facts', 'Solution state', 'Capabilities', 'Hand-off to ORFS needs')
-
-TIERS = {
-    'A': 'can be validated in ORFS (slow loop), given an ORFS run of it',
-    'B': 'can be stamped onto a DEF of it, but cannot be validated in a slow loop (yet)',
-    'C': 'Attar is the end point (no cell library: nothing to hand off to)',
-}
-
-
-def tier(d):
-    """A: ORFS hand-off possible (given a placement); B: a cell library, so export onto a DEF; C: neither."""
-    if CAPABILITIES['orfs_handoff'] - {'placement'} <= set(d.facts):
-        return 'A'
-    return 'B' if 'cell_library' in d.facts else 'C'
+SECTIONS = ('Problem facts', 'Solution state', 'Capabilities')
 
 
 def _detail(d, fact):
@@ -64,9 +50,6 @@ def _detail(d, fact):
     if fact == 'tracks':
         t = d.tracks()
         return '%d track grids over %d layers' % (len(t), len({k[1] for k in t}))
-    if fact == 'slow_loop':
-        o = d.manifest.get('orfs', {})
-        return 'ORFS %s, stage %s' % (o.get('design', '?'), o.get('stage', '?')) if o else ''
     return ''
 
 
@@ -94,7 +77,7 @@ def _line(mark, w, name, note='', pw=None, prov=None):
 
 def styled(text, stream=None):
     """The report text with ANSI styles when `stream` (default stdout) is a terminal: section titles bold, the
-    reasons on ❌ lines and the tier line dimmed, the closing '->' advice bold. Unchanged otherwise."""
+    reasons on ❌ lines dimmed, the closing '->' advice bold. Unchanged otherwise."""
     stream = stream or sys.stdout
     if not getattr(stream, 'isatty', lambda: False)():
         return text
@@ -105,8 +88,6 @@ def styled(text, stream=None):
             ln = B + ln + R
         elif ln.lstrip().startswith('->'):
             ln = B + ln + R
-        elif ln.startswith('  tier '):
-            ln = D + ln + R
         elif ln.startswith('  ' + NO):
             m = re.match(r'(  %s \S+)(.*)' % NO, ln)
             ln = m.group(1) + D + m.group(2) + R if m else ln
@@ -114,22 +95,37 @@ def styled(text, stream=None):
     return '\n'.join(out)
 
 
+def _next_step(d, have, fp_ok, fp_issues):
+    """The closing advice: what is left before the answer goes out as a DEF (into the user's own flow)."""
+    ex = 'd.export("out.def")'
+    if 'cell_library' not in d.facts:
+        return '  -> no cell library: Attar is the end point for this design (a DEF of it would mean nothing)'
+    gap = sorted({'floorplan.die', 'floorplan.io', 'floorplan.macros'} - set(d.facts))
+    if gap:
+        return '  -> missing %s: d.floorplan() places it; then %s' % (', '.join(gap), ex)
+    if not fp_ok:
+        return '  -> the floorplan is not legal (%s)' % '; '.join(fp_issues)
+    if d.missing('export'):
+        return '  -> export needs %s' % ', '.join(d.missing('export'))
+    if 'placement' in have:
+        return '  -> ready: %s writes the design for your flow' % ex
+    if d.mode == 'before_fp':
+        return '  -> ready: %s writes the floorplan for your flow (it draws the PDN and places)' % ex
+    return '  -> only a placement is missing: place the design (or restore a snapshot), then %s' % ex
+
+
 def status(d):
     m = d.manifest
-    t = tier(d)
     have = d.present
-    head = TIERS[t] if not d.dropped else 'no slow loop for this state (see slow_loop below)'
-    if t == 'B' and 'slow_loop' in d.facts:
-        head += ' (tier A once it has %s)' % ', '.join(sorted(CAPABILITIES['orfs_handoff'] - {'placement'} - set(d.facts)))
-    L = ['%s  (%s, fidelity %s)' % (m.get('design'), m.get('suite', m['source'].get('format')), m.get('fidelity', '?')),
-         '  tier %s: %s' % (t, head)]
+    src = m.get('suite', m['source'].get('format'))
+    L = ['%s  (%s, fidelity %s)' % (m.get('design'), src, m.get('fidelity', '?'))]
     if m.get('target_density'):
         L.append('  placement target density %.3g (%s)' % (m['target_density'], m.get('target_density_source', 'the source')))
     L += ['', 'Problem facts']
-    w = max(len(f) for f in FACTS)
-    pw = min(PROV_WIDTH, max([len(str(v)) for v in d.facts.values()] + [1]))
+    w = max(len(f) for f in FACTS if f not in INTERNAL_FACTS)
+    pw = min(PROV_WIDTH, max([len(str(v)) for k, v in d.facts.items() if k not in INTERNAL_FACTS] + [1]))
     for f in FACTS:
-        if f == 'placement':
+        if f == 'placement' or f in INTERNAL_FACTS:
             continue
         if f in d.facts:
             L.append(_line(OK, w, f, _detail(d, f), pw, d.facts[f]))
@@ -152,35 +148,7 @@ def status(d):
         miss, why = sorted(req - have), d.blocked(c)
         note = why or ('needs ' + ', '.join(miss) if miss else '')
         L.append(_line(NO if note else OK, cw, DESCRIBE.get(c, c), note))
-    # hand-off to ORFS: the requirement list, then what to do
-    L += ['', 'Hand-off to ORFS needs']
-    for f in sorted(CAPABILITIES['orfs_handoff']):
-        ok = f in have
-        L.append(_line(OK if ok else NO, w, f, '' if ok else (_why_missing(d, f) or HINTS.get(f, DEFAULT_HINT))))
-    stage = m.get('orfs', {}).get('stage')
-    ex = 'd.export("out.def")'
-    if t == 'A':
-        if stage == '2_1_floorplan' and not fp_ok:
-            L.append('  -> the floorplan is not legal (%s): ORFS would not take it' % '; '.join(fp_issues))
-        elif 'placement' in have or stage == '2_1_floorplan':      # 2_1: the floorplan alone goes to ORFS
-            L.append('  -> ready: %s, then  %s' % (ex, handoff_command(d, 'out.def')))
-        else:
-            L.append('  -> only a placement is missing: place the design (or restore a snapshot), then export and hand off')
-    elif 'slow_loop' in d.facts and stage == '2_1_floorplan':
-        gap = sorted(CAPABILITIES['orfs_handoff'] - {'placement'} - set(d.facts))
-        L.append('  -> missing %s: d.floorplan() places it; then %s and hand the floorplan to ORFS '
-                 '(tools/orfs_handoff.py)' % (', '.join(gap), ex))
-    elif 'slow_loop' in d.facts:
-        gap = sorted(CAPABILITIES['orfs_handoff'] - {'placement'} - set(d.facts))
-        L.append('  -> the source lacks %s; an engine can place it, but this ORFS stage has built tapcells and PDN '
-                 'already: distill from 2_1 to hand off a floorplan' % ', '.join(gap))
-    elif d.dropped:
-        L.append('  -> an engine changed the floorplan after ORFS %s built tapcells and PDN around it: no hand-off from '
-                 'this state (distill from 2_1 to hand off a floorplan)' % stage)
-    elif t == 'B':
-        L.append('  -> no slow loop for this source: %s writes the result' % ex)
-    else:
-        L.append('  -> no cell library: Attar is the end point for this design')
+    L += ['', _next_step(d, have, fp_ok, fp_issues)]
     return '\n'.join(L)
 
 
@@ -208,21 +176,8 @@ def summary(d):
     if d.io_dir is not None and len(d.io_dir):
         n = torch.bincount(d.io_dir, minlength=4).tolist()
         lines.append('  IO: ' + ', '.join('%d %s' % (n[i], d.IO_DIRS[i].lower()) for i in range(4) if n[i]))
-    lines.append('  facts: ' + ', '.join('%s<%s>' % (k, v) for k, v in sorted(d.facts.items())))
+    facts = sorted((k, v) for k, v in d.facts.items() if k not in INTERNAL_FACTS)
+    lines.append('  facts: ' + ', '.join('%s<%s>' % kv for kv in facts))
     lines.append('  can do: ' + ', '.join(d.capabilities()))
     return '\n'.join(lines)
 
-
-def handoff_command(d, out_def, run_dir=None):
-    """The command that hands an exported DEF to an ORFS run of this design (run_dir: its WORK_HOME) and finishes the
-    flow (spec 7.2)."""
-    o = d.manifest.get('orfs')
-    if not o:
-        raise RuntimeError('%s does not come from an ORFS stage (tier %s)' % (d.manifest.get('design', d.path), tier(d)))
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    key = o['design'] if o.get('platform', 'asap7') == 'asap7' else '%s/%s' % (o['platform'], o['design'])
-    run = run_dir or '<ORFS WORK_HOME of %s>' % key
-    if o['stage'] == '2_1_floorplan':      # the floorplan goes to ORFS, which places and routes from there
-        return 'python3 %s %s %s %s' % (os.path.relpath(os.path.join(root, 'tools', 'orfs_handoff.py')), key, run, out_def)
-    return 'python3 %s %s %s def=%s --stage %s' % (os.path.relpath(os.path.join(root, 'tools', 'orfs_roundtrip.py')),
-                                                  key, run, out_def, o['stage'])

@@ -5,6 +5,7 @@ import unittest
 import torch  # noqa: F401
 
 from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, BOOKSHELF, need, attar, source_def, source_lefs
+from attar import _slow_loop  # noqa: E402
 
 
 class NaiveTest(unittest.TestCase):
@@ -221,7 +222,7 @@ class FloorplanTest(unittest.TestCase):
         self.assertIn('floorplan.io', d.facts); self.assertIn('floorplan.macros', d.facts)
         self.assertNotIn('placement', d.present)          # the floorplan leaves the cells to the placer
         self.assertIn('export', d.capabilities())         # export rewrites DIEAREA, ROWs, TRACKS
-        self.assertIn('orfs_floorplan_handoff', d.capabilities())   # a new die still goes back to ORFS 2_1
+        self.assertTrue(_slow_loop.can(d, 'orfs_floorplan_handoff'))   # a new die still goes back to ORFS 2_1
         self.assertEqual(d.snapshots, {})
         r = d.place(verbose=False)
         self.assertTrue(r['legal'])                       # legality includes rail parity on the new rows
@@ -237,7 +238,7 @@ class FloorplanTest(unittest.TestCase):
         d.floorplan(utilization=0.5, verbose=False)
         d.place(verbose=False)
         self.assertIn('slow_loop', d.facts)                     # ORFS 2_1: the floorplan can be handed off
-        self.assertIn('orfs_floorplan_handoff', d.capabilities())
+        self.assertTrue(_slow_loop.can(d, 'orfs_floorplan_handoff'))
         lefs = source_lefs(d)
         with tempfile.TemporaryDirectory() as t:
             r = d.export(t + '/fp.def')                         # die, rows, IO pins, macros onto the frame

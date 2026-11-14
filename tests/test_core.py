@@ -7,7 +7,7 @@ import numpy as np  # noqa: F401
 import torch  # noqa: F401
 
 from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, BOOKSHELF, need, gpl_final_hpwl, attar, source_def, source_lefs
-from attar import st  # noqa: F401
+from attar import st, _slow_loop  # noqa: F401
 from attar.deffile import read_def  # noqa: F401
 from attar.design import _orient_offset  # noqa: F401
 from attar.distill import FIXED, MACRO, TERMINAL  # noqa: F401
@@ -282,29 +282,41 @@ class WritebackTest(unittest.TestCase):
             self.assertFalse(os.path.exists(t + '/x.def'))
 
 class StatusTest(unittest.TestCase):
-    def test_status_checklist_and_tiers(self):
+    def test_status_checklist(self):
         d = need(MEDIUM)
         s = d.status(show=False)
         self.assertIn('\u2705 netlist', s)                       # ✅
         self.assertIn('\u2705 timing', s)
         self.assertIn('\u274c constraints', s)                   # ❌
         self.assertIn('\u274c placement', s)
-        self.assertEqual(d.tier(), 'A')
         self.assertIn('only a placement is missing', s)
         d.restore('reference')
         s = d.status(show=False)
         self.assertIn('\u2705 placement', s)
-        self.assertIn('orfs_roundtrip.py', d.handoff_command('x.def'))
+        self.assertIn('ready: d.export', s)
 
-    def test_tier_b_and_the_gap_to_a(self):
+    def test_slow_loop_stays_out_of_the_interface(self):
+        """The hand-off to ORFS is Attar's own validation (attar._slow_loop): users get a DEF, nothing about ORFS."""
+        d = need(MEDIUM)
+        text = d.status(show=False) + d.summary() + repr(d)
+        for word in ('slow_loop', 'slow loop', 'hand-off', 'handoff', 'tier', 'orfs_'):
+            self.assertNotIn(word, text)
+        self.assertFalse(hasattr(d, 'handoff_command') or hasattr(d, 'tier'))
+        self.assertEqual(_slow_loop.tier(d), 'A')
+        with self.assertRaises(KeyError):
+            d.require('orfs_handoff')
+        d.restore('reference')
+        self.assertIn('orfs_roundtrip.py', _slow_loop.handoff_command(d, 'x.def'))
+
+    def test_slow_loop_tier_b(self):
         try:
             n = attar.load('after_fp/ns3k/aes', DEV, download=False)            # NS3K: DEF write-back, no slow loop here
         except FileNotFoundError:
             raise unittest.SkipTest('no ns3k zoo')
-        self.assertEqual(n.tier(), 'B')
-        self.assertIn('slow_loop', n.missing('orfs_handoff'))
+        self.assertEqual(_slow_loop.tier(n), 'B')
+        self.assertIn('slow_loop', _slow_loop.missing(n))
         with self.assertRaises(MissingFacts):
-            n.handoff_command('x.def')
+            _slow_loop.handoff_command(n, 'x.def')
 
     def test_plot_method(self):
         d = need(SMALL).restore('reference')

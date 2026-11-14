@@ -26,9 +26,12 @@ FACTS = {
     'tracks': 'routing tracks and the routing layer of every master pin (pin access: macros go on-track)',
     'pdn': 'PDN metal (wires, vias) on the lowest routing layers: signal pins must keep clear of it',
     'def_frame': 'the source DEF minus what Attar writes (movable components, signal nets), kept verbatim: export needs no template',
-    'slow_loop': 'the design comes from a slow-loop flow stage it can be handed back to (an ORFS stage on a platform ORFS knows)',
+    'slow_loop': 'the design comes from an ORFS stage Attar can hand it back to, for its own validation (attar._slow_loop)',
     'placement': 'locations and orientations of all movable cells (solution state)',
 }
+
+# facts kept for Attar's own validation (attar._slow_loop), not shown to users
+INTERNAL_FACTS = {'slow_loop'}
 
 CAPABILITIES = {
     'hpwl': {'netlist', 'cell_geometry', 'pin_offsets', 'placement'},
@@ -45,8 +48,6 @@ CAPABILITIES = {
     'resize': {'netlist', 'cell_library', 'pin_offsets', 'timing', 'library'},   # sizing / Vt swap within a class
     'gr_overflow': {'netlist', 'pin_offsets', 'placement', 'floorplan.die', 'tracks', 'routing'},   # GROV (RUDY)
     'export': {'netlist', 'cell_library', 'def_frame'},    # the source DEF's frame + the IR
-    'orfs_handoff': {'cell_library', 'def_frame', 'slow_loop', 'floorplan.io', 'floorplan.macros', 'placement'},
-    'orfs_floorplan_handoff': {'cell_library', 'def_frame', 'slow_loop', 'floorplan.io', 'floorplan.macros'},   # from ORFS 2_1
     'plot': {'cell_geometry', 'floorplan.die'},
 }
 
@@ -69,7 +70,6 @@ DESCRIBE = {
     'global_place': 'global placement', 'legalize': 'legalization', 'detailed_place': 'detailed placement',
     'global_route': 'global routing', 'sta': 'static timing analysis', 'resize': 'gate sizing (resize)',
     'gr_overflow': 'global-routing overflow (GROV)', 'export': 'write a DEF (source frame + IR)',
-    'orfs_handoff': 'hand off to ORFS for validation', 'orfs_floorplan_handoff': 'hand the floorplan to ORFS (2_1)',
     'plot': 'plot the design',
 }
 # capabilities a design can lose: (when, why). A design whose floorplan is the given problem (after_fp: the die, rows

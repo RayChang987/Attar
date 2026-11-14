@@ -27,7 +27,7 @@ class ExampleTest(unittest.TestCase):
         here = os.path.join(os.path.dirname(__file__), '..', 'examples')
         r = subprocess.run([sys.executable, os.path.join(here, 'quickstart_floorplan.py'), name], capture_output=True, text=True, timeout=300)
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-        self.assertIn('orfs_handoff.py', r.stdout)
+        self.assertIn('d.floorplan() places it; then d.export', r.stdout)
         self.assertTrue(os.path.exists(os.path.join(here, 'orfs_asap7_aes_fp.png')))
 
 if __name__ == '__main__':

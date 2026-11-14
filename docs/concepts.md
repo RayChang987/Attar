@@ -23,7 +23,6 @@ A design is a set of *facts*. Each fact has a *provenance*: the source it came f
 | `tracks` | routing tracks per layer and the routing layer of every macro pin (macro pins go on their tracks) |
 | `pdn` | PDN metal (wires, vias) on the three lowest routing layers: signal pins keep clear of it |
 | `def_frame` | the source DEF minus what Attar writes itself, kept verbatim: what `export` writes into |
-| `slow_loop` | the design comes from an ORFS stage, so ORFS can take the result |
 | `placement` | positions of all movable cells (solution state) |
 
 Each *capability* (an engine or a metric) requires a set of facts:
@@ -37,8 +36,6 @@ Each *capability* (an engine or a metric) requires a set of facts:
 | `global_place` | ... + floorplan.io, floorplan.macros |
 | `legalize` | ... + rows, placement |
 | `export` | netlist, cell_library, def_frame |
-| `orfs_floorplan_handoff` | cell_library, def_frame, slow_loop, floorplan.io, floorplan.macros |
-| `orfs_handoff` | ... + placement |
 
 `d.capabilities()`, `d.missing('global_place')` and `d.require('legalize')` answer the questions; `d.status()`
 prints all of it. Calling an engine without its facts raises `MissingFacts` with a hint on how to get them.
@@ -57,20 +54,17 @@ floorplan.io      naive:place_io(nets)
 floorplan.macros  naive:place_macros
 ```
 
-## Modes and tiers
+## Modes
 
 The zoo has two modes, by what the user solves (zoo names are `<mode>/<suite>/<design>`):
 
 - **`before_fp`, a floorplan problem:** the netlist and cell library are given; the die (utilization), IO pins and
-  macros are the answer. Attar draws no power grid: the floorplan is exported and handed to a flow that draws it
-  (ORFS: `tools/orfs_handoff.py`, which applies the die, rows, tracks, pins and macros and lets ORFS go on).
+  macros are the answer. Attar draws no power grid: the floorplan is exported as a DEF (die, rows, tracks, IO pins
+  and macros) for your flow, which draws it.
 - **`after_fp`, a placement problem:** the die, IO pins, macros and power grid are given; the cells are the answer.
 
-What happens to a result depends on where the design came from (the same in both modes):
-
-- **A**: can be validated in the slow loop (it comes from an ORFS stage and the floorplan is complete).
-- **B**: has a cell library, so the result can be stamped onto a DEF, but there is no slow loop for it.
-- **C**: Attar is the end point (Bookshelf, YAL, GSRC: no cell library to hand off to).
+In both modes a design with a cell library (LEF/DEF sources) goes out as a DEF (`d.export`); one without (Bookshelf,
+YAL, GSRC) ends in Attar.
 
 ## Self-contained designs and export
 
@@ -155,7 +149,7 @@ The basic set of engines: simple, tensorized and fast, each one a starting point
 
 | engine | method |
 | --- | --- |
-| `global_place` | ePlace/DREAMPlace electrostatics: WA wirelength, DCT Poisson solve, Nesterov with backtracking, CUDA graphs; rolls back to the best solution if it diverges. Optional: a keep-out band around macros (`macro_halo`), and routability (`routability=True`: DREAMPlace's cell inflation from RUDY over the track capacity the slow loop's router uses) |
+| `global_place` | ePlace/DREAMPlace electrostatics: WA wirelength, DCT Poisson solve, Nesterov with backtracking, CUDA graphs; rolls back to the best solution if it diverges. Optional: a keep-out band around macros (`macro_halo`), and routability (`routability=True`: DREAMPlace's cell inflation from RUDY over the track capacity the source flow's router uses) |
 | `legalize` | multi-row-height, power-rail aware: bands of rows per (height, rails) class, parallel isotonic packing, a fill step, and parallel displacement improvement; then signal pins clear of the PDN (fact `pdn`, above) |
 | `place` | `global_place` + `legalize`, at the source's own target density (ORFS: the density its global placement used) |
 

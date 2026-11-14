@@ -5,6 +5,7 @@ import numpy as np  # noqa: F401
 import torch  # noqa: F401
 
 from common import DEV, SMALL, MEDIUM, BOOKSHELF, need, bookshelf_hpwl_numpy, attar, _find
+from attar import _slow_loop  # noqa: E402
 
 
 class WATest(unittest.TestCase):
@@ -28,7 +29,7 @@ class BookshelfTest(unittest.TestCase):
 
     def test_bookshelf_is_tier_c_and_starts_unplaced(self):
         d = need(BOOKSHELF)
-        self.assertEqual(d.tier(), 'C')
+        self.assertEqual(_slow_loop.tier(d), 'C')
         self.assertEqual(d.missing('hpwl'), ['placement'])
         self.assertIn('global_place', d.capabilities())
         self.assertEqual(d.facts['floorplan.die'], 'bookshelf(rows+fixed)')

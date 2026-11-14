@@ -43,8 +43,7 @@ SUITES = {
                        'ORFS\'s placement as the reference snapshot', 'ORFS runs (docker image in each manifest)',
                        'Nangate45 (ORFS platform): Apache-2.0; designs: their ORFS licenses'),
     'before_fp/orfs_asap7': ('ORFS designs on ASAP7 at the floorplan stage (2_1): the die, IO pins and macros are the '
-                             'answer; d.export + tools/orfs_handoff.py hand the floorplan to ORFS, which draws the PDN '
-                             'and goes on', 'ORFS runs', 'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
+                             'answer; d.export writes the floorplan as a DEF for a flow that draws the PDN and goes on', 'ORFS runs', 'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
     'after_fp/ns3k': ('Open designs placed on the i3dPDK_NS3K v1.1 generic GAAFET kit (Innovus enablement)',
              'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)'),
     **{'after_fp/ns3k_%s_u%d' % (p, u): (

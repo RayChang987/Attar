@@ -68,13 +68,13 @@ def flow():
     W, H = 1280, 870
     s = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">' % (W, H, W, H), defs(),
          '<rect width="%d" height="%d" rx="22" fill="%s"/>' % (W, H, C['paper'])]
-    # regions: the fast loop (Attar) and the slow loop (ORFS)
+    # regions: the fast loop (Attar) and the user's own flow
     s.append('<rect x="770" y="28" width="482" height="814" rx="22" fill="%s"/>' % C['terra_l'])
     s.append(text(796, 66, 'Fast loop', 19, C['terra_d'], 'bold', 'start'))
     s.append(text(796 + 9 * 19 * 0.62 + 16, 66, 'Seconds, on the GPU', 17, C['terra_d'], anchor='start'))
     s.append('<rect x="28" y="494" width="712" height="348" rx="22" fill="%s"/>' % C['slow'])
-    s.append(text(54, 532, 'Slow loop', 19, C['sand_d'], 'bold', 'start'))
-    s.append(text(54 + 9 * 19 * 0.62 + 16, 532, 'Minutes to hours, ORFS + ASAP7', 17, C['sand_d'], anchor='start'))
+    s.append(text(54, 532, 'Your flow', 19, C['sand_d'], 'bold', 'start'))
+    s.append(text(54 + 9 * 19 * 0.62 + 16, 532, 'Any P&R tool that reads DEF', 17, C['sand_d'], anchor='start'))
     # sources -> IR
     s.append(text(54, 66, 'Any source', 19, C['ink2'], 'bold', 'start'))
     src = [('LEF / DEF', 'ORFS, ISPD 15/18/19/24, ICCAD 25'), ('Bookshelf', 'ISPD 05, IBM-HB+, GSRC'),
@@ -101,16 +101,12 @@ def flow():
     s.append(arrow([(850, 244), (850, 354)], 'terra', label='Move', at=(850, 300)))
     s.append(arrow([(966, 360), (966, 250)], 'terra', label='New facts', at=(966, 300)))
     s.append(arrow([(1135, 244), (1135, 354)], 'terra', label='Measure', at=(1135, 300)))
-    # export -> DEF -> ORFS -> truth
+    # export -> DEF -> the user's flow
     s.append(arrow([(810, 232), (748, 232), (748, 452), (130, 452), (130, 600)], label='Export', at=(440, 452)))
     s.append(box(44, 606, 172, 136, 'DEF', ['Placement', 'Floorplan']))
-    s.append(box(282, 576, 204, 196, 'ORFS', ['Tapcell, PDN', 'CTS, routing', 'STA'], stroke=C['sand_d'], tsize=25))
-    s.append(box(552, 576, 168, 196, 'Truth', ['Routed WL', 'DRC', 'WNS, TNS'], fill=C['sand'], stroke=C['sand_d']))
+    s.append(box(282, 576, 438, 196, 'OpenROAD, Innovus, ICC2, ...', ['PDN, CTS, routing', 'Sign-off'],
+                 stroke=C['sand_d'], tsize=23))
     s.append(arrow([(216, 674), (276, 674)]))
-    s.append(arrow([(486, 674), (546, 674)]))
-    # agreement
-    s.append(arrow([(1135, 566), (1135, 808), (636, 808), (636, 778)], 'amber', dash='9 7', label='Do they agree?',
-                   at=(900, 808)))
     s.append('</svg>')
     open(os.path.join(IMG, 'flow.svg'), 'w').write('\n'.join(s))
 

@@ -5,8 +5,8 @@
 <text x="796" y="66" font-size="19" fill="#b44a1c" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Fast loop</text>
 <text x="918.02" y="66" font-size="17" fill="#b44a1c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Seconds, on the GPU</text>
 <rect x="28" y="494" width="712" height="348" rx="22" fill="#f1e9dd"/>
-<text x="54" y="532" font-size="19" fill="#a8946f" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Slow loop</text>
-<text x="176.02" y="532" font-size="17" fill="#a8946f" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Minutes to hours, ORFS + ASAP7</text>
+<text x="54" y="532" font-size="19" fill="#a8946f" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Your flow</text>
+<text x="176.02" y="532" font-size="17" fill="#a8946f" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Any P&amp;R tool that reads DEF</text>
 <text x="54" y="66" font-size="19" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Any source</text>
 <rect x="42" y="96" width="286" height="96" rx="14" fill="#000" opacity="0.045"/>
 <rect x="40" y="92" width="286" height="96" rx="14" fill="#fffdf9" stroke="#a8946f" stroke-width="1.6"/>
@@ -74,20 +74,10 @@
 <text x="130" y="658.4" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">DEF</text>
 <text x="130" y="691.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Placement</text>
 <text x="130" y="714.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Floorplan</text>
-<rect x="284" y="580" width="204" height="196" rx="14" fill="#000" opacity="0.045"/>
-<rect x="282" y="576" width="204" height="196" rx="14" fill="#fffdf9" stroke="#a8946f" stroke-width="1.6"/>
-<text x="384" y="646.75" font-size="25" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ORFS</text>
-<text x="384" y="679.75" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Tapcell, PDN</text>
-<text x="384" y="702.75" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">CTS, routing</text>
-<text x="384" y="725.75" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">STA</text>
-<rect x="554" y="580" width="168" height="196" rx="14" fill="#000" opacity="0.045"/>
-<rect x="552" y="576" width="168" height="196" rx="14" fill="#ecdfc8" stroke="#a8946f" stroke-width="1.6"/>
-<text x="636" y="646.4" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Truth</text>
-<text x="636" y="679.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Routed WL</text>
-<text x="636" y="702.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">DRC</text>
-<text x="636" y="725.4" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">WNS, TNS</text>
+<rect x="284" y="580" width="438" height="196" rx="14" fill="#000" opacity="0.045"/>
+<rect x="282" y="576" width="438" height="196" rx="14" fill="#fffdf9" stroke="#a8946f" stroke-width="1.6"/>
+<text x="501" y="658.05" font-size="23" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">OpenROAD, Innovus, ICC2, ...</text>
+<text x="501" y="691.05" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">PDN, CTS, routing</text>
+<text x="501" y="714.05" font-size="17" fill="#6b5d52" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Sign-off</text>
 <path d="M 216 674 L 276 674" fill="none" stroke="#6b5d52" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_ink)"/>
-<path d="M 486 674 L 546 674" fill="none" stroke="#6b5d52" stroke-width="2.4" stroke-linejoin="round" marker-end="url(#ah_ink)"/>
-<path d="M 1135 566 L 1135 808 L 636 808 L 636 778" fill="none" stroke="#d99a1e" stroke-width="2.4" stroke-dasharray="9 7" stroke-linejoin="round" marker-end="url(#ah_amber)"/>
-<rect x="819.8" y="793" width="160.4" height="30" rx="15" fill="#d99a1e"/><text x="900" y="813.76" font-size="16" fill="#fffaf4" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Do they agree?</text>
 </svg>

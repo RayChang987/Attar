@@ -53,7 +53,7 @@ ROUTE_DEFAULTS = {'node_area_adjust_overflow': 0.15, 'max_num_area_adjust': 3, '
 
 def _track_capacity(d, g, ra):
     """Routing tracks per um (horizontal, vertical) of every bin: 1/pitch summed over the signal routing layers of
-    each direction (ra['routing_layers'] = (lowest, highest) layer names; default: the slow loop's own, recorded in
+    each direction (ra['routing_layers'] = (lowest, highest) layer names; default: the source flow's own, recorded in
     manifest['routing'], else all but the lowest), times the share the router may use (manifest['routing']
     ['adjustment'] held back), less the layers up to the macros' highest pin layer over the part of a bin macros
     cover."""
@@ -61,7 +61,7 @@ def _track_capacity(d, g, ra):
     from .. import st
     tp, _ = st.load(os.path.join(d.path, 'tech_profile.safetensors'))
     names = d.names['layers']
-    rt = d.manifest.get('routing', {})                     # the slow loop's own routing resources, when recorded
+    rt = d.manifest.get('routing', {})                     # the source flow's own routing resources, when recorded
     rng = ra.get('routing_layers') or rt.get('layers')
     lo_l, hi_l = (names.index(rng[0]), names.index(rng[1])) if rng else (1, len(names) - 1)
     keep = 1.0 - float(rt.get('adjustment', 0.0))          # share of a layer's tracks the router may use

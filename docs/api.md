@@ -22,15 +22,14 @@ names; an unknown fact, capability, metric or snapshot raises `KeyError` with th
 
 | method | what it does |
 | --- | --- |
-| `status(show=True)` | facts, solution state, capabilities, what an ORFS hand-off needs; printed (in color on a terminal) and returned as plain text |
+| `status(show=True)` | facts, solution state, capabilities, what is left before export; printed (in color on a terminal) and returned as plain text |
 | `summary()` | a few lines: counts, dies with core, rows and utilization, IO pins, facts |
-| `capabilities()`, `missing(cap)`, `require(cap)`, `has(fact)`, `tier()` | facts and what follows from them |
+| `capabilities()`, `missing(cap)`, `require(cap)`, `has(fact)` | facts and what follows from them |
 | `place(target_density=None, macro_halo=0, **kw)` | `naive.place`: global placement + legalization (default density: the source's own, else 0.9) |
 | `floorplan(utilization=None, aspect_ratio=1.0, packing=False, **kw)` | `naive.floorplan`, for `before_fp` problems (see below) |
 | `floorplan_legal(pos=None)` | `(legal, problems)`: macros in their region and apart, IO pins in the die, all placed; checked from the positions on every call, not stored |
 | `plot(path=None, theme='light', dpi=150, nets=None, max_nets=None, **kw)` | die, core, rows, cells (an area-density image above 30k cells), macros, IO pins by direction; the whole floorplan, also what sticks out of the die (in red); 'legal' / 'not legal' with the problems; block-level designs also show the strongest connections between macros and IO pins (`nets`, default 2 per macro); warm light theme by default |
 | `export(out_def)` | write the design as a DEF: its source frame (PDN, pins, fixed cells, verbatim) with the cells and signal nets from the IR |
-| `handoff_command(out_def, run_dir=None)` | the command that hands an exported DEF to ORFS |
 | `hpwl(pos=None, per_net=False)` | exact HPWL (0-d tensor) |
 | `wa_wirelength(pos=None, gamma=1.0)` | weighted-average wirelength, differentiable |
 | `pin_pos(pos=None)` | (P, 2) pin locations |
@@ -83,7 +82,7 @@ Each engine checks its facts first (`MissingFacts` otherwise) and writes its ans
 | module | what |
 | --- | --- |
 | `attar/design.py` | `Design`: the state (facts, positions, floorplan), checks, wirelength; `load`, `zoo` |
-| `attar/status.py` | `status`, `summary`, `tier`, the hand-off command |
+| `attar/status.py` | `status`, `summary` |
 | `attar/export.py` | DEF write-back into the source frame |
 | `attar/sizing.py` | gate sizing (`resize`, `equivalents`) |
 | `attar/evaluator.py`, `metrics.py`, `kernels.py` | metrics and the tensor kernels they share with the engines |

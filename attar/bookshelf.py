@@ -1,7 +1,7 @@
 """Bookshelf reader (ISPD 2005/2006, ICCAD 2004 style): .aux -> .nodes .nets .wts .pl .scl -> Attar IR.
 
-Facts provided: netlist, cell_geometry, pin_offsets, floorplan.die, floorplan.io, floorplan.macros, rows. No cell library, no
-slow loop: Bookshelf designs have no technology, so Attar is their end point (tier C).
+Facts provided: netlist, cell_geometry, pin_offsets, floorplan.die, floorplan.io, floorplan.macros, rows. No cell library:
+Bookshelf designs have no technology, so they do not export to DEF and Attar is their end point.
 
 Conventions: Bookshelf pin offsets are relative to the node center and may be half units, so coordinates are stored
 in half units (dbu = 2 per Bookshelf unit) when that is exact, else in the smallest of 1/10, 1/100, 1/1000 unit that

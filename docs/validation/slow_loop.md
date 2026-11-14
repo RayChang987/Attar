@@ -1,5 +1,9 @@
 # The slow loop: ORFS (ASAP7, Nangate45)
 
+*For Attar's own validation.* Users take a result out with `d.export` (a DEF) into their own flow; the tools below
+are how Attar checks itself against ORFS. In code, `attar._slow_loop` (not part of the user API) holds the hand-off
+command and the facts it needs.
+
 Attar is checked against [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts)
 on the ASAP7 and Nangate45 platforms, run from the docker image `openroad/orfs:26Q4-368-g9ca2a9e76`. All tools mount `orfs_runs/` at
 `/work` and never modify the original runs.
@@ -42,7 +46,7 @@ pins and macros that Attar chose to `2_1_floorplan.odb`:
 `--until 3_5_place_dp` stops there and checks the result in ORFS's own environment: `check_placement`, max slew /
 capacitance / fanout violations, the ERROR and WARNING messages of every stage, and whether the macros and pins
 stayed put. `baseline` in place of the DEF runs ORFS's own floorplan the same way, for comparison. The results on the
-`before_fp` designs: [validation/fp_handoff.md](validation/fp_handoff.md).
+`before_fp` designs: [fp_handoff.md](fp_handoff.md).
 
 The same database is saved as a newer `2_2_floorplan_macro.odb`, so make skips ORFS's macro placer. ORFS then does
 tapcells, PDN, global placement, CTS and routing. Its `place_pins` and `-place_ios` find no pins to place, and the

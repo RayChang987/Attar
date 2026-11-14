@@ -6,7 +6,7 @@ from the facts it has: capabilities(), missing(capability), require(capability).
 Coordinates in microns (float32); `scale` = 1 / dbu.
 
 The Design holds the state and answers questions about it; the larger jobs live in their own modules and are reached
-through its methods: status.py (status, tier, hand-off), export.py (DEF write-back), sizing.py (resize), sta.py
+through its methods: status.py (status, summary), export.py (DEF write-back), sizing.py (resize), sta.py
 (timing), routing.py (GROV), viz.py (plot), naive (engines)."""
 import difflib
 import gzip
@@ -216,18 +216,13 @@ class Design:
             raise MissingFacts(self.manifest.get('design', self.path), capability, miss)
 
     def status(self, show=True):
-        """Checklist of facts (✅ / ❌), solution state, capabilities, and what a hand-off to ORFS still needs.
+        """Checklist of facts (✅ / ❌), solution state, capabilities, and what is left before d.export.
         Printed when show (in color on a terminal); returned as text either way."""
         from .status import status, styled
         s = status(self)
         if show:
             print(styled(s))
         return s
-
-    def tier(self):
-        """A: can be validated in ORFS; B: DEF write-back only; C: Attar is the end point."""
-        from .status import tier
-        return tier(self)
 
     def summary(self):
         """A few lines: counts, dies with their core, rows and utilization, unplaced cells, IO pins, facts."""
@@ -236,8 +231,8 @@ class Design:
 
     def __repr__(self):
         c = self.manifest.get('counts', {})
-        return '<Design %s: %d cells, %d nets, tier %s, can %s>' % (
-            self.manifest.get('design'), c.get('cells', 0), c.get('nets', 0), self.tier(), ', '.join(self.capabilities()))
+        return '<Design %s: %d cells, %d nets, can %s>' % (
+            self.manifest.get('design'), c.get('cells', 0), c.get('nets', 0), ', '.join(self.capabilities()))
 
     # -- floorplan checks ---------------------------------------------------------------------------------------------
     def floorplan_check(self, pos=None):
@@ -344,9 +339,10 @@ class Design:
 
     # -- floorplan state (answers of the IO and macro placers become facts) -------------------------------------
     def _floorplan_changed(self, why):
-        """An engine changed the floorplan (IO pins, macros, die). Export writes all of it onto the DEF. The slow loop
-        takes a changed floorplan only from the ORFS floorplan stage (2_1: tapcells, PDN and everything after are
-        redone); a later stage already built them around the old floorplan, so 'slow_loop' goes there."""
+        """An engine changed the floorplan (IO pins, macros, die). Export writes all of it onto the DEF. Attar's own
+        validation (attar._slow_loop) takes a changed floorplan back to ORFS only from its floorplan stage (2_1:
+        tapcells, PDN and everything after are redone); a later stage already built them around the old floorplan, so
+        the internal fact 'slow_loop' goes there."""
         if 'slow_loop' in self.facts and self.manifest.get('orfs', {}).get('stage') != '2_1_floorplan':
             self.facts.pop('slow_loop')
             self.dropped['slow_loop'] = why + ' after ORFS %s' % self.manifest.get('orfs', {}).get('stage')
@@ -636,7 +632,7 @@ class Design:
                 self._names = json.load(f)
         return self._names
 
-    # -- output: plot, DEF write-back, hand-off -------------------------------------------------------------------
+    # -- output: plot, DEF write-back ---------------------------------------------------------------------------
     def plot(self, path=None, **kw):
         """Draw die, core, rows, cells, macros and IO pins (attar.viz.plot); saved to path if given."""
         from .viz import plot
@@ -656,19 +652,6 @@ class Design:
         """(horizontal, vertical) layer for IO pins: ORFS's IO_PLACER_H/V when known (asap7: M4, M5), else the first
         horizontal layer above the third and the first vertical one above it, from the tech profile."""
         return _export.pin_layers(self)
-
-    def handoff_command(self, out_def, run_dir=None):
-        """Command that hands an exported DEF to an ORFS run of this design (run_dir: its WORK_HOME) and finishes the
-        flow there. A floorplan goes to ORFS only when it is legal (floorplan_legal)."""
-        from .status import handoff_command
-        fp = self.manifest.get('orfs', {}).get('stage') == '2_1_floorplan'
-        self.require('orfs_floorplan_handoff' if fp else 'orfs_handoff')
-        if fp:
-            ok, issues = self.floorplan_legal()
-            if not ok:
-                raise ValueError('%s: the floorplan is not legal (%s); ORFS would not take it'
-                                 % (self.manifest.get('design'), '; '.join(issues)))
-        return handoff_command(self, out_def, run_dir)
 
 
 def load(name, device='cpu', download=True, root=None):

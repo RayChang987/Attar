@@ -8,7 +8,7 @@ Place and evaluate a 100k-cell design in seconds.
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
 [![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](docs/validation/orfs_check.md)
-[![Tests](https://img.shields.io/badge/tests-89%20passing-5f7f1e?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/tests-91%20passing-5f7f1e?style=flat-square)](tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
 [Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
@@ -29,7 +29,7 @@ Place and evaluate a 100k-cell design in seconds.
 3. **Attar is the fast loop.** Attar distills diverse P&R benchmarks into one plug-and-play PyTorch environment:
    `attar.load` a name, and the design is on the GPU. Each reader hands over only the facts its source has, with
    their provenance, and nothing missing is made up ([a design is a state](#a-design-is-a-state)). The fast loop
-   stays faithful to the full flows (the *slow loop*) without their overhead: its HPWL equals OpenROAD's to 7 digits,
+   stays faithful to the full flows without their overhead: its HPWL equals OpenROAD's to 7 digits,
    its legality equals `check_placement`, its placements route in OpenROAD-flow-scripts with 0 DRC, and HPWL ranks
    placements as routed wirelength does in 951 routed Innovus runs, once they differ by 2% or more
    ([validation](docs/validation/orfs_check.md)).
@@ -63,7 +63,7 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 | **Packing** | `before_fp` | `naive.place_macros(packing=True)` | block-level designs: B*-tree packing, annealed into the core, then for HPWL |
 | **Macro placement** | `before_fp` | `naive.place_macros` | mixed-size global placement, then macros legalized on their routing tracks with a halo |
 | **IO placement** | `before_fp` | `naive.place_io` | IO pins on the die boundary, net-aware once cells are placed |
-| **Placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the slow loop's own target density; `routability=True`: DREAMPlace's cell inflation |
+| **Placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the source flow's own target density; `routability=True`: DREAMPlace's cell inflation |
 | **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal |
 | **PDN-aware refinement** | `after_fp` | inside `naive.legalize` | row DP and repair that keep cells clear of the PDN |
 
@@ -76,9 +76,9 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 
 <sub><b>Placement mode</b> (<code>after_fp</code>). Real runs on an RTX 3080 Ti, the same code on two designs. The
 floorplan comes as the flow made it; only the cells are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k
-cells around 8 SRAMs, legal in 2.5 s; handed back to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own
+cells around 8 SRAMs, legal in 2.4 s; handed back to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own
 placement. <b>ariane133</b> (NS3K, Innovus floorplan at 80% std-cell density): 163k cells around 133 SRAMs, legal in
-5.0 s.</sub>
+4.8 s.</sub>
 
 <img src="docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)" width="920">
 
@@ -93,7 +93,7 @@ the core: not legal. <code>packing=True</code> (B*-tree, annealed into the core,
 
 In production chip design, the power delivery network (PDN) is the dividing line: once the power grid and the macros
 are locked down, the design enters a different phase. Attar splits its problems at that line. It does not synthesize
-a PDN, and it should not: a `before_fp` answer goes to a flow that draws one (ORFS), and an `after_fp` problem comes
+a PDN, and it should not: a `before_fp` answer goes to a flow that draws one, and an `after_fp` problem comes
 with the PDN its flow drew.
 
 | | **Before-floorplan** (`before_fp`) | **After-floorplan** (`after_fp`) |
@@ -101,32 +101,30 @@ with the PDN its flow drew.
 | given | the netlist (an initial die for ORFS designs) | die, IO pins, macros, rows and PDN: a fixed floorplan |
 | the answer | target utilization (the die), IO pin placement, macro placement | standard-cell placement; then timing optimization and global routing on the same floorplan |
 | one call | `d.floorplan(utilization=0.6)` | `d.place()` |
-| back to the slow loop | ORFS draws the PDN and places | ORFS or OpenROAD routes and times |
+| goes out as | a DEF: your flow draws the PDN and places | a DEF: your flow routes and times |
 | in the zoo | 55 designs, 6 suites | 192 designs, 17 suites |
 
 Attar measures wirelength, congestion (RUDY, GROV), density, legality and timing; see the [roadmap](#roadmap).
 
 ## How it works
 
-<p align="center"><img src="docs/images/flow.svg" alt="Sources (LEF/DEF, Bookshelf, YAL, GSRC blocks) are distilled into the Attar IR and loaded as a Design on the GPU; attar.naive moves it and adds facts, the Evaluator measures it; export writes DEF, ORFS routes it, and the slow loop's truth is compared with the Evaluator" width="100%"></p>
+<p align="center"><img src="docs/images/flow.svg" alt="Sources (LEF/DEF, Bookshelf, YAL, GSRC blocks) are distilled into the Attar IR and loaded as a Design on the GPU; attar.naive moves it and adds facts, the Evaluator measures it; export writes a DEF for your own flow (OpenROAD, Innovus, ICC2, ...)" width="100%"></p>
 
 1. **Distill.** A reader turns a benchmark into the Attar IR: integer arrays in a safetensors file, plus a manifest
    that lists which facts the source provides and where each came from. Readers exist for LEF/DEF, Bookshelf, YAL
    and GSRC blocks.
 2. **Load.** `attar.load` puts the arrays on the GPU as a `Design`. `d.status()` shows each fact, each capability,
-   and what a hand-off to ORFS still needs.
+   and what is left before export.
 3. **Move.** Your algorithm, or the [built-in engines](#roadmap) (`attar.naive`), changes the positions:
    die, IO pins and macros for `before_fp`, cells for `after_fp`.
 4. **Measure.** `attar.Evaluator` computes HPWL (exact, batched), Steiner wirelength, RUDY, density overflow and
    legality, on the current placement or on any positions you pass.
-5. **Hand off.** `d.export(out_def)` writes the design back into its source DEF's frame: the PDN, IO pin shapes and
-   fixed cells as they were, the cells and nets from the IR (a changed die, IO pins and macros included). For ORFS
-   designs, `tools/orfs_roundtrip.py` takes a placement into the ORFS run, and ORFS routes and times it;
-   `tools/orfs_handoff.py` takes a floorplan, and ORFS draws the PDN and goes on. Designs without an ORFS platform
-   (i3dPDK_NS3K) go to OpenROAD with `tools/validate_openroad.py`.
+5. **Export.** `d.export(out_def)` writes the design back into its source DEF's frame: the PDN, IO pin shapes and
+   fixed cells as they were, the cells and nets from the IR (a changed die, IO pins and macros included). Your own
+   flow (OpenROAD, Innovus, ICC2, ...) takes it from there.
 
-More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [slow loop](docs/slow_loop.md) ·
-[API](docs/api.md)
+More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [API](docs/api.md) ·
+[validation](docs/validation/timing_routing.md)
 
 ## Gallery
 
@@ -146,7 +144,7 @@ packed in 2.3 s: legal, HPWL 948k.</sub></td>
 <td><img src="docs/images/gallery/ariane136.png" alt="ariane136 on NS3K at 80% density placed by attar.naive"></td>
 </tr>
 <tr>
-<td><sub><b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs in 2.5 s. ORFS routes it with
+<td><sub><b>cva6</b> (ASAP7, ORFS global placement stage): 121k cells around 8 SRAMs in 2.4 s. ORFS routes it with
 0 DRC and 7.4% less wire than its own placement.</sub></td>
 <td><sub><b>ariane136</b> (NS3K, Innovus floorplan at 80% std-cell density): 170k cells around 136 SRAMs in 5.2 s,
 legal including power rails and the PDN; OpenROAD's <code>check_placement</code> and global routing pass.</sub></td>
@@ -167,12 +165,11 @@ Problem facts
   ✅ rows              def             164 rows, height 0.27 um
   ✅ pdn               def             1815 wire and 4785 via shapes on M1, M2, M3
   ✅ def_frame         def             PDN, pins, fixed cells of the source DEF, kept verbatim (849 kB)
-  ✅ slow_loop         orfs:asap7      ORFS aes, stage 3_3_place_gp
   ...
 Solution state
   ❌ placement         12009 movable cells unplaced  (snapshots: reference)
   ...
-  -> only a placement is missing: place the design (or restore a snapshot), then export and hand off
+  -> only a placement is missing: place the design (or restore a snapshot), then d.export("out.def")
 ```
 
 Every reader states which facts it provides, and every engine and metric states which facts it needs:
@@ -188,8 +185,8 @@ clear which part of a design came from where. See [docs/concepts.md](docs/concep
 
 Attar's global placement follows ePlace, DREAMPlace and Xplace, and its routability option DREAMPlace's cell
 inflation; its rail and PDN checks follow OpenROAD's detailed placer, and its PDN repair the row DP of pa_pdn.
-The slow loop is [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts) on the ASAP7
-PDK. Benchmarks are from the ISPD, ICCAD and GSRC contests, MCNC and ORFS.
+Attar is validated against [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts) on
+the ASAP7 and Nangate45 platforms. Benchmarks are from the ISPD, ICCAD and GSRC contests, MCNC and ORFS.
 
 ## License
 

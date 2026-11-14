@@ -1,4 +1,4 @@
-"""Readers for block-level floorplanning benchmarks -> Attar IR (no rows, no technology: tier C).
+"""Readers for block-level floorplanning benchmarks -> Attar IR (no rows, no technology: Attar is their end point).
 
 YAL (MCNC: apte, xerox, hp, ami33, ami49)
     Modules with a polygon outline and pins at given points; the PARENT module's outline is the die, its IOLIST the

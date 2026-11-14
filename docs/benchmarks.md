@@ -5,8 +5,8 @@ The pip package ships readers, not data. The zoo of distilled designs lives on t
 by what the user solves:
 
 - **`before_fp`, floorplan problems.** The netlist and the cell library are given; the die (utilization), the IO
-  pins and the macros are the answer. A result with a cell library is written back as a DEF and handed to a flow
-  that draws the power grid (ORFS: `tools/orfs_handoff.py`); Attar draws no power grid itself.
+  pins and the macros are the answer. A result with a cell library is written back as a DEF for a flow that draws
+  the power grid; Attar draws no power grid itself.
 - **`after_fp`, placement problems.** The die, IO pins, macros and the power grid are given; the cells are the
   answer (timing optimization and global routing later).
 

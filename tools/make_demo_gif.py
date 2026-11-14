@@ -33,7 +33,7 @@ d.plot('floorplan.png')      # die, macros, IO pins, PDN: given
 
 d.place()                    # global placement + legalization
 d.plot('placed.png')
-d.export('placed.def')       # a DEF, back to the slow loop
+d.export('placed.def')       # a DEF for your own flow
 ''',
         cases=[('cva6', 'after_fp/orfs_asap7/cva6'), ('ariane133', 'after_fp/ns3k_pl_u80/ariane133')],
         line={'load': 2, 'status': 3, 'floorplan': 4, 'place': 6, 'placed': 7, 'export': 8},
