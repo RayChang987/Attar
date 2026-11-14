@@ -288,7 +288,8 @@ class Timer:
         self.precision = precision
         self.dev = dev = d.device
         self.parasitics = parasitics
-        self.info = info = json.load(open(os.path.join(d.path, 'timing.json')))
+        with open(os.path.join(d.path, 'timing.json')) as f:
+            self.info = info = json.load(f)
         # the cell data: from the design's library chain (bundle + local) or its timing.safetensors (attar.timing.arrays)
         t, info['functions'], info['arc_when'] = timing_mod.arrays(d)
         a = d.raw

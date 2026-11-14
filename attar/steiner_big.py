@@ -19,7 +19,8 @@ def _build():
     if _LIB is not None or _ERR is not None:
         return _LIB
     try:
-        src = open(_SRC, 'rb').read()
+        with open(_SRC, 'rb') as f:
+            src = f.read()
         tag = hashlib.sha1(src).hexdigest()[:12]
         cache = os.path.join(os.path.expanduser('~'), '.cache', 'attar')        # as paths.zoo_dir: no environment
         os.makedirs(cache, exist_ok=True)

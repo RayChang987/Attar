@@ -34,16 +34,21 @@ def gpl_final_hpwl(name):
                 return float(line.split()[-1])
 BOOKSHELF = 'after_fp/ispd2005/adaptec1'
 
+def _lines(path):
+    with open(path) as f:
+        yield from f
+
+
 def bookshelf_hpwl_numpy(aux, pl):
     """Independent HPWL straight from the Bookshelf files (pin offsets from the node center), no Attar code."""
     d = os.path.dirname(aux); base = os.path.splitext(os.path.basename(aux))[0]
     size = {}
-    for line in open(os.path.join(d, base + '.nodes')):
+    for line in _lines(os.path.join(d, base + '.nodes')):
         t = line.split()
         if len(t) >= 3 and not line.startswith(('UCLA', '#', 'Num')):
             size[t[0]] = (float(t[1]), float(t[2]))
     loc = {}
-    for line in open(pl):
+    for line in _lines(pl):
         t = line.split()
         if len(t) >= 3 and not line.startswith(('UCLA', '#')):
             loc[t[0]] = (float(t[1]), float(t[2]))
@@ -52,7 +57,7 @@ def bookshelf_hpwl_numpy(aux, pl):
         nonlocal total
         if len(xs) > 1:
             total += max(xs) - min(xs) + max(ys) - min(ys)
-    for line in open(os.path.join(d, base + '.nets')):
+    for line in _lines(os.path.join(d, base + '.nets')):
         if line.startswith('NetDegree'):
             flush(); xs.clear(); ys.clear(); continue
         t = line.replace(':', ' ').split()

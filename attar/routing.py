@@ -193,7 +193,8 @@ def attach(ir_dir, lef_paths, layers=None, adjustment=None):
     with gzip.open(os.path.join(ir_dir, 'names.json.gz'), 'rt') as f:
         names = json.load(f)
     mf = os.path.join(ir_dir, 'manifest.json')
-    m = json.load(open(mf))
+    with open(mf) as f:
+        m = json.load(f)
     dbu = m['dbu']
     macros, tech = read_lef(list(lef_paths))
     lid = {n: i for i, n in enumerate(names['layers'])}

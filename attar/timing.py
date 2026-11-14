@@ -45,7 +45,8 @@ def read_rc_tcl(path):
     unit per um: kohm and fF for ASAP7, so r * c * um^2 is ps). set_wire_rc -layers averages the layers' RC and
     names them ('signal_layers' / 'clock_layers'); set_routing_layers -signal gives 'routing'."""
     out = {'layer': {}, 'via': {}}
-    text = open(path).read().replace('\\\n', ' ')
+    with open(path) as f:
+        text = f.read().replace('\\\n', ' ')
     for line in text.splitlines():
         t = re.findall(r'\{[^}]*\}|\S+', line.split('#')[0])
         if not t:
@@ -150,7 +151,8 @@ def chain(ir_dir, manifest):
 def arrays(d, c_master=None):
     """The timer's per-design arrays, functions and arc `when` conditions: looked up along the design's library chain
     (attar.library.design_arrays) when it references one, else timing.safetensors and timing.json."""
-    info = json.load(open(os.path.join(d.path, 'timing.json')))
+    with open(os.path.join(d.path, 'timing.json')) as f:
+        info = json.load(f)
     if 'library' not in d.manifest:
         t, _ = st.load(os.path.join(d.path, 'timing.safetensors'))
         return t, info.get('functions') or {}, info.get('arc_when') or {}
@@ -260,7 +262,8 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=
     # OpenROAD est::computeAverageCutResistance: the mean resistance of the cut layers between the block's lowest and
     # highest routing layer (via Vk joins Mk and Mk+1); every pin hangs off the estimated tree through it
     # (the routing layers: the manifest's, else the RC script's set_routing_layers -signal)
-    rl = (json.load(open(os.path.join(ir_dir, 'manifest.json'))).get('routing') or {}).get('layers')
+    with open(os.path.join(ir_dir, 'manifest.json')) as f:
+        rl = (json.load(f).get('routing') or {}).get('layers')
     rl = rl or (info['rc'] or {}).get('routing')
     if info['rc'] and rl and info['rc'].get('via'):
         lo, hi = (int(re.sub(r'\D', '', x)) for x in rl)
@@ -276,7 +279,8 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=
         json.dump(info, f, indent=1)
 
     mf = os.path.join(ir_dir, 'manifest.json')
-    m = json.load(open(mf))
+    with open(mf) as f:
+        m = json.load(f)
     m.setdefault('facts', {})['timing'] = 'liberty+sdc' + ('+rc' if rc_tcl else '')
     if lib_ref is not None:
         m['facts']['library'] = lib_ref['bundle']

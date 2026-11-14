@@ -232,7 +232,11 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
         return g
     for n, f in cmds.items():
         tcl.createcommand(n, wrap(n, f))
-    text = path_or_text if is_text else open(path_or_text).read()
+    if is_text:
+        text = path_or_text
+    else:
+        with open(path_or_text) as f:
+            text = f.read()
     try:
         tcl.eval(text)
     except tkinter.TclError as e:
