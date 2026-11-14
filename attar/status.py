@@ -1,6 +1,9 @@
-"""Design status: which facts a design has (✅) or lacks (❌), what it can do, and what a hand-off to ORFS still needs.
-Everything here follows from the IR; nothing on disk outside it is looked at."""
+"""Design reports: status (which facts a design has (✅) or lacks (❌), what it can do, and what a hand-off to ORFS
+still needs), summary (a few lines of numbers), tier and the hand-off command. Everything here follows from the IR;
+nothing on disk outside it is looked at."""
 import os
+
+import torch
 
 from .facts import CAPABILITIES, DESCRIBE, FACTS, HINTS, DEFAULT_HINT, PLACE_STEPS
 
@@ -64,7 +67,7 @@ def _detail(d, fact):
 
 
 def _why_missing(d, fact):
-    dropped = getattr(d, 'dropped', {})
+    dropped = d.dropped
     if fact in dropped:
         return 'dropped: ' + dropped[fact]
     if fact == 'floorplan.io' and d.manifest.get('io_unplaced'):
@@ -82,7 +85,7 @@ def status(d, color=True):
     m = d.manifest
     t = tier(d)
     have = d.present
-    head = TIERS[t] if not getattr(d, 'dropped', None) else 'no slow loop for this state (see slow_loop below)'
+    head = TIERS[t] if not d.dropped else 'no slow loop for this state (see slow_loop below)'
     if t == 'B' and 'slow_loop' in d.facts:
         head += ' (tier A once it has %s)' % ', '.join(sorted(CAPABILITIES['orfs_handoff'] - {'placement'} - set(d.facts)))
     L = ['%s  (%s, fidelity %s)' % (m.get('design'), m.get('suite', m['source'].get('format')), m.get('fidelity', '?')),
@@ -137,7 +140,7 @@ def status(d, color=True):
         gap = sorted(CAPABILITIES['orfs_handoff'] - {'placement'} - set(d.facts))
         L.append('  -> the source lacks %s; an engine can place it, but this ORFS stage has built tapcells and PDN '
                  'already: distill from 2_1 to hand off a floorplan' % ', '.join(gap))
-    elif getattr(d, 'dropped', None):
+    elif d.dropped:
         L.append('  -> an engine changed the floorplan after ORFS %s built tapcells and PDN around it: no hand-off from '
                  'this state (distill from 2_1 to hand off a floorplan)' % stage)
     elif t == 'B':
@@ -145,6 +148,35 @@ def status(d, color=True):
     else:
         L.append('  -> no cell library: Attar is the end point for this design')
     return '\n'.join(L)
+
+
+def summary(d):
+    """A few lines: counts, each die with its core, rows and utilization, unplaced cells, IO pins, facts, capabilities."""
+    c = d.manifest['counts']
+    n_io = len(d.io) if d.io is not None else c.get('terminals', 0)
+    lines = ['%s: %d cells (%d movable, %d macros), %d nets, %d IO pins, %s'
+             % (d.manifest['design'], c['cells'], c['movable'], c['macros'], c['nets'], n_io,
+                '%d die(s)' % d.num_dies if d.die_box is not None else 'no die outline')]
+    if d.die_box is not None:
+        util = d.utilization()
+        for k in range(d.num_dies):
+            die, core = d.die_box[k].tolist(), d.core_box[k].tolist()
+            rows = 'no rows'
+            if d.row_h is not None:
+                hs = sorted({round(h, 4) for h in d.row_h[d.row_die == k].tolist()})
+                rows = '%d rows (height %s um)' % (int((d.row_die == k).sum()), '/'.join('%g' % h for h in hs))
+            lines.append('  die %d: %.2f x %.2f um, core (%.2f, %.2f)-(%.2f, %.2f), %s, util %.1f%%'
+                         % (k, die[2] - die[0], die[3] - die[1], *core, rows, 100 * util[k]))
+    unplaced = int((~d.placed).sum())
+    if unplaced:
+        hint = " (d.restore('reference') restores the kept placement)" if 'reference' in d.snapshots else ''
+        lines.append('  %d cells unplaced%s' % (unplaced, hint))
+    if d.io_dir is not None and len(d.io_dir):
+        n = torch.bincount(d.io_dir, minlength=4).tolist()
+        lines.append('  IO: ' + ', '.join('%d %s' % (n[i], d.IO_DIRS[i].lower()) for i in range(4) if n[i]))
+    lines.append('  facts: ' + ', '.join('%s<%s>' % (k, v) for k, v in sorted(d.facts.items())))
+    lines.append('  can do: ' + ', '.join(d.capabilities()))
+    return '\n'.join(lines)
 
 
 def handoff_command(d, out_def, run_dir=None):

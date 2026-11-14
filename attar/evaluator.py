@@ -288,27 +288,24 @@ class Evaluator:
         return res
 
     # -- report -------------------------------------------------------------------------------------------------------
+    # metric -> its value in a report (plain Python numbers and dicts; maps left out)
+    REPORT = {
+        'hpwl': lambda ev, pos: ev.hpwl(pos).item(),
+        'star_wirelength': lambda ev, pos: ev.star_wirelength(pos).item(),
+        'steiner_wirelength': lambda ev, pos: ev.steiner_wirelength(pos).item(),
+        'rudy': lambda ev, pos: {k: v for k, v in ev.rudy(pos).items() if k != 'map'},
+        'density_overflow': lambda ev, pos: ev.density_overflow(pos),
+        'legality': lambda ev, pos: ev.legality(pos),
+        'timing': lambda ev, pos: ev.d.timing(pos).summary(),
+        'gr_overflow': lambda ev, pos: ev.d.gr_overflow(pos),
+    }
+
     def evaluate(self, pos=None, metrics=('hpwl',)):
         """A report: metric values plus what they rest on (fidelity, provenance of the facts used)."""
         out = {}
         for m in metrics:
             self._require(m, pos)
-            if m == 'hpwl':
-                out[m] = self.hpwl(pos).item()
-            elif m == 'star_wirelength':
-                out[m] = self.star_wirelength(pos).item()
-            elif m == 'steiner_wirelength':
-                out[m] = self.steiner_wirelength(pos).item()
-            elif m == 'rudy':
-                out[m] = {k: v for k, v in self.rudy(pos).items() if k != 'map'}
-            elif m == 'density_overflow':
-                out[m] = self.density_overflow(pos)
-            elif m == 'legality':
-                out[m] = self.legality(pos)
-            elif m == 'timing':
-                out[m] = self.d.timing(pos).summary()
-            elif m == 'gr_overflow':
-                out[m] = self.d.gr_overflow(pos)
+            out[m] = self.REPORT[m](self, pos)
         man = self.d.manifest
         out['units'] = 'Bookshelf units' if man.get('units', '').startswith('Bookshelf') else 'um'
         out['fidelity'] = man.get('fidelity')

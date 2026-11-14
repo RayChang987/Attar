@@ -13,6 +13,7 @@ import json
 import re
 import math
 import os
+import sys
 import warnings
 
 import numpy as np
@@ -1128,6 +1129,34 @@ class TimingResult:
     def summary(self):
         return {'wns': self.wns, 'tns': self.tns, 'worst_slack': self.worst_slack, 'setup_violations': self.violations,
                 'endpoints': int(len(self.endpoints)), 'whs': self.whs, 'ths': self.ths, 'hold_violations': self.hold_violations}
+
+    def report(self, endpoints=10, path=True, file=None):
+        """Print (and return) a timing summary: WNS, TNS, violations, hold, the worst endpoints and the worst path.
+        file: where to print (default stdout). Returns summary() plus 'worst_endpoints' and 'worst_path'."""
+        out = file or sys.stdout
+        sm = self.summary()
+        name = self.timer.d.manifest.get('design', '')
+        print('Timing of %s (%s clocks, parasitics: placement estimate)'
+              % (name, ', '.join(self.timer.clock_names) or 'no'), file=out)
+        print('  setup: WNS %.2f ps, TNS %.2f ps, %d of %d endpoints violated (worst slack %.2f ps)'
+              % (sm['wns'], sm['tns'], sm['setup_violations'], sm['endpoints'], sm['worst_slack']), file=out)
+        print('  hold:  WHS %.2f ps, THS %.2f ps, %d violated' % (sm['whs'], sm['ths'], sm['hold_violations']), file=out)
+        worst = []
+        if endpoints:
+            v, i = torch.sort(self.setup)
+            k = int(torch.isfinite(v).sum())
+            for p in i[:min(endpoints, k)].tolist():
+                worst.append((self._pin_name(p), float(self.setup[p]), float(self.hold[p])))
+            print('  worst endpoints (setup slack, hold slack):', file=out)
+            for nm, a, b in worst:
+                print('    %-50s %9.2f %9.2f' % (nm, a, b), file=out)
+        pth = self.path() if path and sm['endpoints'] else []
+        if pth:
+            print('  worst path (arrival, slew ps):', file=out)
+            for nm, rf, a, sl in pth:
+                print('    %9.2f %7.2f %s %s' % (a, sl, '^' if rf == 'r' else 'v', nm), file=out)
+        sm.update({'worst_endpoints': worst, 'worst_path': pth})
+        return sm
 
     def _pin_name(self, p):
         d = self.timer.d

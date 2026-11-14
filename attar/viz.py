@@ -45,7 +45,7 @@ def _legal_status(d, pos, own):
     if judged:
         issues, o = d.floorplan_check(None if own else torch.as_tensor(pos, device=d.device, dtype=d.pos.dtype))
         out = o.cpu().numpy()
-    if own and getattr(d, '_placement', False) and 'rows' in d.facts and bool(d.movable.any()):
+    if own and d.has('placement') and 'rows' in d.facts and bool(d.movable.any()):
         from .evaluator import Evaluator
         L = Evaluator(d).legality()
         judged = True
@@ -93,14 +93,145 @@ def _scale_bar(ax, box, unit, t):
     ax.text(x0 + L + 0.012 * W, y, '%g %s' % (L, unit), va='center', ha='left', fontsize=8, color=t['text2'], clip_on=False)
 
 
+def _cell_density(ax, d, t, die_box, pos, size, sel):
+    """The standard cells in `sel` as an area-density image over the die: surface -> cell color, empty bins
+    transparent. A bin spans at least two rows (finer bins alias the row structure into stripes), at most 640 per
+    side."""
+    Wd, Hd = die_box[2] - die_box[0], die_box[3] - die_box[1]
+    hb = float(d.row_h.min()) if d.row_h is not None else max(Wd, Hd) / 640
+    bw = max(max(Wd, Hd) / 640, 2 * hb)
+    bins = (max(16, int(round(Wd / bw))), max(16, int(round(Hd / bw))))
+    xy = pos[sel] + size[sel] / 2
+    img, _, _ = np.histogram2d(xy[:, 0], xy[:, 1], bins=bins, range=[[die_box[0], die_box[2]], [die_box[1], die_box[3]]],
+                               weights=size[sel].prod(1))
+    dens = np.clip(img / ((Wd / bins[0]) * (Hd / bins[1])), 0, 1).T
+
+    def box(a):                                          # 3x3 box blur: the shape of the placement, not bin noise
+        k = np.pad(a, 1, mode='edge')
+        return sum(k[i:i + a.shape[0], j:j + a.shape[1]] for i in range(3) for j in range(3)) / 9
+    occ = box((dens > 0).astype(float))
+    dens = box(dens) / np.maximum(occ, 1e-9)             # density where there are cells; single empty bins close up
+    cmap = LinearSegmentedColormap.from_list('attar_cells', list(t['density']))
+    rgba = cmap(dens)
+    rgba[..., 3] = np.clip(occ * 2 - 0.25, 0, 1)          # soft edges, no pinholes
+    ax.imshow(rgba, origin='lower', extent=[die_box[0], die_box[2], die_box[1], die_box[3]], interpolation='bilinear',
+              zorder=2)
+
+
+def _draw_cells(ax, d, t, s, max_cells):
+    """Standard cells: movable ones as rectangles (an area-density image above max_cells), fixed ones in their own
+    color. Returns legend handles."""
+    legend = []
+    std = s.on & ~s.term & ~s.macro & s.placed
+    fixed_std = std & ((s.flags & (FIXED | PHYSICAL)) != 0)
+    mov_std = std & ~fixed_std
+    if int(mov_std.sum()) > max_cells:
+        _cell_density(ax, d, t, s.die_box, s.pos, s.size, mov_std)
+        legend.append(Patch(fc=t['cell'], ec='none', label='cell density'))
+    elif mov_std.any():
+        thin = int(mov_std.sum()) > 3000
+        ax.add_collection(PolyCollection(_rects(s.pos[mov_std], s.size[mov_std]), facecolors=t['cell'],
+                                         edgecolors='none' if thin else t['surface'], lw=0 if thin else 0.25,
+                                         alpha=0.9, zorder=2))
+        legend.append(Patch(fc=t['cell'], ec='none', label='cells'))
+    if fixed_std.any():
+        ax.add_collection(PolyCollection(_rects(s.pos[fixed_std], s.size[fixed_std]), facecolors=t['fixed'],
+                                         edgecolors='none', zorder=2))
+        legend.append(Patch(fc=t['fixed'], ec='none', label='fixed cells'))
+    return legend
+
+
+def _draw_macros(ax, d, t, s, nets, max_nets, labels):
+    """Macros (outlined in the 'bad' color when outside their core), their names when they fit, and for block-level
+    designs the strongest connections between macros and IO pins. Returns legend handles."""
+    legend = []
+    msel = s.on & s.macro & s.placed
+    n_std_on = int((s.on & ~s.term & ~s.macro).sum())
+    if (nets if nets is not None else n_std_on == 0) and msel.any():
+        io_nodes = np.zeros(len(s.flags), bool)
+        if d.io is not None and len(d.io):
+            io_nodes[d.io.cpu().numpy()] = True
+        cap = max_nets or int(min(400, max(40, 2 * msel.sum())))
+        seg, strength = _connections(d, s.pos, s.size, (msel | (io_nodes & s.placed & s.on)), cap)
+        if len(seg):
+            from matplotlib.colors import to_rgba
+            rgba = np.array([to_rgba(t['net'], 0.12 + 0.55 * v) for v in strength])
+            ax.add_collection(LineCollection(seg, colors=rgba, linewidths=0.35 + 1.6 * strength, capstyle='round',
+                                             zorder=3.5))
+            legend.append(Line2D([], [], color=t['net'], lw=1.2, alpha=0.6, label='connections'))
+    if msel.any():
+        ax.add_collection(PolyCollection(_rects(s.pos[msel], s.size[msel]), facecolors=t['macro'],
+                                         edgecolors=[t['bad'] if o else t['macro_edge'] for o in s.outside[msel]],
+                                         lw=[1.2 if o else 0.6 for o in s.outside[msel]], zorder=3))
+        legend.append(Patch(fc=t['macro'], ec=t['macro_edge'], lw=0.6, label='macros'))
+        if labels if labels is not None else msel.sum() <= 40:
+            names = d.names['cells']
+            for i in np.nonzero(msel)[0]:
+                if s.size[i, 0] < 0.08 * s.W:            # too narrow for its name
+                    continue
+                parts = [x for x in names[i].replace('/', '.').split('.') if x]
+                ax.text(s.pos[i, 0] + s.size[i, 0] / 2, s.pos[i, 1] + s.size[i, 1] / 2, '.'.join(parts[-2:])[-24:],
+                        ha='center', va='center', fontsize=5, color=t['text2'], zorder=4, clip_on=True)
+    return legend
+
+
+def _draw_io(ax, d, t, s):
+    """Placed IO pins of the die, one color per direction. Returns (legend handles, number drawn)."""
+    legend = []
+    io_all = d.io.cpu().numpy() if d.io is not None else np.zeros(0, np.int64)
+    sel = s.placed[io_all] & s.on[io_all] if len(io_all) else np.zeros(0, bool)      # unplaced IO pins are not drawn
+    io = io_all[sel]
+    io_dir = d.io_dir.cpu().numpy()[sel] if len(io_all) else np.zeros(0, np.int64)
+    ms = max(2.0, min(14.0, 2500.0 / max(1, len(io))))
+    for k in range(4):
+        s_ = io[io_dir == k]
+        if len(s_):
+            ax.scatter(s.pos[s_, 0], s.pos[s_, 1], s=ms, c=t['io'][k], marker='o', zorder=7, linewidths=0)
+            legend.append(Line2D([], [], ls='none', marker='o', ms=5, mfc=t['io'][k], mec='none', label='IO %s' % IO_NAMES[k]))
+    return legend, len(io)
+
+
+def _title_block(fig, ax, d, t, s, die, n_io, title, status, issues):
+    """The design's name and numbers over the drawing, 'legal' / 'not legal' with the problems on the right, and a
+    note when unplaced cells are left out."""
+    c = d.manifest['counts']
+    hidden = int((s.on & ~s.placed & ~s.term & ~s.macro).sum())
+    if hidden:
+        ax.text(0.5, 0.5, '%s unplaced cells not drawn' % '{:,}'.format(hidden), transform=ax.transAxes, ha='center',
+                va='center', fontsize=10, color=t['muted'], zorder=8)
+    n_std = int((s.on & ~s.term & ~s.macro).sum())
+    core = s.core
+    core_area = (core[2] - core[0]) * (core[3] - core[1])
+    fill = ('utilization %.0f%%' % (100 * d.utilization()[die].item()) if n_std else
+            'block area %.0f%%' % (100 * float(s.size[s.on & s.macro].prod(1).sum()) / core_area))
+    stats = ['%s cells' % '{:,}'.format(c['cells'])]
+    if c['macros']:
+        stats.append('%s macros' % '{:,}'.format(c['macros']))
+    if n_io:
+        stats.append('%s IO pins' % '{:,}'.format(n_io))
+    num = lambda v: '{:,.0f}'.format(v) if abs(v) >= 1000 else '%.4g' % v  # noqa: E731
+    die_box = s.die_box
+    stats += ['%s x %s %s' % (num(die_box[2] - die_box[0]), num(die_box[3] - die_box[1]), s.unit), fill]
+    if s.own and 'hpwl' in d.capabilities():
+        stats.append('HPWL %s %s' % (num(float(d.hpwl())), s.unit))
+    head = title if title is not None else d.manifest.get('design', '')
+    fig.text(0.04, 0.975, head, ha='left', va='top', fontsize=13, fontweight='bold', color=t['text'])
+    fig.text(0.04, 0.938, '   '.join(stats), ha='left', va='top', fontsize=8.5, color=t['text2'])
+    if status is not None:
+        fig.text(0.96, 0.975, 'legal' if status else 'not legal', ha='right', va='top', fontsize=12, fontweight='bold',
+                 color=t['ok'] if status else t['bad'])
+        if issues:
+            fig.text(0.96, 0.938, ', '.join(issues), ha='right', va='top', fontsize=8.5, color=t['bad'])
+
+
 def plot(d, path=None, die=0, pos=None, max_cells=30_000, rows=None, labels=None, title=None, ax=None, dpi=150,
          theme='light', nets=None, max_nets=None):
     """Draw one die of design d. pos: positions to draw (default d.pos). Above max_cells standard cells, the cells are
     drawn as an area-density image instead of rectangles. rows: draw the row outlines (default: when <= 300 rows).
     labels: macro names (default: when <= 40 macros). theme: 'light' or 'dark'. nets: draw the connections between
     macros and IO pins (default: block-level designs, i.e. no standard cells), the max_nets strongest (default: 2 per
-    macro, 40 to 400). Returns the
-    matplotlib figure; saved to path if given."""
+    macro, 40 to 400). Returns the matplotlib figure; saved to path if given."""
+    from types import SimpleNamespace
     d.require('plot')
     t = THEMES[theme]
     own = pos is None                                    # drawing the design's own placement (HPWL applies)
@@ -108,8 +239,6 @@ def plot(d, path=None, die=0, pos=None, max_cells=30_000, rows=None, labels=None
     pos = (d.pos if pos is None else pos).detach().float().cpu().numpy()
     size = d.size.detach().cpu().numpy()
     flags = d.flags.cpu().numpy(); on = d.cell_die.cpu().numpy() == die
-    unit = d.units
-
     die_box = d.die_box[die].tolist(); core = d.core_box[die].tolist()
     term = (flags & (TERMINAL | ASIDE)) != 0; macro = (flags & MACRO) != 0
     status, issues, outside = _legal_status(d, pos, own)
@@ -121,13 +250,16 @@ def plot(d, path=None, die=0, pos=None, max_cells=30_000, rows=None, labels=None
         view = [min(view[0], float(pos[drawn, 0].min())), min(view[1], float(pos[drawn, 1].min())),
                 max(view[2], float((pos[drawn, 0] + size[drawn, 0]).max())), max(view[3], float((pos[drawn, 1] + size[drawn, 1]).max()))]
     W, H = view[2] - view[0], view[3] - view[1]
+    s = SimpleNamespace(own=own, placed=placed, pos=pos, size=size, flags=flags, on=on, term=term, macro=macro,
+                        outside=outside, die_box=die_box, core=core, W=W, unit=d.units)
     if ax is None:
-        s = 8.0
-        fig, ax = plt.subplots(figsize=(s * min(1.6, max(0.6, W / H)), s * 1.04), dpi=dpi)
+        fs = 8.0
+        fig, ax = plt.subplots(figsize=(fs * min(1.6, max(0.6, W / H)), fs * 1.04), dpi=dpi)
     else:
         fig = ax.figure
     fig.patch.set_facecolor(t['surface']); ax.set_facecolor(t['surface'])
 
+    # outlines: rows, core, die (in the 'bad' color when something sticks out of the core)
     rsel = (d.row_die == die).cpu().numpy() if d.row_box is not None else np.zeros(0, bool)
     if rsel.any() and (rows if rows is not None else rsel.sum() <= 300):
         rb = d.row_box.cpu().numpy()[rsel]
@@ -135,117 +267,22 @@ def plot(d, path=None, die=0, pos=None, max_cells=30_000, rows=None, labels=None
                                          lw=0.4, zorder=1))
     ax.add_patch(Rectangle(core[:2], core[2] - core[0], core[3] - core[1], fill=False, ec=t['core'], ls=(0, (3, 3)),
                            lw=0.7, zorder=5))
-    # the outline (die); in the 'bad' color when something sticks out of the core
     ax.add_patch(Rectangle(die_box[:2], die_box[2] - die_box[0], die_box[3] - die_box[1], fill=False,
                            ec=t['bad'] if outside.any() else t['die'], lw=1.4 if outside.any() else 1.0, zorder=6))
-    std = on & ~term & ~macro & placed
-    fixed_std = std & ((flags & (FIXED | PHYSICAL)) != 0)
-    mov_std = std & ~fixed_std
-    legend = []
-    if int(mov_std.sum()) > max_cells:
-        # area density of the standard cells, surface -> blue -> deep blue; empty bins transparent
-        # a bin spans at least two rows (finer bins alias the row structure into stripes), at most 640 per side
-        Wd, Hd = die_box[2] - die_box[0], die_box[3] - die_box[1]
-        hb = float(d.row_h.min()) if d.row_h is not None else max(Wd, Hd) / 640
-        bw = max(max(Wd, Hd) / 640, 2 * hb)
-        bins = (max(16, int(round(Wd / bw))), max(16, int(round(Hd / bw))))
-        xy = pos[mov_std] + size[mov_std] / 2
-        img, _, _ = np.histogram2d(xy[:, 0], xy[:, 1], bins=bins, range=[[die_box[0], die_box[2]], [die_box[1], die_box[3]]],
-                                   weights=size[mov_std].prod(1))
-        dens = np.clip(img / ((Wd / bins[0]) * (Hd / bins[1])), 0, 1).T
-        def box(a):                                      # 3x3 box blur: the shape of the placement, not bin noise
-            k = np.pad(a, 1, mode='edge')
-            return sum(k[i:i + a.shape[0], j:j + a.shape[1]] for i in range(3) for j in range(3)) / 9
-        occ = box((dens > 0).astype(float))
-        dens = box(dens) / np.maximum(occ, 1e-9)         # density where there are cells; single empty bins close up
-        cmap = LinearSegmentedColormap.from_list('attar_cells', list(t['density']))
-        rgba = cmap(dens)
-        rgba[..., 3] = np.clip(occ * 2 - 0.25, 0, 1)      # soft edges, no pinholes
-        ax.imshow(rgba, origin='lower', extent=[die_box[0], die_box[2], die_box[1], die_box[3]], interpolation='bilinear',
-                  zorder=2)
-        legend.append(Patch(fc=t['cell'], ec='none', label='cell density'))
-    elif mov_std.any():
-        thin = int(mov_std.sum()) > 3000
-        ax.add_collection(PolyCollection(_rects(pos[mov_std], size[mov_std]), facecolors=t['cell'],
-                                         edgecolors='none' if thin else t['surface'], lw=0 if thin else 0.25,
-                                         alpha=0.9, zorder=2))
-        legend.append(Patch(fc=t['cell'], ec='none', label='cells'))
-    if fixed_std.any():
-        ax.add_collection(PolyCollection(_rects(pos[fixed_std], size[fixed_std]), facecolors=t['fixed'], edgecolors='none',
-                                         zorder=2))
-        legend.append(Patch(fc=t['fixed'], ec='none', label='fixed cells'))
-    msel = on & macro & placed
-    n_std_on = int((on & ~term & ~macro).sum())
-    if (nets if nets is not None else n_std_on == 0) and msel.any():
-        io_nodes = np.zeros(len(flags), bool)
-        if d.io is not None and len(d.io):
-            io_nodes[d.io.cpu().numpy()] = True
-        cap = max_nets or int(min(400, max(40, 2 * msel.sum())))
-        seg, st = _connections(d, pos, size, (msel | (io_nodes & placed & on)), cap)
-        if len(seg):
-            from matplotlib.colors import to_rgba
-            rgba = np.array([to_rgba(t['net'], 0.12 + 0.55 * v) for v in st])
-            ax.add_collection(LineCollection(seg, colors=rgba, linewidths=0.35 + 1.6 * st, capstyle='round', zorder=3.5))
-            legend.append(Line2D([], [], color=t['net'], lw=1.2, alpha=0.6, label='connections'))
-    if msel.any():
-        ax.add_collection(PolyCollection(_rects(pos[msel], size[msel]), facecolors=t['macro'],
-                                         edgecolors=[t['bad'] if o else t['macro_edge'] for o in outside[msel]],
-                                         lw=[1.2 if o else 0.6 for o in outside[msel]], zorder=3))
-        legend.append(Patch(fc=t['macro'], ec=t['macro_edge'], lw=0.6, label='macros'))
-        if labels if labels is not None else msel.sum() <= 40:
-            names = d.names['cells']
-            for i in np.nonzero(msel)[0]:
-                if size[i, 0] < 0.08 * W:                # too narrow for its name
-                    continue
-                parts = [x for x in names[i].replace('/', '.').split('.') if x]
-                ax.text(pos[i, 0] + size[i, 0] / 2, pos[i, 1] + size[i, 1] / 2, '.'.join(parts[-2:])[-24:],
-                        ha='center', va='center', fontsize=5, color=t['text2'], zorder=4, clip_on=True)
-    io_all = d.io.cpu().numpy() if d.io is not None else np.zeros(0, np.int64)
-    sel = placed[io_all] & on[io_all] if len(io_all) else np.zeros(0, bool)      # unplaced IO pins are not drawn
-    io = io_all[sel]
-    io_dir = d.io_dir.cpu().numpy()[sel] if len(io_all) else np.zeros(0, np.int64)
-    ms = max(2.0, min(14.0, 2500.0 / max(1, len(io))))
-    for k in range(4):
-        s_ = io[io_dir == k]
-        if len(s_):
-            ax.scatter(pos[s_, 0], pos[s_, 1], s=ms, c=t['io'][k], marker='o', zorder=7, linewidths=0)
-            legend.append(Line2D([], [], ls='none', marker='o', ms=5, mfc=t['io'][k], mec='none', label='IO %s' % IO_NAMES[k]))
+    legend = _draw_cells(ax, d, t, s, max_cells)
+    legend += _draw_macros(ax, d, t, s, nets, max_nets, labels)
+    io_legend, n_io = _draw_io(ax, d, t, s)
+    legend += io_legend
 
     pad = 0.02 * max(W, H)
     ax.set_xlim(view[0] - pad, view[2] + pad); ax.set_ylim(view[1] - 0.07 * H, view[3] + pad)
     ax.set_aspect('equal'); ax.axis('off')
-    _scale_bar(ax, view, unit, t)
+    _scale_bar(ax, view, s.unit, t)
     if legend:                                           # on the scale bar's line, right-aligned under the drawing
         ax.legend(handles=legend, loc='center right', bbox_to_anchor=(view[2], view[1] - 0.035 * H),
                   bbox_transform=ax.transData, ncol=min(len(legend), 6), frameon=False, fontsize=8,
                   labelcolor=t['text2'], handlelength=1.2, columnspacing=1.4, borderaxespad=0, borderpad=0)
-
-    c = d.manifest['counts']
-    hidden = int((on & ~placed & ~term & ~macro).sum())
-    if hidden:
-        ax.text(0.5, 0.5, '%s unplaced cells not drawn' % '{:,}'.format(hidden), transform=ax.transAxes, ha='center',
-                va='center', fontsize=10, color=t['muted'], zorder=8)
-    n_std = int((on & ~term & ~macro).sum())
-    core_area = (core[2] - core[0]) * (core[3] - core[1])
-    fill = ('utilization %.0f%%' % (100 * d.utilization()[die].item()) if n_std else
-            'block area %.0f%%' % (100 * float(size[on & macro].prod(1).sum()) / core_area))
-    stats = ['%s cells' % '{:,}'.format(c['cells'])]
-    if c['macros']:
-        stats.append('%s macros' % '{:,}'.format(c['macros']))
-    if len(io):
-        stats.append('%s IO pins' % '{:,}'.format(len(io)))
-    num = lambda v: '{:,.0f}'.format(v) if abs(v) >= 1000 else '%.4g' % v
-    stats += ['%s x %s %s' % (num(die_box[2] - die_box[0]), num(die_box[3] - die_box[1]), unit), fill]
-    if own and 'hpwl' in d.capabilities():
-        stats.append('HPWL %s %s' % (num(float(d.hpwl())), unit))
-    head = title if title is not None else d.manifest.get('design', '')
-    fig.text(0.04, 0.975, head, ha='left', va='top', fontsize=13, fontweight='bold', color=t['text'])
-    fig.text(0.04, 0.938, '   '.join(stats), ha='left', va='top', fontsize=8.5, color=t['text2'])
-    if status is not None:
-        fig.text(0.96, 0.975, 'legal' if status else 'not legal', ha='right', va='top', fontsize=12, fontweight='bold',
-                 color=t['ok'] if status else t['bad'])
-        if issues:
-            fig.text(0.96, 0.938, ', '.join(issues), ha='right', va='top', fontsize=8.5, color=t['bad'])
+    _title_block(fig, ax, d, t, s, die, n_io, title, status, issues)
     fig.subplots_adjust(left=0.03, right=0.97, top=0.9, bottom=0.02)
     if path:
         fig.savefig(path, dpi=dpi, facecolor=t['surface'])
