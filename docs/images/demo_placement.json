@@ -3,64 +3,118 @@
   {
    "step": "load",
    "out": "",
-   "sec": 0.031110763549804688
-  },
-  {
-   "step": "status",
-   "out": "cva6  (orfs/asap7, fidelity F1)\n  placement target density 0.84 (orfs 3_3 global_place (GPL-0023))\n\nProblem facts\n  \u2705 netlist           def             126963 nets, 420842 pins\n  \u2705 cell_geometry     lef             124618 cells (121394 movable, 8 macros), 101 masters\n  \u2705 pin_offsets       lef\n  \u2705 pin_direction     lef+def         126963 drivers, 293879 sinks; 126255 nets with one driver, 0 with none, 0 with several\n  \u2705 floorplan.die     def             1 die(s), 151.16 x 151.16 um\n  \u2705 floorplan.io      def             962 IO pins placed\n  \u2705 floorplan.macros  def             8 macros placed\n  \u2705 rows              def             1033 rows, height 0.27 um\n  \u274c constraints       -               8 placement blockages in the source, not stored yet\n  \u2705 routing           lef+def\n  \u2705 timing            liberty+sdc+rc\n  \u2705 library           asap7_FF\n  \u274c die_stack         -\n  \u2705 cell_library      lef             8 LEF file(s): asap7_tech_1x_201209.lef, asap7sc7p5t_28_R_1x_220121a.lef, asap7sc7p5t_28_L_1x_220121a.lef\n  \u2705 tracks            def+lef         20 track grids over 10 layers\n  \u2705 pdn               def             14611 wire and 39697 via shapes on M1, M2, M3\n  \u2705 def_frame         def             PDN, pins, fixed cells of the source DEF, kept verbatim (10793 kB)\n\nSolution state\n  \u274c placement         121394 movable cells unplaced  (snapshots: reference)\n  \u2705 floorplan         legal (checked now: macros in place and apart, IO pins in the die)\n\nCapabilities\n  \u274c evaluate HPWL                           needs placement\n  \u2705 WA wirelength on given positions\n  \u274c size the die for a utilization          the floorplan is given (die, rows and PDN drawn); only the cells are to place\n  \u2705 IO pin placement\n  \u2705 macro placement\n  \u2705 cell placement (global + legalization)\n  \u274c global routing                          needs placement\n  \u2705 static timing analysis\n  \u2705 gate sizing (resize)\n  \u274c global-routing overflow (GROV)          needs placement\n  \u2705 write a DEF (source frame + IR)\n  \u2705 plot the design\n\n  -> only a placement is missing: place the design (or restore a snapshot), then d.export(\"out.def\")\n",
-   "sec": 0.06287074089050293
-  },
-  {
-   "step": "floorplan",
-   "out": "",
-   "sec": 0.4182734489440918
+   "sec": 0.027372121810913086
   },
   {
    "step": "place",
-   "out": "  place: GP 476 it (1.28s), LG (1.13s), HPWL 4.929e+05 (GP 4.524e+05), legal True, 2.43s\n",
-   "sec": 2.436444044113159
+   "out": "  place: GP 476 it (1.30s), LG (1.11s), HPWL 4.935e+05 (GP 4.525e+05), legal True, 2.42s\n",
+   "sec": 2.4202873706817627
   },
   {
-   "step": "placed",
+   "step": "wirelength",
    "out": "",
-   "sec": 0.39221954345703125
+   "sec": 0.6868400573730469
   },
   {
-   "step": "export",
-   "out": "{'pins': 0, 'die': 0, 'rows': 0, 'tracks': 0, 'components': 121394, 'nets': 126963}\n",
-   "sec": 1.4075689315795898
+   "step": "report",
+   "out": "Timing of cva6 (main_clk clocks, parasitics: placement estimate)\n  setup: WNS -195.42 ps, TNS -85695.23 ps, 1444 of 9032 endpoints violated (worst slack -195.42 ps)\n  hold:  WHS 0.00 ps, THS 0.00 ps, 0 violated\n",
+   "sec": 3.0585668087005615
+  },
+  {
+   "step": "slack",
+   "out": "",
+   "sec": 0.22901463508605957,
+   "res": {
+    "nets": 114282,
+    "negative": 15090
+   }
+  },
+  {
+   "step": "weights",
+   "out": "",
+   "sec": 0.0003495216369628906,
+   "res": {
+    "weighted": 11428
+   }
+  },
+  {
+   "step": "td",
+   "out": "",
+   "sec": 2.226426839828491,
+   "res": {
+    "legal": true,
+    "hpwl": 526586.625,
+    "hpwl0": 493499.5
+   }
+  },
+  {
+   "step": "report_td",
+   "out": "Timing of cva6 (main_clk clocks, parasitics: placement estimate)\n  setup: WNS -74.94 ps, TNS -5082.42 ps, 312 of 9032 endpoints violated (worst slack -74.94 ps)\n  hold:  WHS -2.49 ps, THS -28.18 ps, 24 violated\n",
+   "sec": 0.20710062980651855
+  },
+  {
+   "step": "timing_driven",
+   "out": "",
+   "sec": 0.3813164234161377
   }
  ],
- "ariane133": [
+ "swerv": [
   {
    "step": "load",
    "out": "",
-   "sec": 0.04042220115661621
-  },
-  {
-   "step": "status",
-   "out": "ariane  (pa_pdn/ns3k, fidelity F1)\n\nProblem facts\n  \u2705 netlist           def             185686 nets, 626661 pins\n  \u2705 cell_geometry     lef             163183 cells (163050 movable, 133 macros), 25 masters\n  \u2705 pin_offsets       lef\n  \u2705 pin_direction     lef+def         185683 drivers, 440978 sinks; 163954 nets with one driver, 0 with none, 0 with several\n  \u2705 floorplan.die     def             1 die(s), 437.71 x 437.95 um\n  \u2705 floorplan.io      def             495 IO pins placed\n  \u2705 floorplan.macros  def             133 macros placed\n  \u2705 rows              def             4546 rows, height 0.48/0.96/1.44 um\n  \u274c constraints       -\n  \u2705 routing           lef+def\n  \u2705 timing            liberty+sdc+rc\n  \u2705 library           ns3k_0V7_27C\n  \u274c die_stack         -\n  \u2705 cell_library      lef             3 LEF file(s): i3dPDK_NS3K_5T_tech_unidir_dir.lef, NS3K_5T_cells.lef, fakeram45_256x16.lef\n  \u2705 tracks            def+lef         34 track grids over 17 layers\n  \u2705 pdn               def             3090 wire and 125225 via shapes on M0, M1, M2\n  \u2705 def_frame         def             PDN, pins, fixed cells of the source DEF, kept verbatim (8579 kB)\n\nSolution state\n  \u274c placement         163050 movable cells unplaced  (snapshots: none)\n  \u2705 floorplan         legal (checked now: macros in place and apart, IO pins in the die)\n\nCapabilities\n  \u274c evaluate HPWL                           needs placement\n  \u2705 WA wirelength on given positions\n  \u274c size the die for a utilization          the floorplan is given (die, rows and PDN drawn); only the cells are to place\n  \u2705 IO pin placement\n  \u2705 macro placement\n  \u2705 cell placement (global + legalization)\n  \u274c global routing                          needs placement\n  \u2705 static timing analysis\n  \u2705 gate sizing (resize)\n  \u274c global-routing overflow (GROV)          needs placement\n  \u2705 write a DEF (source frame + IR)\n  \u2705 plot the design\n\n  -> only a placement is missing: place the design (or restore a snapshot), then d.export(\"out.def\")\n",
-   "sec": 0.028437137603759766
-  },
-  {
-   "step": "floorplan",
-   "out": "",
-   "sec": 0.11389684677124023
+   "sec": 0.020436525344848633
   },
   {
    "step": "place",
-   "out": "  place: GP 564 it (2.42s), LG (2.33s), HPWL 1.265e+06 (GP 1.155e+06), legal True, 4.77s\n",
-   "sec": 4.765728235244751
+   "out": "  place: GP 513 it (1.24s), LG (0.72s), HPWL 5.055e+05 (GP 4.852e+05), legal True, 1.98s\n",
+   "sec": 1.9764268398284912
   },
   {
-   "step": "placed",
+   "step": "wirelength",
    "out": "",
-   "sec": 0.33742833137512207
+   "sec": 0.37369799613952637
   },
   {
-   "step": "export",
-   "out": "{'pins': 0, 'die': 0, 'rows': 0, 'tracks': 0, 'components': 163050, 'nets': 185686}\n",
-   "sec": 1.7620680332183838
+   "step": "report",
+   "out": "Timing of swerv (clk clocks, parasitics: placement estimate)\n  setup: WNS -204.85 ps, TNS -39541.57 ps, 823 of 12085 endpoints violated (worst slack -204.85 ps)\n  hold:  WHS 0.00 ps, THS 0.00 ps, 0 violated\n",
+   "sec": 1.5024359226226807
+  },
+  {
+   "step": "slack",
+   "out": "",
+   "sec": 0.2304847240447998,
+   "res": {
+    "nets": 90848,
+    "negative": 2878
+   }
+  },
+  {
+   "step": "weights",
+   "out": "",
+   "sec": 0.0002636909484863281,
+   "res": {
+    "weighted": 9084
+   }
+  },
+  {
+   "step": "td",
+   "out": "",
+   "sec": 1.870840311050415,
+   "res": {
+    "legal": true,
+    "hpwl": 511161.625,
+    "hpwl0": 505492.5625
+   }
+  },
+  {
+   "step": "report_td",
+   "out": "Timing of swerv (clk clocks, parasitics: placement estimate)\n  setup: WNS -116.78 ps, TNS -1182.38 ps, 58 of 12085 endpoints violated (worst slack -116.78 ps)\n  hold:  WHS 0.00 ps, THS 0.00 ps, 0 violated\n",
+   "sec": 0.20185160636901855
+  },
+  {
+   "step": "timing_driven",
+   "out": "",
+   "sec": 0.389298677444458
   }
  ]
 }

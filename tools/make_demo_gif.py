@@ -2,8 +2,9 @@
 """Render the README demos: code typed into an editor and run, its real output (recorded with --record, timings
 included) in a terminal, the plots it writes in the pane on the right.
 
-  placement   docs/images/demo_placement.gif: after_fp designs (cva6, then ariane133): the floorplan as the flow made
-              it, then d.place()
+  placement   docs/images/demo_placement.gif: timing-driven placement written by the user (examples/timing_driven.py)
+              on two ASAP7 designs (cva6, then swerv): place for wirelength, weight the nets by their slack as OpenROAD's
+              gpl does, place again
   floorplan   docs/images/demo_floorplan.gif: before_fp/gsrc_hard/n100 at 85% block area: d.floorplan() (GP + LP
               legalization: macros stick out, not legal), then d.floorplan(..., packing=True) (B*-tree: legal)
 
@@ -24,21 +25,28 @@ G, R, W, D, Y, B = '#5f7f1e', '#b8323f', '#2b211c', '#a39486', '#b8650f', '#8e4b
 
 DEMOS = {
     'placement': dict(
-        file='quickstart_placement.py',
+        file='timing_driven.py',
         code='''import attar
-
 d = attar.load('%s', device='cuda')
-d.status()                   # what it has, what it can do
-d.plot('floorplan.png')      # die, macros, IO pins, PDN: given
-
-d.place()                    # global placement + legalization
-d.plot('placed.png')
-d.export('placed.def')       # a DEF for your own flow
+d.place()                                 # wirelength only
+d.plot('wirelength.png')
+d.timing_report(endpoints=0, path=False)
+s = d.timing().net_slack()                # every net, as OpenSTA
+v = s[s.isfinite()].sort().values
+v = v[:len(v) // 10]                      # OpenROAD gpl: worst 10%%
+lo, hi = v[len(v) // 50], v[-1]           # and its weight ramp
+w = d.n_weight
+d.n_weight = w * (1 + 4 * ((hi - s) / (hi - lo)).clamp(0, 1))
+d.place(verbose=False)                    # timing-driven
+d.n_weight = w
+d.timing_report(endpoints=0, path=False)
+d.plot('timing_driven.png')
 ''',
-        cases=[('cva6', 'after_fp/orfs_asap7/cva6'), ('ariane133', 'after_fp/ns3k_pl_u80/ariane133')],
-        line={'load': 2, 'status': 3, 'floorplan': 4, 'place': 6, 'placed': 7, 'export': 8},
-        plots={'floorplan': 'floorplan.png', 'placed': 'placed.png'},      # step -> the file it writes
-        busy=('place', 'placing'),
+        cases=[('cva6', 'after_fp/orfs_asap7/cva6'), ('swerv', 'after_fp/orfs_asap7/swerv')],
+        line={'load': 1, 'place': 2, 'wirelength': 3, 'report': 4, 'slack': 5, 'weights': 10, 'td': 11,
+              'report_td': 13, 'timing_driven': 14},
+        plots={'wirelength': 'wirelength.png', 'timing_driven': 'timing_driven.png'},      # step -> the file it writes
+        busy=('td', 'placing'),
         crop_together=False),
     'floorplan': dict(
         file='quickstart_floorplan.py',
@@ -87,15 +95,30 @@ def record(demo):
             steps.append({'step': s, 'out': buf.getvalue(), 'sec': time.time() - t})
             return r
         plot = lambda d, what: d.plot(os.path.join(PANES, '%s_%s.png' % (key, what))).clf()
-        if demo == 'placement':
+        if demo == 'placement':                            # the code of examples/timing_driven.py, step by step
             d = step('load', lambda: attar.load(arg, device='cuda'))
-            step('status', lambda: d.status())
-            step('floorplan', lambda: plot(d, 'floorplan'))
             step('place', lambda: d.place())
-            step('placed', lambda: plot(d, 'placed'))
-            step('export', lambda: print(d.export(os.path.join('/tmp', 'attar_demo_%s.def' % key))))
-            if key == 'cva6':                                   # the README gallery's cva6 is this placement
-                d.plot(os.path.join(IMG, 'gallery', 'cva6.png'), dpi=220).clf()
+            h0 = float(d.hpwl())
+            step('wirelength', lambda: plot(d, 'wirelength'))
+            step('report', lambda: d.timing_report(endpoints=0, path=False))
+            s = step('slack', lambda: d.timing().net_slack())
+            steps[-1]['res'] = {'nets': int(torch.isfinite(s).sum()), 'negative': int((s < 0).sum())}
+
+            def weights():
+                v = s[s.isfinite()].sort().values
+                v = v[:len(v) // 10]
+                lo, hi = v[len(v) // 50], v[-1]
+                w = d.n_weight
+                d.n_weight = w * (1 + 4 * ((hi - s) / (hi - lo)).clamp(0, 1))
+                return w, len(v)
+            w, nw = step('weights', weights)
+            steps[-1]['res'] = {'weighted': nw}
+            step('td', lambda: d.place(verbose=False))
+            d.n_weight = w
+            steps[-1]['res'] = {'legal': bool(attar.Evaluator(d).legality()['legal']), 'hpwl': float(d.hpwl()),
+                                'hpwl0': h0}
+            step('report_td', lambda: d.timing_report(endpoints=0, path=False))
+            step('timing_driven', lambda: plot(d, 'timing_driven'))
         else:
             name = 'before_fp/gsrc_hard/n100'
             d = step('load', lambda: attar.load(name, device='cuda'))
@@ -113,31 +136,30 @@ def record(demo):
 
 
 def terminal_placement(steps, key):
-    """(text, color, step) lines: the real output, the status block trimmed to its key lines. step: the code step that
-    printed the line (its code line is highlighted; plot steps make the plot appear)."""
+    """(text, color, step) lines: the real output, the timing reports trimmed to their setup / hold lines. step: the
+    code step that printed the line (its code line is highlighted; plot steps make the plot appear)."""
     S = {s['step']: s for s in steps}
-    L = [('$ python quickstart_placement.py', B, 'load')]
-    st = S['status']['out'].splitlines()
-    L.append((st[0], W, 'status'))
-    for line in st:
-        if 'placement target density' in line:
-            L.append(('  ' + line.strip().split(' (')[0], W, 'status'))
-    for k in ('netlist', 'cell_geometry', 'floorplan.macros', 'pdn', 'placement'):
-        for line in st:
-            if line.strip()[2:].strip().startswith(k + ' '):
-                ok = line.strip().startswith('✅')
-                body = ' '.join(line.strip()[1:].split()).split('  (')[0]
-                L.append(('  %s %s' % ('✓' if ok else '✗', body), G if ok else R, 'status')); break
-    L.append(('  ' + [ln for ln in st if ln.strip().startswith('->')][-1].strip().split(':')[0], D, 'status'))
-    L.append(('  plot       %.2f s   -> floorplan.png' % S['floorplan']['sec'], Y, 'floorplan'))
-    p = S['place']['out'].strip().replace('place: ', '')
-    L.append(('  ' + p[:88], W, 'place'))
-    ex = eval(S['export']['out'].strip())
-    L.append(('  place      %.2f s   (%dk cells, legal incl. power rails, PDN)' % (S['place']['sec'], ex['components'] // 1000),
-              Y, 'place'))
-    L.append(('  plot       %.2f s   -> placed.png' % S['placed']['sec'], Y, 'placed'))
-    L.append(('  export     %.2f s   -> placed.def (%d cells, %d nets)' % (S['export']['sec'], ex['components'], ex['nets']),
-              Y, 'export'))
+    L = [('$ python timing_driven.py', B, 'load')]
+    L.append(('  ' + S['place']['out'].strip().replace('place: ', '')[:88], W, 'place'))
+    L.append(('  plot       %.2f s   -> wirelength.png' % S['wirelength']['sec'], Y, 'wirelength'))
+
+    def report(stp):
+        for line in S[stp]['out'].splitlines():
+            t = line.strip()
+            if t.startswith('setup:'):
+                L.append(('  ' + t.split(' (worst')[0], R if '-' in t.split(',')[0] else G, stp))
+            elif t.startswith('hold:'):
+                L.append(('  ' + t, D, stp))
+    report('report')
+    r = S['slack']['res']
+    L.append(('  net_slack  %.3f s  -> %d nets timed, %d with negative slack' % (S['slack']['sec'], r['nets'], r['negative']),
+              Y, 'slack'))
+    L.append(('  weights    1 .. 5 on the worst %d nets (10%%)' % S['weights']['res']['weighted'], Y, 'weights'))
+    r = S['td']['res']
+    L.append(('  place      %.2f s   timing-driven, legal %s, HPWL %.4g (%+.1f%%)'
+              % (S['td']['sec'], r['legal'], r['hpwl'], 100 * (r['hpwl'] / r['hpwl0'] - 1)), Y, 'td'))
+    report('report_td')
+    L.append(('  plot       %.2f s   -> timing_driven.png' % S['timing_driven']['sec'], Y, 'timing_driven'))
     return L
 
 

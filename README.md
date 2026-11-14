@@ -8,7 +8,7 @@ Place and evaluate a 100k-cell design in seconds.
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
 [![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](docs/validation/orfs_check.md)
-[![Tests](https://img.shields.io/badge/tests-91%20passing-5f7f1e?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/tests-95%20passing-5f7f1e?style=flat-square)](tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
 [Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
@@ -52,6 +52,7 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 | **HPWL** | `ev.hpwl` | OpenROAD's HPWL from its database; 23 ORFS designs (ASAP7, Nangate45) up to 1.05M cells | within **0.00002%** on every design ([table](docs/validation/orfs_check.md)) |
 | **Legality** | `ev.legality` | OpenROAD `check_placement` | same verdict on all **23** ORFS designs and the **62** NS3K floorplans OpenROAD can check; placements broken by half a site rejected by both |
 | **Timing** | `d.timing()` | OpenSTA after `estimate_parasitics -placement`; 30 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells | WNS median error **0.06-0.20%**, max **1.19%**; hold slack MAE at most 2.6 ps; 5-30x faster than OpenSTA |
+| **Pin and net slack** | `d.timing().pin_slack()`, `.net_slack()` | OpenSTA's `slack_max` of every pin; 8 designs (ASAP7, Nangate45) up to 384k pins | Pearson at least **0.9995**; on the pins with negative slack, MAE at most **1.03 ps**; 7-32 ms after a timing run |
 | **Timing after sizing** | `d.resize` + `d.timing()` | OpenROAD `replace_cell` + OpenSTA, 20% of the cells swapped at random; 16 designs | WNS error at most **0.23%**, TNS at most 0.37% |
 | **Global routing OVF** | `d.gr_overflow()` | OpenROAD's gcell capacities and global route; 13 ORFS designs | capacities exact without macros, within **0.16%** with them; ranks designs as OpenROAD does (Spearman **0.97**); a pre-route estimate: reads mild congestion high and heavy congestion low |
 | **Steiner wirelength, RUDY, density overflow** | `ev.steiner_wirelength`, `ev.rudy`, `ev.density_overflow` |  | |
@@ -72,13 +73,14 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 
 <div align="center">
 
-<img src="docs/images/demo_placement.gif" alt="Placement mode: eight lines of Python run on cva6 and ariane133: load, plot the floorplan, place, plot the placement, export" width="920">
+<img src="docs/images/demo_placement.gif" alt="Timing-driven placement written in fifteen lines of Python, run on cva6 and swerv: place for wirelength, time it, weight the nets by their slack as OpenROAD's global placement does, place again, time it" width="920">
 
-<sub><b>Placement mode</b> (<code>after_fp</code>). Real runs on an RTX 3080 Ti, the same code on two designs. The
-floorplan comes as the flow made it; only the cells are placed. <b>cva6</b> (ASAP7, ORFS global placement stage): 121k
-cells around 8 SRAMs, legal in 2.4 s; handed back to ORFS it routes with 0 DRC and 7.4% less wire than ORFS's own
-placement. <b>ariane133</b> (NS3K, Innovus floorplan at 80% std-cell density): 163k cells around 133 SRAMs, legal in
-4.8 s.</sub>
+<sub><b>Your algorithm, in fifteen lines</b> (<a href="examples/timing_driven.py">examples/timing_driven.py</a>). Real
+runs on an RTX 3080 Ti, the same code on two ASAP7 designs: place for wirelength, take every net's slack
+(<code>net_slack()</code>, as OpenSTA's), weight the worst 10% of the nets from 1 to 5 by criticality as OpenROAD's
+timing-driven global placement does, place again. <b>cva6</b> (121k cells, 8 SRAMs): WNS -195 to -75 ps, TNS
+-85.7k to -5.1k ps, HPWL +6.7%, in 2.2 s. <b>swerv</b> (103k cells): WNS -205 to -117 ps, TNS -39.5k to -1.2k ps,
+HPWL +1.1%, in 1.9 s. Both legal.</sub>
 
 <img src="docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)" width="920">
 
