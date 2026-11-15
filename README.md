@@ -3,7 +3,7 @@
 <img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/logo.png" alt="Attar: the fast loop for physical design" width="640">
 
 Diverse P&R benchmarks, distilled into one plug-and-play PyTorch environment on the GPU.<br>
-Place and evaluate a 100k-cell design in seconds.
+Evolve placement and timing-optimization algorithms in minutes, not days.
 
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
