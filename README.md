@@ -21,7 +21,7 @@ Place and evaluate a 100k-cell design in seconds.
 ## Install
 
 ```bash
-pip install -U pip      # pip older than 21.3 cannot read pyproject.toml and installs a package named UNKNOWN
+pip install -U pip      # an old pip (e.g. 20.0, Ubuntu 20.04) installs a package named UNKNOWN
 pip install git+https://github.com/RayChang987/Attar
 ```
 
