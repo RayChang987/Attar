@@ -10,7 +10,7 @@ ROUTING_LAYER_ADJUSTMENT where the design comes from ORFS).
 capacity(d) rebuilds OpenROAD's grid and capacities from the IR (GlobalRouter: initGrid, computeGCellCapacity,
 computeObstructionsAdjustments, applyObstructionAdjustment + initBlockedIntervals, the global layer adjustment; the
 rules gsta's FastRoute port reproduces): gcells of 15 x the median M2-M4 track pitch, each edge's capacity the tracks
-of its layer inside the gcell strip, minus what instance pins / OBS (at the current placement) and special nets block,
+of its layer inside the gcell strip, minus what instance pins / OBS (at the placement evaluated) and special nets block,
 times (1 - adjustment). overflow(d) puts RUDY demand on that grid, per direction, and reports the share of gcell edges
 whose demand exceeds their capacity (GROV).
 """
@@ -268,9 +268,10 @@ def grid(d):
             'die': (x0, y0, x1, y1), 'horizontal': horiz}
 
 
-def capacity(d, adjustment=None, layers=None):
+def capacity(d, adjustment=None, layers=None, pos=None):
     """Per layer, the capacity of every gcell edge as OpenROAD computes it: (g, h3 [L][ny][nx-1], v3 [L][ny-1][nx])
-    (layer L = names['layers'][L]; outside the routing range 0). adjustment / layers override the manifest's."""
+    (layer L = names['layers'][L]; outside the routing range 0). adjustment / layers override the manifest's; pos:
+    the placement whose instance pins and OBS block (default the design's)."""
     a, names = d.raw, d.names
     r = d.manifest.get('routing') or {}
     lay = layers or r.get('layers') or [names['layers'][1], names['layers'][-1]]
@@ -306,11 +307,11 @@ def capacity(d, adjustment=None, layers=None):
             h3[l] = cap[:, None]
         else:
             v3[l] = cap[None, :]
-    # obstructions (computeObstructionsAdjustments): instances' pin / OBS shapes at the current placement (macro OBS
+    # obstructions (computeObstructionsAdjustments): instances' pin / OBS shapes at the placement evaluated (macro OBS
     # extended), special nets; edges they cover go to 0 now, their partially blocked intervals are kept; then the
     # transition layers are halved over macros; then the intervals cost their tracks (initBlockedIntervals)
     t, _ = st.load(os.path.join(d.path, 'routing.safetensors'))
-    rects, macro_obs = _obstructions(d, t, lo, hi, horiz)
+    rects, macro_obs = _obstructions(d, t, lo, hi, horiz, pos)
     hint, vint = _apply_obstructions(rects, h3, v3, g, horiz, pitch)
     _transition_layers(t, macro_obs, h3, v3, g, horiz, pitch, hi)
     _blocked_intervals(hint, vint, h3, v3, pitch)
@@ -344,8 +345,8 @@ def _intersect(rs1, rs2, chunk=1 << 21):
     return out
 
 
-def _obstructions(d, t, lo, hi, horiz):
-    """GlobalRouter::findInstancesObstructions and findNetsObstructions at the current placement:
+def _obstructions(d, t, lo, hi, horiz, pos=None):
+    """GlobalRouter::findInstancesObstructions and findNetsObstructions at pos (default the design's placement):
     ((layer (n,), rect (n, 4), is_macro (n,)) int64 / bool arrays in dbu, {layer: [macro OBS rects]}), rectangles in
     instance order (each instance's shapes in master order), then the special nets. A macro's (CLASS BLOCK) OBS on a
     layer also blocks a layer between two obstructed ones where both overlap, and the routing range's end layer next to
@@ -366,7 +367,8 @@ def _obstructions(d, t, lo, hi, horiz):
         has = np.zeros(len(a['m_size']), bool); has[rm_m] = True
         cells = np.nonzero((cm >= 0) & has[np.maximum(cm, 0)])[0]
         if len(cells):
-            pos = np.rint(d.pos[torch.as_tensor(cells, device=d.pos.device)].double().cpu().numpy() * d.dbu).astype(np.int64)
+            P = d.pos if pos is None else pos
+            pos = np.rint(P[torch.as_tensor(cells, device=P.device)].detach().double().cpu().numpy() * d.dbu).astype(np.int64)
             ori = d.orient.cpu().numpy()[cells]
             msz = a['m_size'].astype(np.int64); mcls = a['m_class']
             o = np.argsort(rm_m, kind='stable'); rs = np.searchsorted(rm_m[o], np.arange(len(msz) + 1))
@@ -695,7 +697,7 @@ def overflow(d, pos=None, adjustment=None, layers=None, maps=False):
     """Global-routing overflow (GROV) estimated with RUDY on OpenROAD's grid and capacities: the share of gcell edges
     (horizontal and vertical) whose RUDY demand exceeds their capacity, in %, with per-direction values, the total
     overflow (tracks) and the worst edge utilization. maps=True adds the demand and capacity maps."""
-    g, h3, v3 = capacity(d, adjustment, layers)
+    g, h3, v3 = capacity(d, adjustment, layers, pos)       # pins and OBS where pos puts the instances
     dh, dv = rudy(d, g, pos)
     cap_h, cap_v = h3.sum(0).astype(np.float64), v3.sum(0).astype(np.float64)
     r = edge_overflow(dh, dv, cap_h, cap_v)
