@@ -263,7 +263,6 @@ def gate(tab, slew_in, ctot, c2, rpi, c1, vth, vl, vh, derate, steps=EAGER):
     k2 = torch.where(pia, k2p, 1.0 / k0z); k3 = torch.where(pia, k3p, -k1z)
     k4 = torch.where(pia, k4p, torch.zeros_like(k4p))
     p1 = torch.where(pia, p1p, p1z); p2 = torch.where(pia, p2p, one)
-    vr = vh - vl
 
     def newton(ceff0, order3, k=1):
         """DmpAlg::findDriverParams + newtonRaphson; returns t0, dt, ceff, failed. k: copies of the batch in ceff0."""

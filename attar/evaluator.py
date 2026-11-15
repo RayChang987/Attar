@@ -3,7 +3,7 @@
 The Evaluator is the second main object next to Design. Each metric declares the facts it needs; what can be measured
 follows from what the design has, as for capabilities. Implemented:
   hpwl, star_wirelength, steiner_wirelength (RSMT estimate, see attar/metrics.py), rudy (congestion map),
-  density_overflow (ePlace overflow), legality (rows, sites, overlaps; multi-row aware), timing (attar.sta: WNS,
+  density_overflow (ePlace overflow), legality (rows, sites, overlaps; multi-row aware), timing (attar.timing.sta: WNS,
   TNS, hold, on placement parasitics), gr_overflow (GROV: RUDY demand against OpenROAD's gcell capacities).
 Listed for later: global-route wirelength and overflow, pin access, thermal.
 
@@ -15,7 +15,7 @@ Speed: one HPWL call is ~0.15 ms up to ~1M pins (launch-bound). Exact speed-ups:
 import torch
 
 from . import metrics as M
-from .distill import ASIDE, MACRO, TERMINAL
+from .io.distill import ASIDE, MACRO, TERMINAL
 from .facts import MissingFacts
 from .kernels import Grid, default_bins
 
@@ -242,7 +242,7 @@ class Evaluator:
         # maximum right edge of the earlier objects in the same row
         obj = (~((d.flags & (TERMINAL | ASIDE)) != 0)) & (d.placed if pos is None else torch.ones_like(d.placed))
         y0 = p[:, 1]; y1 = p[:, 1] + d.size[:, 1]
-        from .rails import rows_spanned
+        from .rules.rails import rows_spanned
         rlo, rhi = rows_spanned(ys, hb, y0, y1)                           # every row the object overlaps
         rlo = rlo.clamp(max=R)
         nrow = (rhi - rlo).clamp(min=0) * obj
@@ -263,7 +263,7 @@ class Evaluator:
         same_n = torch.cat([rows[1:] == rows[:-1], torch.zeros(1, dtype=torch.bool, device=self.dev)])
         bad[ids[same_n & (xr.double() > nxt + tol)]] = True
         # inside the rows also means not in a gap between the segments of a row it spans (rows cut around macros)
-        from .rails import row_gaps
+        from .rules.rails import row_gaps
         g_r, g_x0, g_x1 = row_gaps(d, ys)
         in_gap = torch.zeros(len(p), dtype=torch.bool, device=self.dev)
         if len(g_r):
@@ -273,7 +273,7 @@ class Evaluator:
             hitg = (j >= 0) & (g_r[jc] == rows) & (g_x1[jc].double() > xl.double() + tol)
             in_gap[ids[hitg]] = True
         # rail parity (OpenROAD dpl powerCompatible): the cell's rails, flipped by its orientation, against the rows
-        from . import rails as RL
+        from .rules import rails as RL
         RI = RL.info(d, (ys, RL.base_rows(d)[5]))
         wrong_rail = torch.zeros(len(p), dtype=torch.bool, device=self.dev)
         if RI['known']:
@@ -291,7 +291,7 @@ class Evaluator:
                'off_site': int((mv & inside & ~on_site).sum()), 'overlapping': int((mv & bad).sum())}
         # PDN: signal pins clear of the PG via metal on the pin layers (fact 'pdn', as OpenROAD's check_placement)
         if 'pdn' in self.d.facts:
-            from . import pdn
+            from .rules import pdn
             res['pdn_blocked'] = int((pdn.conflicts(self.d, pos=p) & mv).sum())
         res['legal'] = res['off_row'] == res['outside_rows'] == res['off_site'] == res['overlapping'] == res['wrong_rail'] \
             == res.get('pdn_blocked', 0) == 0

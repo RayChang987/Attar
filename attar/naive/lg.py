@@ -18,11 +18,11 @@ import time
 import numpy as np
 import torch
 
-from .. import rails as RL
-from ..distill import ASIDE, MACRO, TERMINAL
-from ..rails import base_rows as _base_rows
+from ..rules import rails as RL
+from ..io.distill import ASIDE, MACRO, TERMINAL
+from ..rules.rails import base_rows as _base_rows
 from .rowops import BIG, _first, _locate, _pack, _segment_broadcast, _segments
-from .. import pdn as PDN
+from ..rules import pdn as PDN
 from .space import _Space, _fill, _improve
 
 
@@ -351,7 +351,7 @@ W_PA = 20.0                    # pin-access penalty of the PDN-aware DP: a cell 
 
 
 def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_disp=0.05, w_mirror=1e-3):
-    """Signal pins clear of the PDN (attar.pdn) by a row-wise dynamic program on the GPU, after the PDN-aware detailed
+    """Signal pins clear of the PDN (attar.rules.pdn) by a row-wise dynamic program on the GPU, after the PDN-aware detailed
     placement refinement of pa_pdn (Xplace pinaccess/dp_refine.py): every single-row movable cell may shift by
     -S..S sites and be mirrored left to right (N <-> FN, FS <-> S: the same rails; only where the LEF SYMMETRY allows
     it), at a cost
@@ -453,7 +453,7 @@ def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_dis
     pos_of = {}
     k_ = 0
     for q, (_, _, c) in enumerate(chains):
-        for t_, j in enumerate(c):
+        for t_, _j in enumerate(c):
             pos_of[(q, t_)] = k_; k_ += 1                  # index into cells / C
     fc = [0] * off[maxl]; fg = [0.0] * off[maxl]
     lo_g = [0.0] * nc; hi_g = [0.0] * nc
@@ -548,7 +548,7 @@ MIRROR_Y = {0: 4, 4: 0, 5: 1, 1: 5}       # N <-> FN, FS <-> S: the same rails, 
 
 
 def _pdn_repair(d, space, mv, cur_x, cur_r, k_mv, wg, allowed_rows, rorient, ys, gx0, sw, placed, max_shift=48, max_window=256):
-    """Cells whose signal pins overlap PDN pin blockages (attar.pdn) move off them, keeping legality:
+    """Cells whose signal pins overlap PDN pin blockages (attar.rules.pdn) move off them, keeping legality:
     1. a shift along their row by the fewest sites, pushing the single-row neighbors it runs into until the row's
        whitespace absorbs it (nothing fixed, multi-row or outside the row segment is pushed); every moved cell must
        be clear of the blockages;

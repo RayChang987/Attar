@@ -143,7 +143,7 @@ def anneal(kx, ky, ubx, uby, width, hpwl=None, moves=200, seed=0, verbose=False)
         T = (float(np.mean(ups)) if ups else 1e-3) / math.log(2)
         alpha = 1e-4 ** (1.0 / budget)
         s = 0
-        for s in range(budget):
+        for s in range(budget):                                       # noqa: B007  (read after the loop)
             T *= alpha
             t2 = neighbour(t)
             if t2 is None:

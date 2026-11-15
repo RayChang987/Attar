@@ -1,15 +1,15 @@
 <div align="center">
 
-<img src="docs/images/logo.png" alt="Attar: the fast loop for physical design" width="640">
+<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/logo.png" alt="Attar: the fast loop for physical design" width="640">
 
 Diverse P&R benchmarks, distilled into one plug-and-play PyTorch environment on the GPU.<br>
 Place and evaluate a 100k-cell design in seconds.
 
-[![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
-[![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](docs/validation/orfs_check.md)
-[![Tests](https://img.shields.io/badge/tests-106%20passing-5f7f1e?style=flat-square)](tests)
-[![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
+[![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/docs/validation/orfs_check.md)
+[![Tests](https://img.shields.io/badge/tests-107%20passing-5f7f1e?style=flat-square)](https://github.com/RayChang987/Attar/tree/main/tests)
+[![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/LICENSE)
 
 [Install](#install) &nbsp;·&nbsp; [Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
 [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery)
@@ -21,8 +21,7 @@ Place and evaluate a 100k-cell design in seconds.
 ## Install
 
 ```bash
-pip install -U pip      # an old pip (e.g. 20.0, Ubuntu 20.04) installs a package named UNKNOWN
-pip install git+https://github.com/RayChang987/Attar
+pip install attar
 ```
 
 ```python
@@ -30,8 +29,14 @@ import attar
 d = attar.load('after_fp/orfs_asap7/aes', device='cuda')   # downloaded from the zoo on first use
 ```
 
-The designs come from the [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) on the Hugging Face Hub
-(246 designs, 731 MB in all); `attar.zoo(remote=True)` lists them.
+Python 3.8 or newer, with PyTorch (a CUDA GPU for the speed; everything also runs on the CPU). The designs come from
+the [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) on the Hugging Face Hub (246 designs, 731 MB
+in all); `attar.zoo(remote=True)` lists them. The latest code: `pip install git+https://github.com/RayChang987/Attar`.
+
+- The first timing run on a GPU machine compiles the timer's Triton kernels (about two minutes, once); later runs
+  reuse them and take seconds.
+- With `g++` on the path, nets of more than 256 pins get OpenROAD's exact Steiner parasitics (built on first use);
+  without it they fall back to a lumped wire model, with a warning.
 
 ## Why Attar
 
@@ -47,7 +52,7 @@ The designs come from the [Attar zoo](https://huggingface.co/datasets/RayChang98
    stays faithful to the full flows without their overhead: its HPWL equals OpenROAD's to 7 digits,
    its legality equals `check_placement`, its placements route in OpenROAD-flow-scripts with 0 DRC, and HPWL ranks
    placements as routed wirelength does in 951 routed Innovus runs, once they differ by 2% or more
-   ([validation](docs/validation/orfs_check.md)).
+   ([validation](https://github.com/RayChang987/Attar/blob/main/docs/validation/orfs_check.md)).
 4. **GPU-native.** Layouts and design features are tensors on the GPU, so researchers, developers and AI agents
    train, evaluate and debug in the same few lines of Python: exact HPWL of 8.9M pins in 3 ms, a 2.2M-cell design
    placed and legalized in 49 s. An algorithm is a function from tensors to positions: no database
@@ -55,16 +60,16 @@ The designs come from the [Attar zoo](https://huggingface.co/datasets/RayChang98
 
 ## Roadmap
 
-<p align="center"><img src="docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement) and placement (placer, legalizer, PDN-aware refinement), all done. Right, Evaluation: HPWL, global routing OVF and timing done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement) and placement (placer, legalizer, PDN-aware refinement), all done. Right, Evaluation: HPWL, global routing OVF and timing done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
 
 ### Evaluation
 
 Each evaluator against OpenROAD on the same netlist and placement; full tables in
-[docs/validation](docs/validation/timing_routing.md).
+[docs/validation](https://github.com/RayChang987/Attar/blob/main/docs/validation/timing_routing.md).
 
 | Evaluator | Call | Compared with | Accuracy |
 | --- | --- | --- | --- |
-| **HPWL** | `ev.hpwl` | OpenROAD's HPWL from its database; 23 ORFS designs (ASAP7, Nangate45) up to 1.05M cells | within **0.00002%** on every design ([table](docs/validation/orfs_check.md)) |
+| **HPWL** | `ev.hpwl` | OpenROAD's HPWL from its database; 23 ORFS designs (ASAP7, Nangate45) up to 1.05M cells | within **0.00002%** on every design ([table](https://github.com/RayChang987/Attar/blob/main/docs/validation/orfs_check.md)) |
 | **Legality** | `ev.legality` | OpenROAD `check_placement` | same verdict on all **23** ORFS designs and the **62** NS3K floorplans OpenROAD can check; placements broken by half a site rejected by both |
 | **Timing** | `d.timing()` | OpenSTA after `estimate_parasitics -placement`; 31 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells | WNS median error **0.00%** (ORFS) and **0.11%** (NS3K), max **0.34%**; hold slack MAE at most 0.36 ps; 5-30x faster than OpenSTA |
 | **Pin and net slack** | `d.timing().pin_slack()`, `.net_slack()` | OpenSTA's `slack_max` of every pin; 8 designs (ASAP7, Nangate45) up to 384k pins | Pearson at least **0.9995**; on the pins with negative slack, MAE at most **1.03 ps**; 7-32 ms after a timing run |
@@ -89,7 +94,7 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 
 <div align="center">
 
-<img src="docs/images/demo_placement.gif" alt="Timing-driven placement written in fifteen lines of Python, run on cva6 and swerv: place for wirelength, time it, weight the nets by their slack as OpenROAD's global placement does, place again, time it" width="920">
+<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="Timing-driven placement written in fifteen lines of Python, run on cva6 and swerv: place for wirelength, time it, weight the nets by their slack as OpenROAD's global placement does, place again, time it" width="920">
 
 <sub><b>Your algorithm, in fifteen lines</b> (<a href="examples/timing_driven.py">examples/timing_driven.py</a>). Real
 runs on an RTX 3080 Ti, the same code on two ASAP7 designs: place for wirelength, take every net's slack
@@ -98,7 +103,7 @@ timing-driven global placement does, place again. <b>cva6</b> (121k cells, 8 SRA
 -85.7k to -5.1k ps, HPWL +6.7%, in 2.2 s. <b>swerv</b> (103k cells): WNS -205 to -117 ps, TNS -39.5k to -1.2k ps,
 HPWL +1.1%, in 1.9 s. Both legal.</sub>
 
-<img src="docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)" width="920">
+<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)" width="920">
 
 <sub><b>Floorplan mode</b> (<code>before_fp</code>). GSRC <b>n100</b>: 100 hard blocks, no die; Attar sizes one for 85%
 block area, places the IO pins and the macros. GP + LP legalization never overlaps macros, but here 5 stick out of
@@ -126,7 +131,7 @@ Attar measures wirelength, congestion (RUDY, GROV), density, legality and timing
 
 ## How it works
 
-<p align="center"><img src="docs/images/flow.svg" alt="Sources (LEF/DEF, Bookshelf, YAL, GSRC blocks) are distilled into the Attar IR and loaded as a Design on the GPU; attar.naive moves it and adds facts, the Evaluator measures it; export writes a DEF for your own flow (OpenROAD, Innovus, ICC2, ...)" width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/flow.svg" alt="Sources (LEF/DEF, Bookshelf, YAL, GSRC blocks) are distilled into the Attar IR and loaded as a Design on the GPU; attar.naive moves it and adds facts, the Evaluator measures it; export writes a DEF for your own flow (OpenROAD, Innovus, ICC2, ...)" width="100%"></p>
 
 1. **Distill.** A reader turns a benchmark into the Attar IR: integer arrays in a safetensors file, plus a manifest
    that lists which facts the source provides and where each came from. Readers exist for LEF/DEF, Bookshelf, YAL
@@ -141,8 +146,8 @@ Attar measures wirelength, congestion (RUDY, GROV), density, legality and timing
    fixed cells as they were, the cells and nets from the IR (a changed die, IO pins and macros included). Your own
    flow (OpenROAD, Innovus, ICC2, ...) takes it from there.
 
-More: [concepts](docs/concepts.md) · [benchmarks](docs/benchmarks.md) · [API](docs/api.md) ·
-[validation](docs/validation/timing_routing.md)
+More: [concepts](https://github.com/RayChang987/Attar/blob/main/docs/concepts.md) · [benchmarks](https://github.com/RayChang987/Attar/blob/main/docs/benchmarks.md) · [API](https://github.com/RayChang987/Attar/blob/main/docs/api.md) ·
+[validation](https://github.com/RayChang987/Attar/blob/main/docs/validation/timing_routing.md)
 
 ## Gallery
 
@@ -150,8 +155,8 @@ What the Evaluator sees: each view is `d.plot(tiles=...)` on a real run of `atta
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/gallery/eval_grov.png" alt="cva6 after placement, colored by global-routing load on OpenROAD's gcells"></td>
-<td width="50%"><img src="docs/images/gallery/eval_pin_access.png" alt="ariane136 after global placement: cells with a signal pin on the PDN, in stripes along the power grid"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_grov.png" alt="cva6 after placement, colored by global-routing load on OpenROAD's gcells"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_pin_access.png" alt="ariane136 after global placement: cells with a signal pin on the PDN, in stripes along the power grid"></td>
 </tr>
 <tr>
 <td><sub><b>Global-routing overflow</b> (<code>d.gr_overflow()</code>, <code>tiles='gr_overflow'</code>): cva6 (ASAP7)
@@ -162,8 +167,8 @@ placement. 12,165 cells have a signal pin on the PDN's via metal, in stripes alo
 stacks cross the M1 pin layer.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/gallery/eval_placed.png" alt="ariane136 legalized: legal, rails and PDN included"></td>
-<td><img src="docs/images/gallery/fp_n300.png" alt="GSRC n300 floorplanned by B*-tree packing, with the strongest connections between blocks and IO pins"></td>
+<td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_placed.png" alt="ariane136 legalized: legal, rails and PDN included"></td>
+<td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/fp_n300.png" alt="GSRC n300 floorplanned by B*-tree packing, with the strongest connections between blocks and IO pins"></td>
 </tr>
 <tr>
 <td><sub><b>Legality</b> (<code>ev.legality()</code>): the same design legalized in 2.4 s. Rows, sites, overlaps,
@@ -202,7 +207,7 @@ Every reader states which facts it provides, and every engine and metric states 
 - a soft-block benchmark has no cell geometry.
 
 Each can do exactly what its facts allow. Engines add facts with provenance (`placement: naive`), so it is always
-clear which part of a design came from where. See [docs/concepts.md](docs/concepts.md).
+clear which part of a design came from where. See [docs/concepts.md](https://github.com/RayChang987/Attar/blob/main/docs/concepts.md).
 
 ## Acknowledgements
 
@@ -218,5 +223,5 @@ the ASAP7 and Nangate45 platforms. Benchmarks are from the ISPD, ICCAD and GSRC 
 <br><br>
 <sub>Copyright &copy; 2026 RayChang987 &nbsp;·&nbsp; free to use, modify and distribute; see <a href="LICENSE">LICENSE</a></sub>
 <br><br>
-<img src="docs/images/logo.png" alt="Attar" width="180">
+<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/logo.png" alt="Attar" width="180">
 </div>

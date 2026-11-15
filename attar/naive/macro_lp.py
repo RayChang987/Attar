@@ -19,7 +19,6 @@ the least are kept and the region grows by what they need: the macros never over
 
 Solver: HiGHS (scipy.optimize.linprog, dual simplex), on the CPU: the LPs have a few unknowns per macro.
 """
-import math
 import time
 
 import numpy as np

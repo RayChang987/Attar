@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Attar's timer (attar.sta) against OpenSTA in OpenROAD on NS3K designs (zoo after_fp/ns3k), same inputs on both.
+"""Attar's timer (attar.timing.sta) against OpenSTA in OpenROAD on NS3K designs (zoo after_fp/ns3k), same inputs on both.
 
 The NS3K zoo designs are floorplans (no placement), so per design:
   inputs: the kit's x4 LEFs (tech, cells, the design's macros), its Liberty files (NS3K 5T cells, fakeram macros), the
@@ -29,7 +29,8 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import attar  # noqa: E402
-from attar import naive, timing  # noqa: E402
+from attar import naive
+from attar.timing import ir as timing  # noqa: E402
 from orfs_roundtrip import RUNS, orfs, w  # noqa: E402
 from validate_sta import DUMP_TCL, INF, compare  # noqa: E402
 
@@ -133,7 +134,7 @@ def truth(design, out_dir, lefs, libs, def_path, sdc, rc):
         _, sec, wns, tns = line[-1].split()
         json.dump({'seconds': float(sec), 'worst_slack': float(wns), 'tns': float(tns)}, open(meta, 'w'))
     # OpenSTA reports in the first Liberty file's time unit (ns for NS3K): to ps
-    from attar import liberty
+    from attar.io import liberty
     tu = liberty.read(libs[0])['time_unit_ps']
     ep = {}
     for l in open(tsv):
@@ -154,7 +155,7 @@ def edit_recipe(d, max_nets=200, chain=10, clones=50, fanout=16):
     net (edits on a net and pins of the same batch); clones of cells with one output driving >= 4 loads, taking half of
     them; a buffer behind the first input port that drives >= 2 loads. Returns counts."""
     import numpy as np
-    from attar.distill import D_OUT, TERMINAL
+    from attar.io.distill import D_OUT, TERMINAL
     n = {'buffers': 0, 'chained': 0, 'clones': 0, 'port_buffers': 0}
     e = d.edit()
     clk = e.clock_nets()
@@ -253,7 +254,7 @@ def main():
             d.export(def_path)
         ref, meta = truth(design, out, lefs, libs, def_path, sdc, rc)
         sync = torch.cuda.synchronize if dev == 'cuda' else (lambda: None)
-        from attar.sta import Timer
+        from attar.timing.sta import Timer
         T = Timer(d); res = T.run(); sync()
         sec = INF
         for _ in range(5):

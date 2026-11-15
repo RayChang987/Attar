@@ -13,7 +13,7 @@ A Library holds every cell of a set of Liberty files (the first definition of a 
                        sequentials and statetables, sources (name + sha256), units.
 Designs reference a shared bundle per platform and corner (zoo/libraries/<name>) and keep the cells only they have
 (macros) in a local library in their own folder; design_arrays() looks a design's masters up along that chain and
-returns the per-master-pin and per-arc arrays the timer reads (attar.timing.attach writes the same arrays).
+returns the per-master-pin and per-arc arrays the timer reads (attar.timing.ir.attach writes the same arrays).
 """
 import itertools
 import json
@@ -21,12 +21,12 @@ import os
 
 import numpy as np
 
-from . import liberty, st
+from ..io import liberty, st
 
 SCHEMA = 'attar-library/0.1'
-# Liberty pin directions, timing types and senses: attar.timing's codes
-from .timing import LD_NONE, LIB_DIR, S_NON, SENSE_CODE, T_OTHER, TYPE_CODE  # noqa: E402
-from .distill import D_UNKNOWN, LEF_DIR, M_BLOCK, M_CORE, M_OTHER, M_PAD, U_SIGNAL, _USE  # noqa: E402
+# Liberty pin directions, timing types and senses: attar.timing.ir's codes
+from .ir import LD_NONE, LIB_DIR, S_NON, SENSE_CODE, T_OTHER, TYPE_CODE  # noqa: E402
+from ..io.distill import D_UNKNOWN, LEF_DIR, M_BLOCK, M_CORE, M_OTHER, M_PAD, U_SIGNAL, _USE  # noqa: E402
 SEQ_CODE = {'': 0, 'ff': 1, 'latch': 2}
 
 
@@ -85,7 +85,7 @@ class Library:
                     cells[k] = v; cell_thr[k] = lib['thresholds']; cell_file[k] = i
         macros, tech = {}, {'sites': {}, 'layers': [], 'vias': {}}
         if lef_paths:
-            from .lef import read_lef
+            from ..io.lef import read_lef
             read_lef(list(lef_paths), macros, tech)
         layers = [l['name'] for l in tech['layers']] if tech['layers'] else []
         lid = {n: i for i, n in enumerate(layers)}
@@ -153,7 +153,7 @@ class Library:
                     whens.append(arc.get('when', '') or '')
             if cn in macros:
                 m = macros[cn]
-                # LEF geometry in attar.distill's codes (a design adds the cell as distill would have)
+                # LEF geometry in attar.io.distill's codes (a design adds the cell as distill would have)
                 a['lc_size'][c] = (m.w, m.h); a['lc_lef'][c] = 1; lef_class[cn] = m.cls
                 a['lc_class'][c] = {'CORE': M_CORE, 'BLOCK': M_BLOCK, 'PAD': M_PAD}.get(m.cls, M_OTHER)
                 a['lc_sym'][c] = (1 if 'X' in m.sym else 0) | (2 if 'Y' in m.sym else 0) | (4 if 'R90' in m.sym else 0)
@@ -166,7 +166,7 @@ class Library:
                             a['lp_loc'][k] = m.pin_loc[pn]
                         a['lp_layer'][k] = lid.get(m.pin_layer.get(pn), -1)
                         a['lp_lefdir'][k] = LEF_DIR.get(m.pin_dir.get(pn), D_UNKNOWN)
-        from .timing import _pack_tables
+        from .ir import _pack_tables
         K = max([len(t[0]) for arc in arcs for t in arc['tables'].values()]
                 + [len(t[1]) for arc in arcs for t in arc['tables'].values()] + [1])
         ix1, ix2, val, n = _pack_tables(arcs, K)
@@ -246,7 +246,7 @@ class Library:
 
 
 def design_arrays(chain, masters, mpins, m_ptr, used):
-    """The timer's per-design arrays (as attar.timing.attach writes timing.safetensors) for a design's masters, each
+    """The timer's per-design arrays (as attar.timing.ir.attach writes timing.safetensors) for a design's masters, each
     looked up along chain (a list of Library; the first that has a cell wins), its arcs only for the used masters.
     Returns (tensors, functions {master index: {pin: function}}, arc_when {arc index: expr}, missing used masters)."""
     m_ptr = np.asarray(m_ptr, np.int64)
@@ -292,7 +292,7 @@ def design_arrays(chain, masters, mpins, m_ptr, used):
     K = max(int(nn.max()) if len(nn) else 1, 1)
 
     def fit(x, axes):
-        """A table (index or values) at the design's K: cut, or padded as attar.timing._pack_tables pads (indices
+        """A table (index or values) at the design's K: cut, or padded as attar.timing.ir._pack_tables pads (indices
         repeat their last value, values are 0)."""
         for ax in axes:
             k = x.shape[ax]

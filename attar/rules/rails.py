@@ -11,7 +11,7 @@ Codes: 0 unknown, 1 VSS (ground), 2 VDD (power).
 """
 import torch
 
-from .distill import U_GROUND, U_POWER
+from ..io.distill import U_GROUND, U_POWER
 
 UNK, VSS, VDD = 0, 1, 2
 FLIPS_Y = (1, 5)            # S (R180), FS (MX) in deffile.ORIENTS

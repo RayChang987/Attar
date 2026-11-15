@@ -81,7 +81,7 @@ size_categories:
 as safetensors arrays, ready to load onto a GPU in a second or two.
 
 ```bash
-pip install git+https://github.com/RayChang987/Attar
+pip install attar
 ```
 
 ```python
@@ -181,7 +181,7 @@ def pack(zoo, hub, folders):
             out[rel] = os.path.getsize(dst)
     keep = {os.path.join(hub, rel + ('.zst' if compressed(os.path.basename(rel)) else '')) for rel in out}
     keep |= {os.path.join(hub, x) for x in ('index.json', 'README.md')}
-    for dirpath, dirnames, filenames in os.walk(hub, topdown=False):
+    for dirpath, _dirnames, filenames in os.walk(hub, topdown=False):
         if any(part.startswith('.') for part in os.path.relpath(dirpath, hub).split(os.sep)):
             continue                           # .cache/huggingface: hf upload-large-folder's resume state
         for f in filenames:
@@ -222,7 +222,7 @@ def main(root=None, hub=None):
     missing = sorted({k.rpartition('/')[0] for k in designs} - set(SUITES))
     if missing:
         raise SystemExit('describe these suites in SUITES first: %s' % ', '.join(missing))
-    # shared cell libraries (attar.library bundles) the designs reference
+    # shared cell libraries (attar.timing.library bundles) the designs reference
     libraries = {}
     for lj in sorted(glob.glob(os.path.join(zoo, 'libraries', '*', 'library.json'))):
         folder = os.path.dirname(lj)

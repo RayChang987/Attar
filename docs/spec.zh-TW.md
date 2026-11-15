@@ -379,7 +379,7 @@ API 原則：
 - **引擎即字串**：同一環節的不同演算法用 `engine=` 切換；第三方引擎做成選配 extra，例如 `pip install attar[xplace]`。
 - **自己的演算法一個函式就能接**：使用者只要寫一個吃張量、回傳座標的函式，就能用同一評估器與內建 baseline 比較。
 - **比較附解析度**：`attar.evaluate(d)` 回傳指標與保真度標籤；`attar.compare` 回傳相對差距，並依第 7 節實測的解析度判讀為「可信」或「無法判斷」。未經驗證的指標（v0.1 的 RUDY）標「未驗證」，不參與判讀。
-- **回寫只換座標**：`attar.export` 以 manifest 記錄的原始 DEF 為模板（先驗證雜湊），只替換可移動 cell 的座標與方向；fixed cell、tapcell、IO、PDN、netlist 原封不動。來源是 Bookshelf 的設計呼叫 `export` 會明確報錯，並說明原因。
+- **回寫只換座標**：`attar.io.export` 以 manifest 記錄的原始 DEF 為模板（先驗證雜湊），只替換可移動 cell 的座標與方向；fixed cell、tapcell、IO、PDN、netlist 原封不動。來源是 Bookshelf 的設計呼叫 `export` 會明確報錯，並說明原因。
 - **ORFS 注入範例**：文件附一份在 ORFS docker 映像內執行的腳本：把回寫 DEF 的 COMPONENTS 套回 `3_3_place_gp.odb`，接著跑 resize、DP、CTS 與 routing，並收回 routed WL、DRV、WNS、TNS。預設平台是 ASAP7；RosettaStone 吃 ORFS 格式，不另做整合。
 - **評估報告結構化**：輸出欄位命名對齊 METRICS2.1，方便與慢迴圈對照。
 - **三個核心物件：Design、Evaluator、Naive**：Design 是狀態（題目加解答）；Evaluator 量測它；Naive 是每種能力的一套基本引擎，讓 Design 動起來。指標和引擎都宣告需要哪些事實，所以能量什麼、能做什麼由 Design 有什麼決定（`ev.available()`、`ev.missing("timing")`、`d.capabilities()`）。

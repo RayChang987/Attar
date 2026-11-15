@@ -1,14 +1,14 @@
 """Gate sizing on a Design: swap cells to other masters of their equivalence class (drive strengths, threshold-voltage
 flavors), as OpenROAD's replace_cell. Masters the design does not have yet come from its cell library chain
-(attar.timing.chain). Design.library, Design.equivalents and Design.resize call these."""
+(attar.timing.ir.chain). Design.library, Design.equivalents and Design.resize call these."""
 import numpy as np
 import torch
 
 
 def library(d):
-    """The design's cell library chain (attar.timing.chain): its local library (macros), then the shared bundle."""
+    """The design's cell library chain (attar.timing.ir.chain): its local library (macros), then the shared bundle."""
     d.require('resize')
-    from .timing import chain
+    from .ir import chain
     return chain(d.path, d.manifest)
 
 

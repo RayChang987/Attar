@@ -17,7 +17,7 @@ import time
 
 import torch
 
-from ..distill import ASIDE, MACRO, TERMINAL
+from ..io.distill import ASIDE, MACRO, TERMINAL
 from .. import metrics as M
 from ..kernels import Grid, default_bins
 
@@ -58,7 +58,7 @@ def _track_capacity(d, g, ra):
     ['adjustment'] held back), less the layers up to the macros' highest pin layer over the part of a bin macros
     cover."""
     import os
-    from .. import st
+    from ..io import st
     tp, _ = st.load(os.path.join(d.path, 'tech_profile.safetensors'))
     names = d.names['layers']
     rt = d.manifest.get('routing', {})                     # the source flow's own routing resources, when recorded
@@ -350,7 +350,7 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
         a_k1 = (1 + math.sqrt(4 * a_k * a_k + 1)) / 2
         beta = (a_k - 1) / a_k1
         alpha0 = alpha
-        for tries in range(10):                               # backtracking on the Lipschitz estimate
+        for _tries in range(10):                               # backtracking on the Lipschitz estimate
             u1 = torch.maximum(torch.minimum(v - alpha * g_v, hi), lo)
             v_new = torch.maximum(torch.minimum(u1 + beta * (u1 - u), hi), lo)
             f_new, g_new = [t.clone() for t in og(v_new)]

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Attar's timer (attar.sta) against OpenSTA in OpenROAD, on the same netlist and placement.
+"""Attar's timer (attar.timing.sta) against OpenSTA in OpenROAD, on the same netlist and placement.
 
 Per zoo design of after_fp/orfs_<platform> (its reference placement is ORFS's 3_3_place_gp):
   truth: OpenROAD (the ORFS image) reads the run's 3_3_place_gp.odb, the Liberty files the design was distilled with,
          its SDC (2_floorplan.sdc, what ORFS's write_sdc made) and the platform's setRC.tcl, runs
          estimate_parasitics -placement and dumps every endpoint's setup and hold slack (register data pins, output
          ports), WNS and TNS. Cached in orfs_runs/sta/<design>/.
-  attar: the design with timing attached (attar.timing.attach into a scratch copy of the IR unless it has it), timed
+  attar: the design with timing attached (attar.timing.ir.attach into a scratch copy of the IR unless it has it), timed
          at its reference placement.
 Reports per design: endpoints matched, setup / hold slack Pearson, mean |error|, WNS and TNS of both, and how many of
 OpenSTA's worst 1% endpoints Attar also puts in its worst 1%.
@@ -26,7 +26,7 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import attar  # noqa: E402
-from attar import timing  # noqa: E402
+from attar.timing import ir as timing  # noqa: E402
 from orfs_roundtrip import RUNS, base_dir, flow_dir, orfs, run_key, w  # noqa: E402
 
 PLATFORMS = '/OpenROAD-flow-scripts/flow/platforms/'
@@ -114,7 +114,7 @@ def truth(design, plat, libs, sdc, rc):
         _, sec, wns, tns = line[-1].split()
         json.dump({'seconds': float(sec), 'worst_slack': float(wns), 'tns': float(tns)}, open(meta, 'w'))
     # OpenSTA reports in the first Liberty file's time unit (ps for ASAP7, ns for Nangate45): to ps
-    from attar import liberty
+    from attar.io import liberty
     tu = liberty.read(libs[0])['time_unit_ps']
     ep = {}
     for l in open(tsv):
@@ -153,7 +153,7 @@ def truth_def(design, plat, libs, sdc, rc, def_path, out_dir, routing=None):
     if not line:
         raise RuntimeError(log[-3000:])
     _, sec, wns, tns = line[-1].split()
-    from attar import liberty
+    from attar.io import liberty
     tu = liberty.read(libs[0])['time_unit_ps']
     ep = {}
     for l in open(tsv):
@@ -184,7 +184,7 @@ def truth_pins(design, plat, libs, sdc, rc):
             os.remove(path)
         if 'PINS_DONE' not in log:
             raise RuntimeError(log[-3000:])
-    from attar import liberty
+    from attar.io import liberty
     tu = liberty.read(libs[0])['time_unit_ps']
     pins = {}
     for l in open(tsv):
@@ -294,7 +294,7 @@ def main():
                 print('%s: %s' % (design, edits), flush=True)
         else:
             ref, meta = truth(design, a.platform, libs, sdc, rc)
-        from attar.sta import Timer
+        from attar.timing.sta import Timer
         sync = torch.cuda.synchronize if dev == 'cuda' else (lambda: None)
         t = time.time(); T = Timer(d); res = T.run(); sync(); build = time.time() - t   # build + first run (capture)
         sec = INF

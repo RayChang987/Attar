@@ -5,7 +5,7 @@ import unittest
 import torch
 
 from common import need, attar  # noqa: F401
-from attar.distill import FIXED
+from attar.io.distill import FIXED
 
 
 def _overlaps(d):
@@ -45,7 +45,7 @@ class LefDefTest(unittest.TestCase):
 class PinDirectionTest(unittest.TestCase):
     def test_lef_def_every_net_has_one_driver(self):
         import torch
-        from attar.distill import D_IN, D_OUT
+        from attar.io.distill import D_IN, D_OUT
         d = need('after_fp/orfs_asap7/gcd')
         self.assertEqual(d.facts['pin_direction'], 'lef+def')
         drv = torch.zeros(len(d.n_weight), dtype=torch.int64, device=d.device)
@@ -60,7 +60,7 @@ class PinDirectionTest(unittest.TestCase):
     def test_lef_attributes_on_the_pin_line(self):
         import os
         import tempfile
-        from attar.lef import read_lef
+        from attar.io.lef import read_lef
         lef = ('MACRO X\n  CLASS CORE ;\n  SIZE 1 BY 1 ;\n  PIN o DIRECTION OUTPUT ;\n    PORT\n      LAYER M1 ;\n'
                '      RECT 0 0 0.1 0.1 ;\n    END\n  END o\n  PIN a\n    DIRECTION INPUT ;\n    USE SIGNAL ;\n'
                '  END a\n  PIN VDD DIRECTION INOUT ; USE POWER ;\n  END VDD\nEND X\n')
@@ -73,7 +73,7 @@ class PinDirectionTest(unittest.TestCase):
 
     def test_net_use_among_other_attributes(self):
         import io
-        from attar.deffile import _net_attrs, _read_nets
+        from attar.io.deffile import _net_attrs, _read_nets
         for text, use in (('- a ( x A ) ( y B ) + SOURCE TIMING + USE CLOCK ;', 'CLOCK'),   # Innovus writes these inline
                           ('- a\n  ( x A )\n  + ROUTED M1 ( 1 2 ) ( 3 * )\n  + USE CLOCK\n ;', 'CLOCK'),
                           ('- a ( x A ) + ROUTED M1 ( 1 2 ) ( 3 * ) ;', 'SIGNAL')):
@@ -84,7 +84,7 @@ class PinDirectionTest(unittest.TestCase):
                          ' + SOURCE TIMING + USE CLOCK')                 # the wiring is dropped, the rest kept
 
     def test_pg_geometry_from_vias_and_special_nets(self):
-        from attar.deffile import PG_HWIRE, PG_VIA, def_vias, pg_shapes
+        from attar.io.deffile import PG_HWIRE, PG_VIA, def_vias, pg_shapes
         text = ('VIAS 1 ;\n- V01 + VIARULE V01R + CUTSIZE 80 80 + LAYERS M0 VIA0 M1 + CUTSPACING 80 80\n'
                 ' + ENCLOSURE 40 24 40 24 + ROWCOL 1 5 ;\nEND VIAS\n'
                 'SPECIALNETS 1 ;\n- VDD ( * VDD )\n  + ROUTED M0 96 + SHAPE FOLLOWPIN ( 0 1000 ) ( 5000 * )\n'

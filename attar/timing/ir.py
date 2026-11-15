@@ -8,7 +8,7 @@ attach(ir_dir, lib_paths, sdc_path, rc_tcl) writes two files next to core.safete
   timing.json         clocks (period, waveform, ideal latency, uncertainty, source IO cells), input / output delays per
                       IO cell, clock groups, wire RC per um (signal, clock) and per layer, what the SDC had that is not
                       modeled, and the sources (name + sha256, never paths).
-and records the fact in manifest.json. The timer is attar.sta.
+and records the fact in manifest.json. The timer is attar.timing.sta.
 """
 import gzip
 import json
@@ -17,8 +17,8 @@ import re
 
 import numpy as np
 
-from . import sdc as sdc_mod, st
-from .distill import source_ref
+from ..io import sdc as sdc_mod, st
+from ..io.distill import source_ref
 
 # arc timing types
 T_COMB, T_RISE_EDGE, T_FALL_EDGE, T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F, T_PRESET, T_CLEAR, T_TRISTATE, T_OTHER = range(11)
@@ -117,7 +117,7 @@ def _sdc_units(s, tu, cu):
 
 def find_bundle(ir_dir, name):
     """A shared library bundle's folder: <zoo>/libraries/<name> next to the design's zoo, else the default zoo's."""
-    from . import paths
+    from .. import paths
     zoo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(ir_dir))))
     for root in (zoo, paths.zoo_dir()):
         f = os.path.join(root, 'libraries', name)
@@ -150,7 +150,7 @@ def chain(ir_dir, manifest):
 
 def arrays(d, c_master=None):
     """The timer's per-design arrays, functions and arc `when` conditions: looked up along the design's library chain
-    (attar.library.design_arrays) when it references one, else timing.safetensors and timing.json."""
+    (attar.timing.library.design_arrays) when it references one, else timing.safetensors and timing.json."""
     with open(os.path.join(d.path, 'timing.json')) as f:
         info = json.load(f)
     if 'library' not in d.manifest:
@@ -171,7 +171,7 @@ def arrays(d, c_master=None):
 
 
 def pin_locations(d):
-    """Per master pin, OpenROAD's pin location (attar.library.pin_locations: the mean of its LEF rectangles'
+    """Per master pin, OpenROAD's pin location (attar.timing.library.pin_locations: the mean of its LEF rectangles'
     centers, microns from the master's lower-left, N) from the design's library chain; NaN where unknown (no chain,
     a bundle without lp_loc)."""
     from .library import pin_locations as look
@@ -183,7 +183,7 @@ def pin_locations(d):
 
 def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=None):
     """Distill timing facts into the IR at ir_dir (see the module doc). Returns a summary dict.
-    bundle: a shared library folder (attar.library, zoo/libraries/<name>). The design's Liberty files that are in it
+    bundle: a shared library folder (attar.timing.library, zoo/libraries/<name>). The design's Liberty files that are in it
     are taken from it, the others become the design's local library (library.safetensors in ir_dir), and the design
     references the bundle instead of storing timing.safetensors, provided the arrays come out identical to its own
     Liberty files' (else timing.safetensors as without a bundle, and the summary says why)."""

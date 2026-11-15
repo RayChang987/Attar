@@ -160,7 +160,7 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     io_dir = np.array([IO_DIR.get(p[5], 2) for p in pins], np.uint8)
     io_unplaced = sum(1 for p in pins if p[2] == 'UNPLACED')  # IOs not placed yet: no floorplan.io
     macros_unplaced = sum(1 for c in comps if c[2] == 'UNPLACED' and macros[c[1]].cls == 'BLOCK')  # no floorplan.macros
-    for j, (name, net, status, x, y, _) in enumerate(pins):
+    for j, (name, _net, status, x, y, _) in enumerate(pins):
         i = len(comps) + j
         tid[name] = i; cell_names.append(name)
         c_xy[i] = (x, y)

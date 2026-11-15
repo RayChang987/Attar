@@ -19,7 +19,7 @@ tools/orfs_run_baseline.sh <design>          # the full flow (the baseline to co
 ```
 
 Each stage's DEF stays in `orfs_runs/rt/<key>/<stage>.def`. The zoo's ORFS designs are distilled from it
-(`attar.distill`): 3_3 gives `zoo/after_fp/orfs_<platform>/<design>` (a placement problem), 2_1
+(`attar.io.distill`): 3_3 gives `zoo/after_fp/orfs_<platform>/<design>` (a placement problem), 2_1
 `zoo/before_fp/orfs_<platform>/<design>` (a floorplan problem).
 
 **Designs ported to ASAP7.** `python tools/orfs_port_asap7.py` writes ASAP7 configs for nangate45 designs that ORFS

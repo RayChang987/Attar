@@ -12,7 +12,6 @@ import argparse
 import glob
 import json
 import os
-import sys
 
 import numpy as np
 
@@ -31,7 +30,7 @@ def read_segs(path, meta):
         if not t or t[0] == '(':
             continue
         if t[0] == ')':
-            for (l, d, x, y) in edges:
+            for (l, _d, x, y) in edges:
                 use[l, y, x] += 1
             per_net[name] = len(edges)
             edges = set(); continue

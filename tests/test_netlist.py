@@ -7,8 +7,8 @@ import torch
 
 from common import DEV, MEDIUM, need, attar, source_lefs
 from attar import naive, netlist
-from attar.deffile import read_def
-from attar.distill import D_OUT
+from attar.io.deffile import read_def
+from attar.io.distill import D_OUT
 
 
 def _signal_net(d, e, min_loads=8):
@@ -130,7 +130,7 @@ class NetlistEditTest(unittest.TestCase):
 
     def test_a_moved_port_is_on_its_new_net_in_the_def(self):
         # a DEF reader connects a port by its PINS statement: export rewrites '+ NET' when an edit moved the port
-        from attar.distill import TERMINAL
+        from attar.io.distill import TERMINAL
         d = need(MEDIUM).restore('reference')
         term = (d.raw['c_flags'] & TERMINAL) != 0
         e = d.edit()
@@ -193,7 +193,7 @@ def _trace(snap, d, k):
 
 class DebufferTest(unittest.TestCase):
     def test_every_load_keeps_its_logic(self):
-        from attar.distill import REMOVED
+        from attar.io.distill import REMOVED
         for name in (MEDIUM, 'after_fp/orfs_asap7/cva6'):
             d = need(name).restore('reference')
             old = _snapshot(d)
@@ -219,7 +219,7 @@ class DebufferTest(unittest.TestCase):
             self.assertEqual(len(r['nets']), int(((d.n_ptr[1:] - d.n_ptr[:-1]) > 0).sum()))
 
     def test_removed_cells_are_out_of_the_way(self):
-        from attar.distill import REMOVED
+        from attar.io.distill import REMOVED
         d = need(MEDIUM).restore('reference')
         n0 = int(d.movable.sum())
         n = d.debuffer()

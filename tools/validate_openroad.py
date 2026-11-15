@@ -57,7 +57,7 @@ def one_site_master(d, lefs_host):
     exactly when the library has no such master (odb::hasOneSiteMaster; -disallow_one_site_gaps is deprecated), so
     reading it turns that check off. Used for libraries without fillers whose own flow allows the gaps (NS3K)."""
     import gzip
-    from attar.lef import read_lef
+    from attar.io.lef import read_lef
     with gzip.open(os.path.join(d.path, 'frame.def.gz'), 'rt') as f:
         site = next(l.split()[2] for l in f if l.startswith('ROW '))
     _, tech = read_lef(lefs_host)

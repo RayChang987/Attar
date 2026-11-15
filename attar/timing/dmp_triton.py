@@ -1,5 +1,5 @@
-"""attar.dmp as two Triton kernels: one thread lane per arc (gate) or per load (wire), every iteration in registers, one
-launch per batch. The math is attar.dmp's, which follows OpenSTA's DmpCeff.cc line by line; attar.dmp stays the
+"""attar.timing.dmp as two Triton kernels: one thread lane per arc (gate) or per load (wire), every iteration in registers, one
+launch per batch. The math is attar.timing.dmp's, which follows OpenSTA's DmpCeff.cc line by line; attar.timing.dmp stays the
 reference (CPU, tests). The delay model runs in float64 by default (OpenSTA's precision), arrivals in float32.
 """
 import torch
@@ -22,7 +22,7 @@ def _exp2(x):
 
 @triton.jit
 def _nldm(ix1, ix2, val, nn, base, x, y, mask, K):
-    """attar.sta.nldm for one table per lane: base = (arc * 4 + slot); bilinear, linear extrapolation."""
+    """attar.timing.sta.nldm for one table per lane: base = (arc * 4 + slot); bilinear, linear extrapolation."""
     n1 = tl.load(nn + base * 2, mask=mask, other=1)
     n2 = tl.load(nn + base * 2 + 1, mask=mask, other=1)
     i0 = tl.zeros_like(n1)
@@ -93,7 +93,7 @@ def _gate_delays(ix1, ix2, val, nn, bd, bs, slew, ce, vth, vl, vh, der, mask, K)
 @triton.jit
 def _newton(ix1, ix2, val, nn, bd, bs, slew, ce0, rd, ctot, vth, vl, vh, der, A, B, D, p1, p2, mask,
             ORDER3: tl.constexpr, K, ITERS: tl.constexpr):
-    """DmpAlg::findDriverParams + newtonRaphson (attar.dmp.newton_step), all iterations in registers."""
+    """DmpAlg::findDriverParams + newtonRaphson (attar.timing.dmp.newton_step), all iterations in registers."""
     tv, tl_, s = _gate_delays(ix1, ix2, val, nn, bd, bs, slew, ce0, vth, vl, vh, der, mask, K)
     dt = s / (vh - vl)
     t0 = tv + tl.log(1.0 - vth) * rd * ce0 - vth * dt
@@ -202,7 +202,7 @@ def _wave(t, k0, k1, k2, k3, k4, p1, p2, t0, dt, p3, LOAD: tl.constexpr):
 
 @triton.jit
 def _find_root(x1, x2, target, k0, k1, k2, k3, k4, p1, p2, t0, dt, p3, on, LOAD: tl.constexpr, ITERS: tl.constexpr):
-    """FindRoot.cc findRoot (attar.dmp.find_root) per lane; lanes with on False do not iterate (their result is
+    """FindRoot.cc findRoot (attar.timing.dmp.find_root) per lane; lanes with on False do not iterate (their result is
     unused). Returns (root, failed)."""
     y1, _d1 = _wave(x1, k0, k1, k2, k3, k4, p1, p2, t0, dt, p3, LOAD)
     y2, _d2 = _wave(x2, k0, k1, k2, k3, k4, p1, p2, t0, dt, p3, LOAD)
@@ -244,7 +244,7 @@ def _find_root(x1, x2, target, k0, k1, k2, k3, k4, p1, p2, t0, dt, p3, on, LOAD:
 @triton.jit
 def _gate_core(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, der, mask,
               K, NIT: tl.constexpr, RIT: tl.constexpr):
-    """attar.dmp.gate for one lane per arc: (delay, driver slew, valid, k0..k4, p1, p2, t0, dt, vo_delay, ub)."""
+    """attar.timing.dmp.gate for one lane per arc: (delay, driver slew, valid, k0..k4, p1, p2, t0, dt, vo_delay, ub)."""
     c1 = tl.minimum(c1, ctot)
     c2 = tl.maximum(ctot - c1, 0.0)
     bd = lib * 4 + orf
@@ -358,7 +358,7 @@ def _gate_dev(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, der
 def dmp_gate_kernel(ix1, ix2, val, nn, lib_p, orf_p, slew_p, ctot_p, cfar_p, rpi_p, thr_p,
                     delay_o, dslew_o, state_o, N,
                     K, NIT: tl.constexpr, RIT: tl.constexpr, BLOCK: tl.constexpr):
-    """attar.dmp.gate for N arcs. thr: (N, 4) output threshold, slew lower, slew upper, slew derate."""
+    """attar.timing.dmp.gate for N arcs. thr: (N, 4) output threshold, slew lower, slew upper, slew derate."""
     i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = i < N
     lib = tl.load(lib_p + i, mask=mask, other=0)
@@ -411,7 +411,7 @@ def _load_dev(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl, 
 @triton.jit
 def _load_core(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl, vh, der, elm, rise,
                lvth, lvl, lvh, lder, RIT: tl.constexpr):
-    """attar.dmp.load + threshold_adjust for one lane per load: (wire delay, load slew, waveform failed)."""
+    """attar.timing.dmp.load + threshold_adjust for one lane per load: (wire delay, load slew, waveform failed)."""
     small = (elm == 0) | (elm < ds * 1e-3) | ~valid
     e = tl.where(small, 1.0, elm)
     p3 = 1.0 / e
@@ -438,7 +438,7 @@ def _load_core(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl,
 
 @triton.jit(do_not_specialize=['N'])
 def dmp_load_kernel(state_p, elm_p, rise_p, lthr_p, wire_o, slew_o, N, RIT: tl.constexpr, BLOCK: tl.constexpr):
-    """attar.dmp.load + threshold_adjust for N loads (state: (N, 17) rows of their arcs)."""
+    """attar.timing.dmp.load + threshold_adjust for N loads (state: (N, 17) rows of their arcs)."""
     i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = i < N
     so = state_p + i * 17
@@ -521,7 +521,7 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
                       NT, RIT: tl.constexpr, BLOCK: tl.constexpr, MODE: tl.constexpr):
     """One level's loads, 2M lanes (max analysis, then min): DMP wire delay and load slew from the arc's row of
     stage_gate_kernel, threshold adjustment, the load pin's arrivals and slews by float atomics; the max lanes' wire
-    delays in w_o (M,), for the required times (attar.sta.Timer.required)."""
+    delays in w_o (M,), for the required times (attar.timing.sta.Timer.required)."""
     l = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = l < 2 * M
     mn = l >= M
@@ -569,13 +569,13 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
 
 
 BLOCK = 128
-# the delay model's precision (attar.sta.Timer precision=): 'double' (OpenSTA's), 'retry' (float32, the lanes whose
+# the delay model's precision (attar.timing.sta.Timer precision=): 'double' (OpenSTA's), 'retry' (float32, the lanes whose
 # waveform fails recomputed in float64), 'single'
 MODES = {'single': 0, 'retry': 1, 'double': 2}
 
 
 def gate(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr):
-    """Same as attar.sta.arc_eval: (delay, driver slew, state (N, 17))."""
+    """Same as attar.timing.sta.arc_eval: (delay, driver slew, state (N, 17))."""
     N = len(lib)
     dev = slew.device
     delay = torch.empty(N, device=dev); dslew = torch.empty(N, device=dev); state = torch.empty(N, NSTATE, device=dev)
@@ -589,7 +589,7 @@ def gate(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr):
 
 
 def load(state, elmore, rise, lthr):
-    """Same as attar.sta.load_eval: (wire delay, load slew)."""
+    """Same as attar.timing.sta.load_eval: (wire delay, load slew)."""
     N = len(elmore)
     dev = elmore.device
     w = torch.empty(N, device=dev); s = torch.empty(N, device=dev)

@@ -17,8 +17,10 @@ import os
 import numpy as np
 import torch
 
-from . import export as _export, metrics as M, paths, sizing as _sizing, st
-from .distill import ASIDE, FIXED, MACRO, PLACED, TERMINAL, PHYSICAL  # noqa: F401
+from .io import export as _export, st
+from . import metrics as M, paths
+from .timing import sizing as _sizing
+from .io.distill import ASIDE, FIXED, MACRO, PLACED, TERMINAL, PHYSICAL  # noqa: F401
 from .facts import BLOCKED, CAPABILITIES, FACTS, MissingFacts, infer_facts, upgrade_facts
 from .kernels import overlapping_pairs
 
@@ -66,7 +68,7 @@ class Design:
         with open(os.path.join(path, 'manifest.json')) as f:
             self.manifest = json.load(f)
         self._names = None
-        self._timer = None                    # attar.sta.Timer, built by the first timing()
+        self._timer = None                    # attar.timing.sta.Timer, built by the first timing()
         self._cell_id = None                  # instance name -> index, built by the first lookup by name
         self.dropped = {}                     # facts an engine made stale: {fact: why}
         self.dbu = self.manifest['dbu']; self.scale = 1.0 / self.dbu
@@ -523,7 +525,7 @@ class Design:
         tp, _ = st.load(os.path.join(self.path, 'tech_profile.safetensors'))
         names, ldir = self.names['layers'], tp['layer_dir']           # 0: horizontal (tracks along y)
         ptr, box, use, lay, cm = a['m_pin_ptr'], a['m_pin_box'], a['m_pin_use'], a['m_pin_layer'], a['c_master']
-        from .distill import U_GROUND, U_POWER
+        from .io.distill import U_GROUND, U_POWER
         votes = [{}, {}]                                  # axis -> {(step, residue): macros}
         per = []
         for i in mac.tolist():
@@ -583,18 +585,18 @@ class Design:
 
     # -- timing and routing congestion --------------------------------------------------------------------------------
     def timing(self, pos=None):
-        """Static timing at pos (default: the current placement): an attar.sta.TimingResult with per-endpoint setup /
-        hold slack, WNS / TNS. Needs the 'timing' fact (attar.timing.attach). The timer is built once per design and
+        """Static timing at pos (default: the current placement): an attar.timing.sta.TimingResult with per-endpoint setup /
+        hold slack, WNS / TNS. Needs the 'timing' fact (attar.timing.ir.attach). The timer is built once per design and
         kept; on CUDA a re-time is a CUDA-graph replay."""
         self.require('sta')
-        from .sta import Timer
+        from .timing.sta import Timer
         if self._timer is None:
             self._timer = Timer(self)
         return self._timer.run(pos)
 
     def timing_report(self, pos=None, endpoints=10, path=True, file=None):
         """Print (and return) a timing summary: WNS, TNS, violations, hold, the worst endpoints and the worst path
-        (attar.sta.TimingResult.report)."""
+        (attar.timing.sta.TimingResult.report)."""
         return self.timing(pos).report(endpoints=endpoints, path=path, file=file)
 
     def gr_overflow(self, pos=None, adjustment=None, maps=False):
@@ -604,12 +606,12 @@ class Design:
         'grov_h_%', 'grov_v_%', 'overflow_edges', 'edges', 'total_overflow' (tracks), 'max_util', ...}.
         adjustment overrides the design's layer adjustment; maps=True adds the demand and capacity maps."""
         self.require('gr_overflow', ignore=('placement',) if pos is not None else ())
-        from .routing import overflow
+        from .rules.routing import overflow
         return overflow(self, pos, adjustment=adjustment, maps=maps)
 
-    # -- sizing (attar/sizing.py) -------------------------------------------------------------------------------------
+    # -- sizing (attar/timing/sizing.py) -------------------------------------------------------------------------------------
     def library(self):
-        """The design's cell library chain (attar.timing.chain): its local library (macros), then the shared bundle."""
+        """The design's cell library chain (attar.timing.ir.chain): its local library (macros), then the shared bundle."""
         return _sizing.library(self)
 
     def equivalents(self, cell, dont_use=False):

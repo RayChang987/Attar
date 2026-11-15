@@ -11,8 +11,8 @@ Pins are tested by the bounding box of their shapes (the IR keeps no more), whic
 import numpy as np
 import torch
 
-from .deffile import PG_FILL, PG_VIA, PG_VWIRE
-from .distill import TERMINAL
+from ..io.deffile import PG_FILL, PG_VIA, PG_VWIRE
+from ..io.distill import TERMINAL
 
 
 def _subtract_many(parts, owner, wires, w_owner):
@@ -54,7 +54,7 @@ def pin_blockages(d):
     a = d.raw
     if 'pdn' not in d.facts or 'pg_rect' not in a or len(a['pg_rect']) == 0:
         return np.zeros((0, 5), np.int64)
-    from . import st
+    from ..io import st
     import os
     tp, _ = st.load(os.path.join(d.path, 'tech_profile.safetensors'))
     spacing = tp['layer_spacing'] if 'layer_spacing' in tp else np.zeros(len(d.names['layers']), np.int32)

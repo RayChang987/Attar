@@ -15,7 +15,7 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import attar  # noqa: E402
-from attar.deffile import read_def, same_design  # noqa: E402
+from attar.io.deffile import read_def, same_design  # noqa: E402
 
 
 

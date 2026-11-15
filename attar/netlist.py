@@ -23,13 +23,13 @@ are ideal (pre-CTS), so a buffer there would mean nothing to the timer."""
 import numpy as np
 import torch
 
-from .distill import ASIDE, D_IN, D_OUT, FIXED, N_CLOCK, N_REMOVED, PLACED, REMOVED, TERMINAL, pin_dir_counts
+from .io.distill import ASIDE, D_IN, D_OUT, FIXED, N_CLOCK, N_REMOVED, PLACED, REMOVED, TERMINAL, pin_dir_counts
 
 
 def _lib_function(d, master):
     """{output pin: (variables, evaluator)} of a master from the design's library chain ({} when it has none)."""
-    from .liberty import parse_function
-    from .sizing import lib_cell
+    from .io.liberty import parse_function
+    from .timing.sizing import lib_cell
     L, _ = lib_cell(d, master)
     fs = (L.meta['functions'].get(master) or {}) if L is not None else {}
     out = {}
@@ -43,7 +43,7 @@ def _lib_function(d, master):
 
 def _signal_pins(d, master):
     """The number of signal pins (LEF, USE SIGNAL) a library cell has, or None when the library lacks it."""
-    from .sizing import lib_cell
+    from .timing.sizing import lib_cell
     L, c = lib_cell(d, master)
     if L is None:
         return None
@@ -61,7 +61,7 @@ def _single_input(d, master):
     if len(vs) != 1:
         return None
     v = vs[0]
-    from .sizing import lib_cell
+    from .timing.sizing import lib_cell
     L, c = lib_cell(d, master)
     if v == out or v not in L.pins[c]:                     # an internal state (a register's IQN), not an input pin
         return None
@@ -76,7 +76,7 @@ def _single_input(d, master):
 def library_cells(d, inverting):
     """Buffers (inverting=False) or inverters of the design's library chain with LEF geometry and Liberty data,
     without dont_use cells and sequential ones, smallest area first."""
-    from .sizing import library
+    from .timing.sizing import library
     out, seen = [], set()
     for L in library(d):
         skip = set(L.meta.get('dont_use', [])) | set(L.meta.get('sequentials', {}) or {})
@@ -126,7 +126,7 @@ class Edit:
 
     # -- lookups ------------------------------------------------------------------------------------------------------
     def cell(self, c):
-        from .sizing import cell_index
+        from .timing.sizing import cell_index
         if isinstance(c, str):
             for k, (_, _, _, _, nm) in enumerate(self.cells):
                 if nm == c:
@@ -225,7 +225,7 @@ class Edit:
         """A new cell of `master` (a name; from the library when the design lacks it) at lower-left xy (um).
         Returns its index."""
         self._open()
-        from .sizing import add_master
+        from .timing.sizing import add_master
         d = self.d
         ms = d.names['masters']
         m = ms.index(master) if master in ms else add_master(d, master)
@@ -389,7 +389,7 @@ class Edit:
         return on | {p for p in self._joined.get(k, ()) if self._pin_net(p) == k and p not in self.dropped}
 
     def _master_size(self, master):
-        from .sizing import lib_cell
+        from .timing.sizing import lib_cell
         d = self.d
         ms = d.names['masters']
         if master in ms:
@@ -653,7 +653,7 @@ def debuffer(d, buffers=True, inverters=True):
     groups = {}
     for k in {k for c in cand for k in cand[c][1:]}:
         groups.setdefault(find(k), []).append(k)
-    for r, members in sorted(groups.items()):
+    for _r, members in sorted(groups.items()):
         members = sorted(members)
         if len(members) < 2:
             continue
