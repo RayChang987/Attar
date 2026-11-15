@@ -4,18 +4,49 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "attar"
-version = "0.1.0"
+dynamic = ["version"]
 description = "The fast loop for physical design: any benchmark as GPU tensors, place and evaluate in seconds, validate in ORFS"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
+authors = [{name = "RayChang987"}]
+keywords = ["eda", "physical design", "placement", "floorplanning", "static timing analysis", "vlsi", "pytorch", "gpu"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
 dependencies = ["torch>=2.0", "numpy", "scipy", "matplotlib", "huggingface_hub>=0.20", "zstandard"]
 
 [project.optional-dependencies]
 docs = ["pillow", "pygments"]
+dev = ["ruff", "build", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/RayChang987/Attar"
+Documentation = "https://github.com/RayChang987/Attar/tree/main/docs"
+Changelog = "https://github.com/RayChang987/Attar/blob/main/CHANGELOG.md"
+Dataset = "https://huggingface.co/datasets/RayChang987/attar-zoo"
+Issues = "https://github.com/RayChang987/Attar/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "attar.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["attar*"]
+
+[tool.setuptools.package-data]
+"attar.timing" = ["csrc/*.cpp"]
 
 [tool.ruff]
 line-length = 120
