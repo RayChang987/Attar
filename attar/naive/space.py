@@ -125,7 +125,7 @@ def _fill(space, cur_x, cur_r, placed, gx, gy, k, w, allowed, stats=None, max_ro
     rg = _nearest_row(space.ys, gy)
     dr, dx = 4, 32
     rounds = 0
-    for rounds in range(1, max_rounds + 1):
+    for rounds in range(1, max_rounds + 1):                       # noqa: B007  (read after the loop)
         todo = torch.nonzero(~placed).flatten()
         if len(todo) == 0:
             break
@@ -158,7 +158,7 @@ def _improve(space, cur_x, cur_r, gx, gy, k, w, allowed, rounds=30, dr=3, dx=16,
     n = len(gx)
     moved = 0
     it = 0
-    for it in range(rounds):
+    for it in range(rounds):                                          # noqa: B007  (read after the loop)
         P = space.prefix(cur_x, cur_r, k, w)
         cur_cost = (cur_x.double() - gx).abs() * space.sw + (space.ys[cur_r] - gy).abs().double()
         cand = torch.nonzero(cur_cost > 0.5 * space.sw).flatten()

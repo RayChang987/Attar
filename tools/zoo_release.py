@@ -181,7 +181,7 @@ def pack(zoo, hub, folders):
             out[rel] = os.path.getsize(dst)
     keep = {os.path.join(hub, rel + ('.zst' if compressed(os.path.basename(rel)) else '')) for rel in out}
     keep |= {os.path.join(hub, x) for x in ('index.json', 'README.md')}
-    for dirpath, dirnames, filenames in os.walk(hub, topdown=False):
+    for dirpath, _dirnames, filenames in os.walk(hub, topdown=False):
         if any(part.startswith('.') for part in os.path.relpath(dirpath, hub).split(os.sep)):
             continue                           # .cache/huggingface: hf upload-large-folder's resume state
         for f in filenames:

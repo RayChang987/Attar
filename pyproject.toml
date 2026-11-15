@@ -16,3 +16,17 @@ docs = ["pillow", "pygments"]
 
 [tool.setuptools.packages.find]
 include = ["attar*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E9", "F", "B"]
+# B023: every closure over a loop variable here is called within the same iteration
+ignore = ["B023"]
+
+[tool.ruff.lint.per-file-ignores]
+# names used inside timeit / exec strings
+"tools/bench_*.py" = ["F821"]
+"tools/make_demo_gif.py" = ["F821"]

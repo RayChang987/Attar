@@ -19,7 +19,7 @@ def need(name):
     try:
         return attar.load(name, DEV, download=False)
     except FileNotFoundError as e:
-        raise unittest.SkipTest(str(e))
+        raise unittest.SkipTest(str(e)) from None
 MACRO_DESIGNS = ['after_fp/orfs_asap7/riscv32i', 'after_fp/orfs_asap7/riscv32i-mock-sram', 'after_fp/orfs_asap7/coralnpu', 'after_fp/orfs_asap7/cva6']
 RUNS = os.path.join(os.path.dirname(__file__), '..', 'orfs_runs')
 
@@ -92,7 +92,7 @@ def _find(ref):
                 h.update(b)
         if h.hexdigest() == ref['sha256']:
             return p
-    raise unittest.SkipTest('source file %s not here' % ref['name'])
+    raise unittest.SkipTest('source file %s not here' % ref['name']) from None
 
 
 def source_def(d):

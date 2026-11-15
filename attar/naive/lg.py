@@ -453,7 +453,7 @@ def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_dis
     pos_of = {}
     k_ = 0
     for q, (_, _, c) in enumerate(chains):
-        for t_, j in enumerate(c):
+        for t_, _j in enumerate(c):
             pos_of[(q, t_)] = k_; k_ += 1                  # index into cells / C
     fc = [0] * off[maxl]; fg = [0.0] * off[maxl]
     lo_g = [0.0] * nc; hi_g = [0.0] * nc

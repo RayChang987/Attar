@@ -431,7 +431,7 @@ def _obstructions(d, t, lo, hi, horiz, pos=None):
                             macro_obs.setdefault(l, []).append(r)
                             mrows.append((ci, seq, l, *r, True)); seq += 1
                     shapes = [(l, ob, r) for l, ob, r in shapes if not ob]
-                for l, ob, r in shapes:
+                for l, _ob, r in shapes:
                     mrows.append((ci, seq, l, *r, False)); seq += 1
             if mrows:
                 m = np.array([x[:7] for x in mrows], np.int64).reshape(-1, 7)

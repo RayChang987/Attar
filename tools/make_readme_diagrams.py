@@ -251,7 +251,7 @@ def roadmap():
     # ---- right: Naive Engine, then Evaluation
     y0 = cy - h_right / 2
     mids = []
-    for g, (gname, kids) in enumerate(naive):
+    for g, (_gname, kids) in enumerate(naive):
         ys = [y0 + (g * 3 + i) * PITCH + g * GAP for i in range(3)]
         my = ys[1]
         mids.append(my)

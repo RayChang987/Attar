@@ -25,7 +25,7 @@ import torch
 from .. import metrics as M
 from ..io.distill import D_IN, D_INOUT, D_OUT
 from . import ir as timing_mod
-from .ir import (S_NEG, S_NON, S_POS, T_CLEAR, T_COMB, T_FALL_EDGE, T_HOLD_F, T_HOLD_R, T_PRESET, T_RISE_EDGE,
+from .ir import (S_NEG, S_NON, S_POS, T_COMB, T_FALL_EDGE, T_HOLD_F, T_HOLD_R, T_RISE_EDGE,
                      T_SETUP_F, T_SETUP_R, T_TRISTATE)
 
 warnings.filterwarnings('ignore', message='index_reduce')     # torch marks index_reduce beta; it is what we need
@@ -38,7 +38,6 @@ def nldm(ix1, ix2, val, n, x, y):
     Bilinear inside, linear extrapolation outside (from the end segment), constant along a size-1 axis."""
     E, K = ix1.shape
     dev = x.device
-    out = []
     idx = []
     for ax, v, nn in ((ix1, x, n[:, 0].long()), (ix2, y, n[:, 1].long())):
         if K > 2:
@@ -222,7 +221,7 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
                 with torch.cuda.stream(side if idx.shape[1] >= SIDE_D else cur):
                     rc_bucket(pc, idx, real, cc, nets, out, pi, tlen, 0.3, dbu, r, c, rv)
         cur.wait_stream(side)
-    for D, nets, idx, real, rows, rpins, ri in (plan['buckets'] if rc_bucket is None else ()):
+    for D, nets, idx, real, _rows, rpins, ri in (plan['buckets'] if rc_bucket is None else ()):
         n = len(nets)
         N = 2 * D
         q = torch.round(p[idx] * dbu)
@@ -742,7 +741,7 @@ class Timer:
                                     torch.zeros(len(bn), 4, 3, device=self.dev), torch.zeros(len(bn), device=self.dev))
         elif big is not None and not steiner_big.available():
             warnings.warn('attar.timing.sta: %d nets above %d pins use a lumped wire model (%s)'
-                          % (len(big), TREE_BUCKETS[-1][1], steiner_big.error()))
+                          % (len(big), TREE_BUCKETS[-1][1], steiner_big.error()), stacklevel=2)
         self.big_steiner = ev.deg > M.RMST_MAX_DEGREE
 
     def _pin_setup(self):
@@ -866,14 +865,14 @@ class Timer:
             self.rel_setup, self.rel_hold = pad(self.rel_setup), pad(self.rel_hold)
         # exception startpoints: input ports (arrival = their input delay, else 0)
         in_d = {}
-        for p, ci, e in self.in_delay:
+        for p, _ci, e in self.in_delay:
             if not e['min']:
                 in_d[p] = max(in_d.get(p, -INF), e['value'])
         ex_ix, ex_v = [], []
         tp = np.nonzero(self.d.raw['p_mpin'] < 0)[0]
         port_pins = dict(zip(cell_of[tp].tolist(), tp.tolist()))
         self.ex_ports = set()                                      # where data starts too (_reachable)
-        for i, e in enumerate(self.ex):
+        for i in range(len(self.ex)):
             for c in ex_from[i]:
                 p = port_pins.get(c)
                 if p is not None and self.clk_of[p] < 0:
@@ -975,7 +974,7 @@ class Timer:
                     ho.append((p, rf, 2 * ci + edge, l_ - e['value'] + float(unc_h[ci])))
         mk = lambda L: (T([x[0] for x in L]), T([x[1] for x in L]), T([x[2] for x in L]), T([x[3] for x in L], torch.float32))
         out_d = {}
-        for p, ci, e in self.out_delay:
+        for p, _ci, e in self.out_delay:
             if not e['min']:
                 out_d[p] = max(out_d.get(p, -INF), e['value'])
         ox = []
@@ -1058,7 +1057,6 @@ class Timer:
         load = torch.zeros(P, 2, device=dev); load[self.drv_pins] = net_load[self.drv_nets]
         load_min = torch.zeros(P, 2, device=dev); load_min[self.drv_pins] = net_min[self.drv_nets]
         self.load, self.load_min = load, load_min
-        L, Lm = load.view(-1), load_min.view(-1)
         pi = self.pi if self.pi is not None else torch.zeros(len(net_load), 4, 3, device=dev)
         amax = torch.full((P * 2, NT), -INF, device=dev); amin = torch.full((P * 2, NT), INF, device=dev)
         smax = torch.zeros(P * 2, device=dev); smin = torch.full((P * 2,), INF, device=dev)
@@ -1152,7 +1150,7 @@ class Timer:
     # -- checks -------------------------------------------------------------------------------------------------------------
     def _checks(self):
         dev, P = self.dev, self.P
-        amax, amin, smax, smin = self.amax, self.amin, self.smax, self.smin
+        amax, amin, smin = self.amax, self.amin, self.smin
         lt = self.launch_t
         fin = lambda x: torch.where(torch.isnan(x) | ~torch.isfinite(x), torch.full_like(x, INF), x)
         sp = torch.full((P,), INF, device=dev); hp = torch.full((P,), INF, device=dev)

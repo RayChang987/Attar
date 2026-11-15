@@ -83,7 +83,7 @@ def apply_tcl(src_def, out_def, odb_in, odb_out):
     macros = [c for c in o['comps'] if c[2] == 'FIXED' and src_master.get(c[0]) and c[0] in
               {k for k, st in ((c2[0], c2[2]) for c2 in s['comps']) if st != 'FIXED'}]
     L.append('set block [ord::get_db_block]')
-    for name, master, st, x, y, orient in macros:
+    for name, _master, _st, x, y, orient in macros:
         L.append('set i [$block findInst {%s}]; $i setOrient %s; $i setLocation %d %d; $i setPlacementStatus FIRM'
                  % (name, ORIENT[orient], x, y))
     L.append('puts "attar: [llength [$block getRows]] rows, die [[$block getDieArea] dx] x [[$block getDieArea] dy]"')

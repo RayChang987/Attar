@@ -113,7 +113,7 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
         o, pos = _opts(args, ('-setup', '-hold', '-rise', '-fall'), ('-from', '-to'))
         val = float(pos[0])
         for a in pos[1:]:
-            for k, n in objs(a, 'clock'):
+            for _k, n in objs(a, 'clock'):
                 if n in res['clocks']:
                     key = 'uncertainty_hold' if o.get('-hold') else 'uncertainty_setup' if o.get('-setup') else 'uncertainty'
                     res['clocks'][n][key] = val
@@ -123,7 +123,7 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
         o, pos = _opts(args, ('-rise', '-fall', '-min', '-max'), ())
         val = float(pos[0])
         for a in pos[1:]:
-            for k, n in objs(a, 'clock'):
+            for _k, n in objs(a, 'clock'):
                 if n in res['clocks'] and not o.get('-min'):
                     tr = res['clocks'][n].setdefault('transition', [0.0, 0.0])
                     for i in ([0] if o.get('-rise') else [1] if o.get('-fall') else [0, 1]):
@@ -146,7 +146,7 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
             val = float(pos[0])
             clk = objs(o['-clock'], 'clock')[0][1] if '-clock' in o else None
             for a in pos[1:]:
-                for k, n in objs(a, 'port'):
+                for _k, n in objs(a, 'port'):
                     res[which].append({'port': n, 'clock': clk, 'value': val, 'clock_fall': bool(o.get('-clock_fall')),
                                        'min': bool(o.get('-min')), 'max': bool(o.get('-max')),
                                        'rise': bool(o.get('-rise')), 'fall': bool(o.get('-fall')),
@@ -157,7 +157,7 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
     def set_input_transition(*args):
         o, pos = _opts(args, ('-max', '-min', '-rise', '-fall'), ('-clock',))
         for a in pos[1:]:
-            for k, n in objs(a, 'port'):
+            for _k, n in objs(a, 'port'):
                 if not o.get('-min'):
                     res['input_transition'][n] = float(pos[0])
         return ''
@@ -165,7 +165,7 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
     def set_load(*args):
         o, pos = _opts(args, ('-pin_load', '-wire_load', '-max', '-min', '-subtract_pin_load'), ())
         for a in pos[1:]:
-            for k, n in objs(a, 'port'):
+            for _k, n in objs(a, 'port'):
                 if not o.get('-min'):
                     res['load'][n] = float(pos[0])
         return ''

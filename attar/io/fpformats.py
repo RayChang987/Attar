@@ -147,7 +147,7 @@ def distill_yal(path, out_dir, extra=None):
         rectilinear += len(m['poly']) > 4
         i = len(names)
         names.append(inst); size.append(hi - lo); flags.append(MACRO); xy.append((0, 0))
-        for (pname, kind, px, py), sig in zip(m['pins'], sigs):
+        for (_pname, kind, px, py), sig in zip(m['pins'], sigs):
             if kind == 'PWR' or sig in power:
                 continue
             p_cell.append(i); p_off.append((px - lo[0], py - lo[1])); connect(sig, len(p_cell) - 1)

@@ -653,7 +653,7 @@ def debuffer(d, buffers=True, inverters=True):
     groups = {}
     for k in {k for c in cand for k in cand[c][1:]}:
         groups.setdefault(find(k), []).append(k)
-    for r, members in sorted(groups.items()):
+    for _r, members in sorted(groups.items()):
         members = sorted(members)
         if len(members) < 2:
             continue

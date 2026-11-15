@@ -68,7 +68,7 @@ class DesignTest(unittest.TestCase):
         comp = {c[0]: c for c in src['comps']}
         io = {p[0]: (p[3], p[4]) for p in src['pins']}
         total = 0
-        for name, conns, use in src['nets']:
+        for _name, conns, use in src['nets']:
             if use in ('POWER', 'GROUND'):
                 continue
             xs, ys = [], []
@@ -355,7 +355,7 @@ class StatusTest(unittest.TestCase):
         try:
             n = attar.load('after_fp/ns3k/aes', DEV, download=False)            # NS3K: DEF write-back, no slow loop here
         except FileNotFoundError:
-            raise unittest.SkipTest('no ns3k zoo')
+            raise unittest.SkipTest('no ns3k zoo') from None
         self.assertEqual(_slow_loop.tier(n), 'B')
         self.assertIn('slow_loop', _slow_loop.missing(n))
         with self.assertRaises(MissingFacts):

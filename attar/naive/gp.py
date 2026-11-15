@@ -350,7 +350,7 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
         a_k1 = (1 + math.sqrt(4 * a_k * a_k + 1)) / 2
         beta = (a_k - 1) / a_k1
         alpha0 = alpha
-        for tries in range(10):                               # backtracking on the Lipschitz estimate
+        for _tries in range(10):                               # backtracking on the Lipschitz estimate
             u1 = torch.maximum(torch.minimum(v - alpha * g_v, hi), lo)
             v_new = torch.maximum(torch.minimum(u1 + beta * (u1 - u), hi), lo)
             f_new, g_new = [t.clone() for t in og(v_new)]

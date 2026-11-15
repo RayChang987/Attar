@@ -294,7 +294,7 @@ def render(demo):
         frames.append(im); durs.append(ms)
     busy_step, busy_word = cfg['busy']
     prev, prev_code, prev_term, title = None, None, (), None   # the plot on screen, the code, its output, the pane title
-    for i, (key, arg) in enumerate(CASES):
+    for _i, (key, arg) in enumerate(CASES):
         code = CODE % arg
         chars = chars_of(code)
         term = TERMINAL[demo](run[key], key)

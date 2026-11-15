@@ -50,7 +50,7 @@ class NaiveTest(unittest.TestCase):
         try:
             d = attar.load('after_fp/ns3k/serv', DEV, download=False)               # NS3K: 2-row flip-flops among 1-row cells
         except FileNotFoundError:
-            raise unittest.SkipTest('no ns3k zoo')
+            raise unittest.SkipTest('no ns3k zoo') from None
         naive.global_place(d, verbose=False)
         st = naive.legalize(d, verbose=False)
         self.assertTrue(any(str(c).startswith('2') for c in st['classes']))
@@ -83,7 +83,7 @@ class RailTest(unittest.TestCase):
         try:
             d = attar.load('after_fp/ns3k/aes', DEV, download=False)
         except FileNotFoundError:
-            raise unittest.SkipTest('no ns3k zoo')
+            raise unittest.SkipTest('no ns3k zoo') from None
         naive.global_place(d, verbose=False)
         naive.legalize(d, verbose=False)
         lg = attar.Evaluator(d).legality()
@@ -118,7 +118,6 @@ class FloorplanTest(unittest.TestCase):
         self.assertTrue(bool(((p >= core[:2] - 1e-3) & (p + d.size[mac] <= core[2:] + 1e-3)).all()))
 
     def test_macro_placement_never_overlaps_and_floorplan_legal_says_when_it_does_not_fit(self):
-        from attar import naive
         from attar.naive.floorplan import _overlapping
         for packing in (False, True):
             for util in (0.85, 0.97):                 # 0.97: blocks this size cannot all fit
@@ -170,7 +169,7 @@ class FloorplanTest(unittest.TestCase):
         try:
             d = attar.load('before_fp/orfs_asap7/aes', DEV, download=False)        # ORFS floorplan: IO pins unplaced
         except FileNotFoundError:
-            raise unittest.SkipTest('no before_fp zoo')
+            raise unittest.SkipTest('no before_fp zoo') from None
         self.assertEqual(d.missing('global_place'), ['floorplan.io'])  # aes has no macros: only the IO pins are missing
         naive.place_io(d, verbose=False)
         self.assertIn('global_place', d.capabilities())
@@ -189,7 +188,7 @@ class FloorplanTest(unittest.TestCase):
         try:
             d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)         # ORFS floorplan: IO pins and macros unplaced
         except FileNotFoundError:
-            raise unittest.SkipTest('no 2_1 zoo')
+            raise unittest.SkipTest('no 2_1 zoo') from None
         self.assertEqual(d.capabilities(), ['die_size', 'export', 'io_place', 'netlist_edit', 'plot', 'resize', 'sta', 'wirelength_model'])
         naive.place_io(d, verbose=False)
         self.assertIn('macro_place', d.capabilities())
@@ -234,7 +233,7 @@ class FloorplanTest(unittest.TestCase):
         try:
             d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)
         except FileNotFoundError:
-            raise unittest.SkipTest('no 2_1 zoo')
+            raise unittest.SkipTest('no 2_1 zoo') from None
         d.floorplan(utilization=0.5, verbose=False)
         d.place(verbose=False)
         self.assertIn('slow_loop', d.facts)                     # ORFS 2_1: the floorplan can be handed off
@@ -257,7 +256,7 @@ class FloorplanTest(unittest.TestCase):
         try:
             d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)
         except FileNotFoundError:
-            raise unittest.SkipTest('no 2_1 zoo')
+            raise unittest.SkipTest('no 2_1 zoo') from None
         naive.place_io(d, verbose=False)
         r = naive.place_macros(d, verbose=False)
         lefs, _ = read_lef(source_lefs(d))
@@ -346,7 +345,7 @@ class FloorplanTest(unittest.TestCase):
 
     def test_runs_on_a_second_gpu(self):
         if torch.cuda.device_count() < 2:
-            raise unittest.SkipTest('one GPU')
+            raise unittest.SkipTest('one GPU') from None
         d = attar.load(MEDIUM, 'cuda:1', download=False)    # CUDA graphs are captured on the design's GPU
         self.assertTrue(d.place(verbose=False)['legal'])
         self.assertAlmostEqual(attar.Evaluator(d, fast=True).hpwl().item(), d.hpwl().item(), delta=1e-2)
@@ -387,7 +386,7 @@ class FloorplanTest(unittest.TestCase):
                     self.assertEqual(got, max(res.values()), (name, d.names['cells'][i], ax))
                     done += 1
         if not done:
-            raise unittest.SkipTest('no 2_1 zoo')
+            raise unittest.SkipTest('no 2_1 zoo') from None
 
 if __name__ == '__main__':
     unittest.main()
