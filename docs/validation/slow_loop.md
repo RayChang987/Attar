@@ -75,7 +75,7 @@ i3dPDK_NS3K has no ORFS platform, so `tools/validate_openroad.py` takes Attar's 
 same docker image) with the design's LEFs:
 
 ```bash
-python tools/validate_openroad.py after_fp/ns3k/aes after_fp/ns3k/jpeg after_fp/stress/bp_quad --lef-dir ~/i3dPDK_NS3K/innovus_enablement \
+python tools/validate_openroad.py after_fp/ns3k/aes after_fp/ns3k/jpeg --lef-dir ~/i3dPDK_NS3K/innovus_enablement \
     --grt --layers M1-M9 --allow-one-site-gaps
 ```
 

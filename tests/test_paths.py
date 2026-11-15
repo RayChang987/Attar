@@ -47,6 +47,45 @@ class SelfContainedTest(unittest.TestCase):
             self.assertIn('export', d.capabilities())
             self.assertTrue(d.tracks())
 
+    def test_hub_round_trip(self):
+        """tools/zoo_release.pack compresses a design and its library for the hub; attar.fetch, served by a stand-in
+        for huggingface_hub, gives back every file byte for byte."""
+        import shutil
+        import sys
+        from unittest import mock
+        from attar import hub
+        d0 = need(SMALL)
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
+        import zoo_release
+        bundle = d0.manifest.get('library', {}).get('bundle')
+        zoo = paths.zoo_dir()
+        folders = [SMALL] + (['libraries/' + bundle] if bundle else [])
+        with tempfile.TemporaryDirectory() as t:
+            up, dest = os.path.join(t, 'hub'), os.path.join(t, 'zoo')
+            zoo_release.pack(zoo, up, folders)
+            served = sorted(os.path.relpath(os.path.join(dp, f), up) for dp, _, fs in os.walk(up) for f in fs)
+            self.assertIn(SMALL + '/core.safetensors.zst', served)
+            self.assertIn(SMALL + '/manifest.json', served)
+
+            class FakeHub:
+                list_repo_files = staticmethod(lambda repo, **kw: served)
+
+                @staticmethod
+                def hf_hub_download(repo, f, local_dir, **kw):
+                    p = os.path.join(local_dir, f)
+                    os.makedirs(os.path.dirname(p), exist_ok=True)
+                    shutil.copy(os.path.join(up, f), p)
+                    return p
+
+            with mock.patch.object(hub, '_hub', lambda: FakeHub):
+                d = attar.load(SMALL, DEV, root=dest)
+            for folder in folders:
+                for f in os.listdir(os.path.join(zoo, folder)):
+                    with open(os.path.join(zoo, folder, f), 'rb') as a, open(os.path.join(dest, folder, f), 'rb') as b:
+                        self.assertEqual(a.read(), b.read(), f)
+            self.assertEqual([x for x in os.listdir(dest) if x.startswith('.')], [])      # no staging left behind
+            self.assertAlmostEqual(d.restore('reference').hpwl().item(), d0.restore('reference').hpwl().item(), delta=1e-6)
+
 
 if __name__ == '__main__':
     unittest.main()

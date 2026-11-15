@@ -3,3 +3,4 @@ numpy
 scipy
 matplotlib
 huggingface_hub>=0.20
+zstandard

@@ -1,14 +1,21 @@
-"""Make the zoo ready to upload to the Hugging Face Hub: zoo/index.json (what attar.zoo(remote=True) reads) and
-zoo/README.md (the dataset card), then check that no manifest holds a path (sources are recorded by name + sha256).
+"""Make the zoo ready to upload to the Hugging Face Hub: check that no manifest holds a path (sources are recorded by
+name + sha256), pack the upload folder (zoo_hub/ beside the zoo: the arrays and large JSON files zstd-compressed as
+<file>.zst, attar.hub decompresses them on download; everything else hard-linked) and write index.json (what
+attar.zoo(remote=True) reads) and README.md (the dataset card) into both.
 
-  python3 tools/zoo_release.py [--zoo DIR]     # writes the two files into the zoo (default: zoo/)
-  hf upload-large-folder RayChang987/attar-zoo zoo/ --repo-type dataset     # then upload (docs/benchmarks.md)
+  python3 tools/zoo_release.py [--zoo DIR] [--hub DIR]     # default: zoo/ and zoo_hub/ in the checkout
+  hf upload-large-folder RayChang987/attar-zoo zoo_hub/ --repo-type dataset     # then upload (docs/benchmarks.md)
+
+Packing is incremental: a file is compressed again only when the zoo copy is newer. Files of the upload folder the
+zoo no longer has are deleted (the hub keeps them until they are deleted there too).
 """
 import argparse
 import glob
 import json
 import os
+import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from attar import paths  # noqa: E402
@@ -51,8 +58,6 @@ SUITES = {
         % (u, {'pl': 'M5 pillar', 'st': 'M3 stripe'}[p]),
         'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)')
        for u in (60, 70, 80) for p in ('pl', 'st')},
-    'after_fp/stress': ('bp_quad on i3dPDK_NS3K: a 1.2M-cell routed DEF, for scaling tests',
-               'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)'),
 }
 
 CARD = """---
@@ -75,8 +80,12 @@ size_categories:
 [Attar](https://github.com/RayChang987/Attar) IR: netlist, cell and macro geometry, pin offsets, die, rows and IO pins
 as safetensors arrays, ready to load onto a GPU in a second or two.
 
+```bash
+pip install git+https://github.com/RayChang987/Attar
+```
+
 ```python
-import attar                                   # pip install attar
+import attar
 d = attar.load('after_fp/ispd2005/adaptec1')  # downloads this design on first use
 attar.zoo(remote=True)                         # every design here
 attar.fetch('after_fp/ispd2015')               # a whole suite
@@ -88,7 +97,9 @@ Two modes. `before_fp/`: floorplan problems, the die (utilization), IO pins and 
 `after_fp/`: placement problems, the floorplan and power grid are given and the cells are the answer.
 `<mode>/<suite>/<design>/` holds `core.safetensors` (the arrays), `names.json.gz` (cell, net, master and layer names),
 `manifest.json` (source, facts, counts) and, for LEF/DEF sources, `tech_profile.safetensors`. `index.json` lists
-every design with its size and facts.
+every design with its size and facts. The arrays and large JSON files are stored zstd-compressed (`*.zst`);
+`attar.load` / `attar.fetch` decompress them on download (`pip install zstandard`), so a local zoo holds the plain
+files. Sizes below are unpacked, with the download in parentheses.
 
 ## Self-contained
 
@@ -107,13 +118,13 @@ strengths and threshold-voltage flavors, Liberty tables, LEF geometry, equivalen
 sizing and buffering); cells only one design has (its SRAMs) are in its own `library.safetensors`.
 `attar.load` / `attar.fetch` download the libraries a design references.
 
-| library | cells | equivalence classes | designs | size |
+| library | cells | equivalence classes | designs | size (download) |
 | --- | ---: | ---: | ---: | ---: |
 {lib_rows}
 
 ## Suites
 
-| suite | designs | largest (cells) | size | contents | source | terms |
+| suite | designs | largest (cells) | size (download) | contents | source | terms |
 | --- | ---: | ---: | ---: | --- | --- | --- |
 {rows}
 
@@ -121,14 +132,72 @@ sizing and buffering); cells only one design has (its SRAMs) are in its own `lib
 
 The designs are derived from the benchmarks listed above and remain under their original terms. The contest and
 academic suites are published by their organizers for research use; cite the contest or benchmark when you report
-results on it. The `ns3k` and `stress` suites are derived from
+results on it. The `ns3k` suites are derived from
 [i3dPDK_NS3K](https://github.com/i3dknu1/i3dPDK_NS3K) and are distributed under CC BY-NC-SA 4.0; cite
 Taigon Song, "i3dPDK_NS3K_v1.1", I3DVLSI Laboratory, Kyungpook National University, 2026.
 """
 
 
-def main(root=None):
+ZSTD_LEVEL = 19
+PLAIN = ('index.json', 'README.md', 'manifest.json')   # stay readable on the hub; manifest.json also marks a design complete
+
+
+def compressed(name):
+    """Whether a zoo file goes to the hub as <name>.zst: arrays and JSON (manifests, index and card excepted)."""
+    return name not in PLAIN and name.endswith(('.safetensors', '.json'))
+
+
+def pack(zoo, hub, folders):
+    """Mirror the files of `folders` (relative to the zoo) into the upload folder; -> {zoo relpath: hub bytes}."""
+    import zstandard
+    jobs, out = [], {}
+    for folder in folders:
+        for name in sorted(os.listdir(os.path.join(zoo, folder))):
+            rel = os.path.join(folder, name)
+            if os.path.isfile(os.path.join(zoo, rel)) and not name.endswith('.part'):
+                jobs.append(rel)
+
+    def one(rel):
+        src = os.path.join(zoo, rel)
+        dst = os.path.join(hub, rel + ('.zst' if compressed(os.path.basename(rel)) else ''))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if compressed(os.path.basename(rel)):
+            if not (os.path.exists(dst) and os.path.getmtime(dst) >= os.path.getmtime(src)):
+                cctx = zstandard.ZstdCompressor(level=ZSTD_LEVEL, threads=4)
+                with open(src, 'rb') as fi, open(dst + '.part', 'wb') as fo:
+                    cctx.copy_stream(fi, fo, size=os.path.getsize(src))
+                os.replace(dst + '.part', dst)
+        elif not (os.path.exists(dst) and os.path.samefile(src, dst)):
+            if os.path.exists(dst):
+                os.remove(dst)
+            try:
+                os.link(src, dst)
+            except OSError:                    # another file system
+                shutil.copy2(src, dst)
+        return rel, dst
+
+    with ThreadPoolExecutor(max(1, (os.cpu_count() or 4) // 4)) as ex:
+        for rel, dst in ex.map(one, jobs):
+            out[rel] = os.path.getsize(dst)
+    keep = {os.path.join(hub, rel + ('.zst' if compressed(os.path.basename(rel)) else '')) for rel in out}
+    keep |= {os.path.join(hub, x) for x in ('index.json', 'README.md')}
+    for dirpath, dirnames, filenames in os.walk(hub, topdown=False):
+        if any(part.startswith('.') for part in os.path.relpath(dirpath, hub).split(os.sep)):
+            continue                           # .cache/huggingface: hf upload-large-folder's resume state
+        for f in filenames:
+            p = os.path.join(dirpath, f)
+            if p not in keep:
+                os.remove(p)
+        if dirpath != hub and not os.listdir(dirpath):
+            os.rmdir(dirpath)
+    return out
+
+
+def main(root=None, hub=None):
     zoo = paths.zoo_dir(root)
+    hub = hub or os.path.normpath(zoo) + '_hub'
+    if os.path.abspath(hub).startswith(os.path.abspath(zoo) + os.sep):
+        raise SystemExit('the upload folder must not be inside the zoo: %s' % hub)
     designs, per = {}, {}
     bad = []
     for m in sorted(glob.glob(os.path.join(zoo, '*', '*', '*', 'manifest.json'))):
@@ -143,16 +212,14 @@ def main(root=None):
             bad.append(m)
         size = sum(os.path.getsize(p) for p in glob.glob(os.path.join(folder, '*')))
         c = man.get('counts', {})
-        designs['%s/%s' % (suite, name)] = {
+        designs['%s/%s' % (suite, name)] = {'folder': os.path.relpath(folder, zoo),
             'design': man.get('design'), 'format': man['source'].get('format'), 'fidelity': man.get('fidelity'),
             'cells': c.get('cells', 0), 'movable': c.get('movable', 0), 'macros': c.get('macros', 0),
             'terminals': c.get('terminals', 0), 'nets': c.get('nets', 0), 'pins': c.get('pins', 0),
             'facts': sorted(man.get('facts', {})), 'bytes': size}
-        p = per.setdefault(suite, [0, 0, 0])
-        p[0] += 1; p[1] = max(p[1], c.get('cells', 0)); p[2] += size
     if bad:
         raise SystemExit('paths in %d manifests (attar-ir < 0.5: distill them again): %s' % (len(bad), bad[0]))
-    missing = sorted(set(per) - set(SUITES))
+    missing = sorted({k.rpartition('/')[0] for k in designs} - set(SUITES))
     if missing:
         raise SystemExit('describe these suites in SUITES first: %s' % ', '.join(missing))
     # shared cell libraries (attar.library bundles) the designs reference
@@ -167,18 +234,30 @@ def main(root=None):
         libraries[os.path.basename(folder)] = {
             'cells': len(meta['cells']), 'classes': len(meta.get('classes', [])), 'designs': len(users),
             'sources': [r['name'] for r in meta['sources'].get('lib', [])],
-            'bytes': sum(os.path.getsize(os.path.join(folder, x)) for x in os.listdir(folder))}
-    with open(os.path.join(zoo, 'index.json'), 'w') as f:
-        json.dump({'schema': 'attar-zoo-index/1', 'designs': designs, 'libraries': libraries}, f, indent=1)
-    rows = '\n'.join('| `%s` | %d | %s | %s | %s | %s | %s |' % (s, n, '{:,}'.format(cmax), _mb(b), *SUITES[s])
-                     for s, (n, cmax, b) in sorted(per.items()))
-    lib_rows = '\n'.join('| `%s` | %d | %d | %d | %s |' % (k, v['cells'], v['classes'], v['designs'], _mb(v['bytes']))
-                         for k, v in sorted(libraries.items()))
+            'bytes': sum(os.path.getsize(os.path.join(folder, x)) for x in os.listdir(folder)),
+            'folder': os.path.relpath(folder, zoo)}
+    sizes = pack(zoo, hub, [v['folder'] for v in designs.values()] + [v['folder'] for v in libraries.values()])
+    for v in list(designs.values()) + list(libraries.values()):
+        folder = v.pop('folder')
+        v['download'] = sum(b for rel, b in sizes.items() if os.path.dirname(rel) == folder)
+    for k, v in designs.items():
+        p = per.setdefault(k.rpartition('/')[0], [0, 0, 0, 0])
+        p[0] += 1; p[1] = max(p[1], v['cells']); p[2] += v['bytes']; p[3] += v['download']
+    rows = '\n'.join('| `%s` | %d | %s | %s (%s) | %s | %s | %s |' % (s, n, '{:,}'.format(cmax), _mb(b), _mb(dl), *SUITES[s])
+                     for s, (n, cmax, b, dl) in sorted(per.items()))
+    lib_rows = '\n'.join('| `%s` | %d | %d | %d | %s (%s) |' % (k, v['cells'], v['classes'], v['designs'], _mb(v['bytes']),
+                                                              _mb(v['download'])) for k, v in sorted(libraries.items()))
     n_timing = sum('timing' in v['facts'] for v in designs.values())
-    with open(os.path.join(zoo, 'README.md'), 'w') as f:
-        f.write(CARD.format(n=len(designs), k=len(per), rows=rows, lib_rows=lib_rows, n_timing=n_timing))
-    total = sum(v['bytes'] for v in designs.values())
-    print('%d designs in %d suites, %s; wrote index.json and README.md in %s' % (len(designs), len(per), _mb(total), zoo))
+    card = CARD.format(n=len(designs), k=len(per), rows=rows, lib_rows=lib_rows, n_timing=n_timing)
+    for d in (zoo, hub):
+        with open(os.path.join(d, 'index.json'), 'w') as f:
+            json.dump({'schema': 'attar-zoo-index/1', 'designs': designs, 'libraries': libraries}, f, indent=1)
+        with open(os.path.join(d, 'README.md'), 'w') as f:
+            f.write(card)
+    total = sum(v['bytes'] for v in list(designs.values()) + list(libraries.values()))
+    dl = sum(v['download'] for v in list(designs.values()) + list(libraries.values()))
+    print('%d designs in %d suites, %s (download %s); wrote index.json and README.md in %s, packed %s'
+          % (len(designs), len(per), _mb(total), _mb(dl), zoo, hub))
 
 
 def _mb(b):
@@ -199,4 +278,6 @@ def _strings(o):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('--zoo', help='the zoo folder (default: zoo/ in the checkout)')
-    main(ap.parse_args().zoo)
+    ap.add_argument('--hub', help='the upload folder (default: zoo_hub/ beside the zoo)')
+    a = ap.parse_args()
+    main(a.zoo, a.hub)

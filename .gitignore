@@ -23,3 +23,6 @@ tools/distill_*.py
 
 # experiment build outputs
 experiments/ggr_corr/ggr_attar
+
+# upload folder of the zoo (tools/zoo_release.py)
+zoo_hub/
