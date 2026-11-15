@@ -673,8 +673,9 @@ def rudy(d, g, pos=None):
     c = (lo + hi) / 2
     sz = torch.maximum(hi - lo, torch.tensor([t, t], device=p.device))
     lo, hi = c - sz / 2, c + sz / 2
-    mh = grid_.accumulate(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], w / sz[:, 1]) / grid_.bin_area * t
-    mv = grid_.accumulate(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], w / sz[:, 0]) / grid_.bin_area * t
+    # summed in a fixed order: the same map, hence the same GROV, every call on the same placement
+    mh = grid_.accumulate(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], w / sz[:, 1], deterministic=True) / grid_.bin_area * t
+    mv = grid_.accumulate(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], w / sz[:, 0], deterministic=True) / grid_.bin_area * t
     return mh.double().cpu().numpy().T, mv.double().cpu().numpy().T
 
 
