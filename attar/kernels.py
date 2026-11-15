@@ -76,8 +76,10 @@ class Grid:
         g = R.view(K, -1)[:, idx]                       # (K, N, 16)
         return (g * w[None]).sum(2).T
 
-    def accumulate(self, x0, y0, x1, y1, value, out=None):
-        """map[i, j] = sum_r value_r * overlap_area(rect_r, bin_ij). value: per unit area (e.g. 1 for cell area)."""
+    def accumulate(self, x0, y0, x1, y1, value, out=None, deterministic=False):
+        """map[i, j] = sum_r value_r * overlap_area(rect_r, bin_ij). value: per unit area (e.g. 1 for cell area).
+        deterministic: sum on the host in float64, in a fixed order (the same map every call; float atomics on the GPU
+        add in any order); the map comes back in float64."""
         W = self.ny + 1
         D = torch.zeros((self.nx + 1) * W, device=self.device, dtype=value.dtype)
         X, Y = self._corners(x0, y0, x1, y1)
@@ -88,8 +90,12 @@ class Grid:
                 for dx, wx in ((0, ax), (1, bx)):
                     for dy, wy in ((0, ay), (1, by)):
                         idx.append((kx + dx) * W + (ky + dy)); val.append(s * wx * wy)
-        D.index_add_(0, torch.cat(idx), torch.cat(val))
-        m = D.view(self.nx + 1, W).cumsum(0).cumsum(1)[:self.nx, :self.ny]
+        if deterministic:
+            D = torch.bincount(torch.cat(idx).cpu(), weights=torch.cat(val).double().cpu(), minlength=len(D))
+            m = D.view(self.nx + 1, W).cumsum(0).cumsum(1)[:self.nx, :self.ny].to(self.device)
+        else:
+            D.index_add_(0, torch.cat(idx), torch.cat(val))
+            m = D.view(self.nx + 1, W).cumsum(0).cumsum(1)[:self.nx, :self.ny]
         return m if out is None else out.add_(m)
 
     def integrate(self, field, x0, y0, x1, y1):

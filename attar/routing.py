@@ -10,7 +10,7 @@ ROUTING_LAYER_ADJUSTMENT where the design comes from ORFS).
 capacity(d) rebuilds OpenROAD's grid and capacities from the IR (GlobalRouter: initGrid, computeGCellCapacity,
 computeObstructionsAdjustments, applyObstructionAdjustment + initBlockedIntervals, the global layer adjustment; the
 rules gsta's FastRoute port reproduces): gcells of 15 x the median M2-M4 track pitch, each edge's capacity the tracks
-of its layer inside the gcell strip, minus what instance pins / OBS (at the current placement) and special nets block,
+of its layer inside the gcell strip, minus what instance pins / OBS (at the placement evaluated) and special nets block,
 times (1 - adjustment). overflow(d) puts RUDY demand on that grid, per direction, and reports the share of gcell edges
 whose demand exceeds their capacity (GROV).
 """
@@ -268,9 +268,10 @@ def grid(d):
             'die': (x0, y0, x1, y1), 'horizontal': horiz}
 
 
-def capacity(d, adjustment=None, layers=None):
+def capacity(d, adjustment=None, layers=None, pos=None):
     """Per layer, the capacity of every gcell edge as OpenROAD computes it: (g, h3 [L][ny][nx-1], v3 [L][ny-1][nx])
-    (layer L = names['layers'][L]; outside the routing range 0). adjustment / layers override the manifest's."""
+    (layer L = names['layers'][L]; outside the routing range 0). adjustment / layers override the manifest's; pos:
+    the placement whose instance pins and OBS block (default the design's)."""
     a, names = d.raw, d.names
     r = d.manifest.get('routing') or {}
     lay = layers or r.get('layers') or [names['layers'][1], names['layers'][-1]]
@@ -306,11 +307,11 @@ def capacity(d, adjustment=None, layers=None):
             h3[l] = cap[:, None]
         else:
             v3[l] = cap[None, :]
-    # obstructions (computeObstructionsAdjustments): instances' pin / OBS shapes at the current placement (macro OBS
+    # obstructions (computeObstructionsAdjustments): instances' pin / OBS shapes at the placement evaluated (macro OBS
     # extended), special nets; edges they cover go to 0 now, their partially blocked intervals are kept; then the
     # transition layers are halved over macros; then the intervals cost their tracks (initBlockedIntervals)
     t, _ = st.load(os.path.join(d.path, 'routing.safetensors'))
-    rects, macro_obs = _obstructions(d, t, lo, hi, horiz)
+    rects, macro_obs = _obstructions(d, t, lo, hi, horiz, pos)
     hint, vint = _apply_obstructions(rects, h3, v3, g, horiz, pitch)
     _transition_layers(t, macro_obs, h3, v3, g, horiz, pitch, hi)
     _blocked_intervals(hint, vint, h3, v3, pitch)
@@ -330,25 +331,32 @@ def _xform(A, B, C, D, r):
     return [min(xs), min(ys), max(xs), max(ys)]
 
 
-def _intersect(rs1, rs2):
+def _intersect(rs1, rs2, chunk=1 << 21):
+    """Every non-empty intersection of a rectangle of rs1 with one of rs2, rs1-major (as two nested loops)."""
+    if not len(rs1) or not len(rs2):
+        return []
+    a = np.asarray(rs1, np.int64).reshape(-1, 4); b = np.asarray(rs2, np.int64).reshape(-1, 4)
     out = []
-    for a in rs1:
-        for b in rs2:
-            r = [max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])]
-            if r[0] < r[2] and r[1] < r[3]:
-                out.append(r)
+    step = max(1, chunk // len(b))
+    for i in range(0, len(a), step):
+        x = a[i:i + step, None, :]
+        r = np.concatenate([np.maximum(x[..., :2], b[None, :, :2]), np.minimum(x[..., 2:], b[None, :, 2:])], -1)
+        out += r[(r[..., 0] < r[..., 2]) & (r[..., 1] < r[..., 3])].tolist()
     return out
 
 
-def _obstructions(d, t, lo, hi, horiz):
-    """GlobalRouter::findInstancesObstructions and findNetsObstructions at the current placement:
-    ([(layer, x0, y0, x1, y1, is_macro)], {layer: [macro OBS rects]}) in dbu. A macro's (CLASS BLOCK) OBS on a layer
-    also blocks a layer between two obstructed ones where both overlap, and the routing range's end layer next to an
-    obstructed one (extendObstructions); macro OBS grows across the layer's direction by the layer's spacing extension.
-    Every other shape (pins, standard-cell OBS, special nets) blocks as it is."""
+def _obstructions(d, t, lo, hi, horiz, pos=None):
+    """GlobalRouter::findInstancesObstructions and findNetsObstructions at pos (default the design's placement):
+    ((layer (n,), rect (n, 4), is_macro (n,)) int64 / bool arrays in dbu, {layer: [macro OBS rects]}), rectangles in
+    instance order (each instance's shapes in master order), then the special nets. A macro's (CLASS BLOCK) OBS on a
+    layer also blocks a layer between two obstructed ones where both overlap, and the routing range's end layer next to
+    an obstructed one (extendObstructions); macro OBS grows across the layer's direction by the layer's spacing
+    extension. Every other shape (pins, standard-cell OBS, special nets) blocks as it is. Standard cells are placed in
+    one batch; macros one by one (few)."""
     from .deffile import ORIENTS
     from .distill import M_BLOCK
-    out, macro_obs = [], {}
+    macro_obs = {}
+    parts = []                                       # (instance rank, sequence, layer, rect, is_macro)
     keep = (t['rm_layer'] >= lo) & (t['rm_layer'] <= hi)
     rm_m, rm_l, rm_r = t['rm_master'][keep], t['rm_layer'][keep], t['rm_rect'][keep]
     rm_o = t['rm_obs'][keep] if 'rm_obs' in t else np.zeros(len(rm_m), np.uint8)
@@ -359,11 +367,36 @@ def _obstructions(d, t, lo, hi, horiz):
         has = np.zeros(len(a['m_size']), bool); has[rm_m] = True
         cells = np.nonzero((cm >= 0) & has[np.maximum(cm, 0)])[0]
         if len(cells):
-            pos = np.rint(d.pos[torch.as_tensor(cells, device=d.pos.device)].double().cpu().numpy() * d.dbu).astype(np.int64)
+            P = d.pos if pos is None else pos
+            pos = np.rint(P[torch.as_tensor(cells, device=P.device)].detach().double().cpu().numpy() * d.dbu).astype(np.int64)
             ori = d.orient.cpu().numpy()[cells]
             msz = a['m_size'].astype(np.int64); mcls = a['m_class']
             o = np.argsort(rm_m, kind='stable'); rs = np.searchsorted(rm_m[o], np.arange(len(msz) + 1))
-            for ci, c in enumerate(cells):
+            mi_all = cm[cells]
+            blk = mcls[mi_all] == M_BLOCK
+            # standard cells (every instance not CLASS BLOCK): all shapes at once
+            sc = np.nonzero(~blk)[0]
+            cnt = (rs[mi_all[sc] + 1] - rs[mi_all[sc]]).astype(np.int64)
+            n = int(cnt.sum())
+            if n:
+                own = np.repeat(sc, cnt)                                   # index into cells
+                seq = np.arange(n) - np.repeat(np.cumsum(cnt) - cnt, cnt)  # shape order within the instance
+                k = o[np.repeat(rs[mi_all[sc]], cnt) + seq]
+                om = np.array([_ORIENT[nm] for nm in ORIENTS], np.int64)[ori[own].astype(np.int64)]
+                A, B, C, D = om[:, 0], om[:, 1], om[:, 2], om[:, 3]
+                w, h = msz[mi_all[own], 0], msz[mi_all[own], 1]
+                ox = pos[own, 0] - np.minimum(0, A * w + B * h)          # _xform of the master box (0, 0, w, h)
+                oy = pos[own, 1] - np.minimum(0, C * w + D * h)
+                r = rm_r[k].astype(np.int64)
+                xa, xb = A * r[:, 0] + B * r[:, 1], A * r[:, 2] + B * r[:, 3]
+                ya, yb = C * r[:, 0] + D * r[:, 1], C * r[:, 2] + D * r[:, 3]
+                rect = np.stack([np.minimum(xa, xb) + ox, np.minimum(ya, yb) + oy,
+                                 np.maximum(xa, xb) + ox, np.maximum(ya, yb) + oy], 1)
+                parts.append((own, seq, rm_l[k].astype(np.int64), rect, np.zeros(n, bool)))
+            # macros (CLASS BLOCK): one by one
+            mrows = []
+            for ci in np.nonzero(blk)[0].tolist():
+                c = cells[ci]
                 mi = cm[c]
                 A, B, C, D = _ORIENT[ORIENTS[int(ori[ci])]]
                 box = _xform(A, B, C, D, (0, 0, msz[mi][0], msz[mi][1]))
@@ -371,161 +404,252 @@ def _obstructions(d, t, lo, hi, horiz):
                 shapes = [(int(rm_l[k]), bool(rm_o[k]), _xform(A, B, C, D, [int(v) for v in rm_r[k]]))
                           for k in o[rs[mi]:rs[mi + 1]]]
                 shapes = [(l, ob, [r[0] + ox, r[1] + oy, r[2] + ox, r[3] + oy]) for l, ob, r in shapes]
-                if mcls[mi] == M_BLOCK:
-                    per = {}
-                    for l, ob, r in shapes:
-                        if ob:
-                            per.setdefault(l, []).append(r)
-                    if per:
-                        bottom, top = min(per), max(per)
-                        if bottom - 1 == lo:
-                            bottom -= 1
-                        if top + 1 == hi:
-                            top += 1
-                        for l in range(bottom, top + 1):         # extendObstructions / layerIsBlocked
-                            extra = []
-                            if l == hi and (l - 1) in per:
-                                extra = list(per[l - 1])
-                            if l == lo and (l + 1) in per:
-                                extra = list(per[l + 1])
-                            extra += _intersect(per.get(l + 1, []), per.get(l - 1, []))
-                            if extra:
-                                per.setdefault(l, []).extend(extra)
-                        for l, rs_ in per.items():
-                            e = int(ext[l])
-                            for r in rs_:
-                                r = [r[0], r[1] - e, r[2], r[3] + e] if horiz[l] else [r[0] - e, r[1], r[2] + e, r[3]]
-                                macro_obs.setdefault(l, []).append(r)
-                                out.append((l, *r, True))
+                seq = 0
+                per = {}
+                for l, ob, r in shapes:
+                    if ob:
+                        per.setdefault(l, []).append(r)
+                if per:
+                    bottom, top = min(per), max(per)
+                    if bottom - 1 == lo:
+                        bottom -= 1
+                    if top + 1 == hi:
+                        top += 1
+                    for l in range(bottom, top + 1):         # extendObstructions / layerIsBlocked
+                        extra = []
+                        if l == hi and (l - 1) in per:
+                            extra = list(per[l - 1])
+                        if l == lo and (l + 1) in per:
+                            extra = list(per[l + 1])
+                        extra += _intersect(per.get(l + 1, []), per.get(l - 1, []))
+                        if extra:
+                            per.setdefault(l, []).extend(extra)
+                    for l, rs_ in per.items():
+                        e = int(ext[l])
+                        for r in rs_:
+                            r = [r[0], r[1] - e, r[2], r[3] + e] if horiz[l] else [r[0] - e, r[1], r[2] + e, r[3]]
+                            macro_obs.setdefault(l, []).append(r)
+                            mrows.append((ci, seq, l, *r, True)); seq += 1
                     shapes = [(l, ob, r) for l, ob, r in shapes if not ob]
                 for l, ob, r in shapes:
-                    out.append((l, *r, False))
+                    mrows.append((ci, seq, l, *r, False)); seq += 1
+            if mrows:
+                m = np.array([x[:7] for x in mrows], np.int64).reshape(-1, 7)
+                parts.append((m[:, 0], m[:, 1], m[:, 2], m[:, 3:7], np.array([x[7] for x in mrows], bool)))
+    if parts:
+        rank = np.concatenate([p[0] for p in parts]); seq = np.concatenate([p[1] for p in parts])
+        o = np.lexsort((seq, rank))
+        L = np.concatenate([p[2] for p in parts])[o]
+        R = np.concatenate([p[3] for p in parts])[o]
+        MAC = np.concatenate([p[4] for p in parts])[o]
+    else:
+        L, R, MAC = np.zeros(0, np.int64), np.zeros((0, 4), np.int64), np.zeros(0, bool)
     keep = (t['sn_layer'] >= lo) & (t['sn_layer'] <= hi)
-    for l, r in zip(t['sn_layer'][keep], t['sn_rect'][keep]):
-        out.append((int(l), *(int(v) for v in r), False))
-    return out, macro_obs
-
-
-def _tiles(rx0, ry0, rx1, ry1, g):
-    """Grid::getBlockedTiles: the first and last gcell (centers) of a rectangle, and their gcell boxes."""
-    tile, nx, ny = g['tile'], g['nx'], g['ny']
-    X0, Y0, X1, Y1 = g['die']
-
-    def on_grid(x, y):
-        gx, gy = (x - X0) // tile, (y - Y0) // tile
-        gx -= gx >= nx; gy -= gy >= ny
-        return gx * tile + tile // 2 + X0, gy * tile + tile // 2 + Y0
-    lx, ly = on_grid(rx0, ry0); ux, uy = on_grid(rx1, ry1)
-    ft = (lx - tile // 2, ly - tile // 2, lx + tile // 2, ly + tile // 2)
-    lt = [ux - tile // 2, uy - tile // 2, ux + tile // 2, uy + tile // 2]
-    if (X1 - lt[2]) // tile < 1:
-        lt[2] = X1
-    if (Y1 - lt[3]) // tile < 1:
-        lt[3] = Y1
-    return (lx - X0) // tile, (ly - Y0) // tile, (ux - X0) // tile, (uy - Y0) // tile, ft, lt
+    L = np.concatenate([L, t['sn_layer'][keep].astype(np.int64)])
+    R = np.concatenate([R, t['sn_rect'][keep].astype(np.int64).reshape(-1, 4)])
+    MAC = np.concatenate([MAC, np.zeros(int(keep.sum()), bool)])
+    return (L, R, MAC), macro_obs
 
 
 def _apply_obstructions(rects, h3, v3, g, horiz, pitch):
     """GlobalRouter::applyObstructionAdjustment for every rectangle: edges it covers on its inner gcell rows (columns)
     go to 0; on its first and last row (column) the blocked interval is kept per edge (for initBlockedIntervals). For a
-    macro's obstruction an interval that would leave one track grows by a track (Grid::computeTileReduceInterval)."""
-    nx, ny = g['nx'], g['ny']
+    macro's obstruction an interval that would leave one track grows by a track (Grid::computeTileReduceInterval).
+    Rectangles in order: a macro's interval sees the edges the rectangles before it zeroed (each zeroed edge keeps the
+    first rectangle that zeroes it). Vectorized over the rectangles (_apply_sequential is the one-at-a-time reference,
+    used when the zeroed edges are too many to list). Returns the intervals per direction as (flat edge index into
+    h3 / v3, start, end) arrays."""
+    L, R, MAC = rects
+    nx, ny, tile = g['nx'], g['ny'], g['tile']
     X0, Y0, X1, Y1 = g['die']
-    hint, vint = {}, {}
-    for l, rx0, ry0, rx1, ry1, macro in rects:
-        rx0, ry0, rx1, ry1 = max(rx0, X0), max(ry0, Y0), min(rx1, X1), min(ry1, Y1)
-        if rx0 > rx1 or ry0 > ry1:
-            continue
-        fx, fy, lastx, lasty, ft, lt = _tiles(rx0, ry0, rx1, ry1, g)
-        vertical = not horiz[l]
+    x0, y0 = np.maximum(R[:, 0], X0), np.maximum(R[:, 1], Y0)
+    x1, y1 = np.minimum(R[:, 2], X1), np.minimum(R[:, 3], Y1)
+    ok = ~((x0 > x1) | (y0 > y1))
+    L, MAC, x0, y0, x1, y1 = L[ok], MAC[ok], x0[ok], y0[ok], x1[ok], y1[ok]
 
-        def interval(tl, first, cap):
-            if vertical:
-                s, e = (rx0, rx1) if rx0 >= tl[0] and rx1 <= tl[2] else ((rx0, tl[2]) if first else (tl[0], rx1))
+    def on_grid(x, y):                                          # Grid::getBlockedTiles: gcell centers
+        gx, gy = (x - X0) // tile, (y - Y0) // tile
+        gx = gx - (gx >= nx); gy = gy - (gy >= ny)
+        return gx * tile + tile // 2 + X0, gy * tile + tile // 2 + Y0
+    lx, ly = on_grid(x0, y0); ux, uy = on_grid(x1, y1)
+    t2 = tile // 2
+    ft = (lx - t2, ly - t2, lx + t2, ly + t2)
+    lt = (ux - t2, uy - t2, ux + t2, uy + t2)
+    lt = (lt[0], lt[1], np.where((X1 - lt[2]) // tile < 1, X1, lt[2]), np.where((Y1 - lt[3]) // tile < 1, Y1, lt[3]))
+    fx, fy, lastx, lasty = (lx - X0) // tile, (ly - Y0) // tile, (ux - X0) // tile, (uy - Y0) // tile
+    vert = ~np.asarray(horiz, bool)[L]
+
+    def interval(tl, first):
+        in_v = (x0 >= tl[0]) & (x1 <= tl[2]); in_h = (y0 >= tl[1]) & (y1 <= tl[3])
+        s = np.where(vert, np.where(in_v, x0, x0 if first else tl[0]), np.where(in_h, y0, y0 if first else tl[1]))
+        e = np.where(vert, np.where(in_v, x1, tl[2] if first else x1), np.where(in_h, y1, tl[3] if first else y1))
+        return s, e
+    fs, fe = interval(ft, True)
+    ls, le = interval(lt, False)
+    hx_end = np.where(~vert & (fx == lastx) & (lastx + 1 < nx), lastx + 1, lastx)   # x range [fx, hx_end)
+    vy_end = np.where(vert & (fy == lasty) & (lasty + 1 < ny), lasty + 1, lasty)    # y range [fy, vy_end)
+    zeroing = np.where(vert, (vy_end > fy) & (lastx - fx >= 2), (hx_end > fx) & (lasty - fy >= 2))
+    # zeroed edges: each with the first (lowest-ranked) rectangle that zeroes it; a macro rectangle reads its first and
+    # last edge's capacity as the rectangles before it left it (0 once zeroed)
+    W, Wv = max(nx - 1, 0), max(ny - 1, 0)
+    zi = np.nonzero(zeroing)[0]
+    zr0 = np.where(vert[zi], fy[zi], fy[zi] + 1); zr1 = np.where(vert[zi], vy_end[zi], lasty[zi])        # rows [zr0, zr1)
+    zc0 = np.where(vert[zi], fx[zi] + 1, fx[zi]); zc1 = np.where(vert[zi], lastx[zi], hx_end[zi])        # columns
+    ncol = np.maximum(zc1 - zc0, 0); cnt = np.maximum(zr1 - zr0, 0) * ncol
+    if int(cnt.sum()) > 50_000_000:                         # too many edges to list: one rectangle at a time
+        _apply_sequential(L, MAC, vert, zeroing, fx, fy, lastx, lasty, hx_end, vy_end, fs, fe, ls, le, h3, v3, nx, ny,
+                          pitch)
+        return _expand_all(L, vert, fx, fy, lastx, lasty, hx_end, vy_end, fs, fe, ls, le, nx, ny)
+    rep = np.repeat(np.arange(len(zi)), cnt)
+    j = np.arange(len(rep)) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+    zy = zr0[rep] + j // np.maximum(ncol[rep], 1); zx = zc0[rep] + j % np.maximum(ncol[rep], 1)
+    zl, zv = L[zi][rep], vert[zi][rep]
+    zkey = np.where(zv, ((zl * Wv + zy) * nx + zx) * 2 + 1, ((zl * ny + zy) * W + zx) * 2)   # direction in the low bit
+    ukey, first = np.unique(zkey, return_index=True)        # stable: the first listed is the lowest rank
+    urank = zi[rep[first]]
+    mi = np.nonzero(MAC)[0]
+    if len(mi):
+        mv, ml = vert[mi], L[mi]
+        p = pitch[ml]
+
+        def cap_at(y, x, ok):
+            """Capacity of edge (y, x) on the macro rectangles' layers as the rectangles before each one left it."""
+            yc, xc = np.where(ok, y, 0), np.where(ok, x, 0)
+            key = np.where(mv, ((ml * Wv + yc) * nx + xc) * 2 + 1, ((ml * ny + yc) * W + xc) * 2)
+            k = np.minimum(np.searchsorted(ukey, key), max(len(ukey) - 1, 0))
+            zeroed = (ukey[k] == key) & (urank[k] < mi) if len(ukey) else np.zeros(len(mi), bool)
+            hv = h3[ml, yc, np.minimum(xc, max(W - 1, 0))] if h3.size else np.zeros(len(mi), np.int64)
+            vv = v3[ml, np.minimum(yc, max(Wv - 1, 0)), xc] if v3.size else np.zeros(len(mi), np.int64)
+            return np.where(ok & ~zeroed, np.where(mv, vv, hv), 0)
+        okh, okv = nx > 1, ny > 1
+        ok = np.where(mv, okv, okh)
+        cap_f = cap_at(np.where(mv, np.minimum(fy[mi], ny - 2), fy[mi]), np.where(mv, fx[mi], np.minimum(fx[mi], nx - 2)), ok)
+        cap_l = cap_at(np.where(mv, np.minimum(lasty[mi], ny - 2), lasty[mi]),
+                       np.where(mv, lastx[mi], np.minimum(lastx[mi], nx - 2)), ok)
+        fe[mi] = np.where(cap_f - np.ceil(np.abs(fe[mi] - fs[mi]) / p) == 1, fe[mi] + p, fe[mi])
+        le[mi] = np.where(cap_l - np.ceil(np.abs(le[mi] - ls[mi]) / p) == 1, le[mi] + p, le[mi])
+    hk, vk = ukey[ukey % 2 == 0] // 2, ukey[ukey % 2 == 1] // 2
+    if len(hk):
+        h3[np.unravel_index(hk, h3.shape)] = 0
+    if len(vk):
+        v3[np.unravel_index(vk, v3.shape)] = 0
+    return _expand_all(L, vert, fx, fy, lastx, lasty, hx_end, vy_end, fs, fe, ls, le, nx, ny)
+
+
+def _apply_sequential(L, MAC, vert, zeroing, fx, fy, lastx, lasty, hx_end, vy_end, fs, fe, ls, le, h3, v3, nx, ny,
+                      pitch):
+    """_apply_obstructions' macro intervals and zeroing one rectangle at a time, in order (the reference)."""
+    for i in np.nonzero(MAC | zeroing)[0].tolist():
+        l = int(L[i])
+        if MAC[i]:
+            p = pitch[l]
+            if not vert[i]:
+                cap_f = h3[l, fy[i], min(fx[i], nx - 2)] if nx > 1 else 0
+                cap_l = h3[l, lasty[i], min(lastx[i], nx - 2)] if nx > 1 else 0
             else:
-                s, e = (ry0, ry1) if ry0 >= tl[1] and ry1 <= tl[3] else ((ry0, tl[3]) if first else (tl[1], ry1))
-            if macro and cap - math.ceil(abs(e - s) / pitch[l]) == 1:
-                e += pitch[l]
-            return s, e
-        if not vertical:
-            cap_f = h3[l, fy, min(fx, nx - 2)] if nx > 1 else 0
-            cap_l = h3[l, lasty, min(lastx, nx - 2)] if nx > 1 else 0
-            fi, li = interval(ft, True, cap_f), interval(lt, False, cap_l)
-            if fx == lastx and lastx + 1 < nx:
-                lastx += 1
-            for x in range(fx, lastx):
-                for y in range(fy, lasty + 1):
-                    if y == fy:
-                        hint.setdefault((x, y, l), []).append(fi)
-                    elif y == lasty:
-                        hint.setdefault((x, y, l), []).append(li)
-                    else:
-                        h3[l, y, x] = 0
-        else:
-            cap_f = v3[l, min(fy, ny - 2), fx] if ny > 1 else 0
-            cap_l = v3[l, min(lasty, ny - 2), lastx] if ny > 1 else 0
-            fi, li = interval(ft, True, cap_f), interval(lt, False, cap_l)
-            if fy == lasty and lasty + 1 < ny:
-                lasty += 1
-            for x in range(fx, lastx + 1):
-                for y in range(fy, lasty):
-                    if x == fx:
-                        vint.setdefault((x, y, l), []).append(fi)
-                    elif x == lastx:
-                        vint.setdefault((x, y, l), []).append(li)
-                    else:
-                        v3[l, y, x] = 0
+                cap_f = v3[l, min(fy[i], ny - 2), fx[i]] if ny > 1 else 0
+                cap_l = v3[l, min(lasty[i], ny - 2), lastx[i]] if ny > 1 else 0
+            if cap_f - math.ceil(abs(fe[i] - fs[i]) / p) == 1:
+                fe[i] += p
+            if cap_l - math.ceil(abs(le[i] - ls[i]) / p) == 1:
+                le[i] += p
+        if zeroing[i]:
+            if not vert[i]:
+                h3[l, fy[i] + 1:lasty[i], fx[i]:hx_end[i]] = 0
+            else:
+                v3[l, fy[i]:vy_end[i], fx[i] + 1:lastx[i]] = 0
+
+
+def _expand_all(L, vert, fx, fy, lastx, lasty, hx_end, vy_end, fs, fe, ls, le, nx, ny):
+    """The blocked intervals of every rectangle on its first and last gcell row (column), per edge."""
+    def expand(sel, a0, a1, fixed, other, s, e, s2, e2, two, flat):
+        """Intervals of the rectangles sel along [a0, a1): at `fixed` (first) and, where two, at `other` (last)."""
+        cnt = np.maximum(a1[sel] - a0[sel], 0)
+        rep = np.repeat(np.nonzero(sel)[0], cnt)
+        run = a0[rep] + np.arange(len(rep)) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+        sec = two[rep]
+        return (np.concatenate([flat(L[rep], fixed[rep], run), flat(L[rep[sec]], other[rep[sec]], run[sec])]),
+                np.concatenate([s[rep], s2[rep[sec]]]), np.concatenate([e[rep], e2[rep[sec]]]))
+    W = max(nx - 1, 0)
+    hint = expand(~vert, fx, hx_end, fy, lasty, fs, fe, ls, le, lasty != fy,
+                  lambda l, y, x: (l * ny + y) * W + x)
+    vint = expand(vert, fy, vy_end, fx, lastx, fs, fe, ls, le, lastx != fx,
+                  lambda l, x, y: (l * max(ny - 1, 0) + y) * nx + x)
     return hint, vint
 
 
 def _transition_layers(t, macro_obs, h3, v3, g, horiz, pitch, hi):
     """GlobalRouter::findTransitionLayers + adjustTransitionLayers: a layer whose default via is wider than 0.8 of its
-    track pitch has its edges halved (floor, at least 1) over the gcells a macro obstructs on the layer below."""
+    track pitch has its edges halved (floor, at least 1) over the gcells a macro obstructs on the layer below.
+    The gcells (x, y) are a set; an index below 0 counts from the end (numpy), so a gcell reached twice that way is
+    halved twice."""
     via_w = t['layer_via_w'] if 'layer_via_w' in t else None
     if via_w is None:
         return
+    tile, nx, ny = g['tile'], g['nx'], g['ny']
+    X0, Y0 = g['die'][0], g['die'][1]
     for l in range(1, hi + 1):
         if not via_w[l] or via_w[l] / float(pitch[l]) <= 0.8 or not macro_obs.get(l - 1):
             continue
-        tiles = set()
-        for r in macro_obs[l - 1]:
-            fx, fy, lastx, lasty, _ft, _lt = _tiles(*r, g)
-            if fx == lastx and fy == lasty:
-                continue
-            for y in range(fy, lasty):
-                for x in range(fx, lastx):
-                    tiles.add((x, y))
-        for x, y in tiles:
-            if horiz[l]:
-                if x < h3.shape[2]:
-                    c = h3[l, y, x]; h3[l, y, x] = max(int(c * 0.5), 1) if c > 0 else c
-            elif y < v3.shape[1]:
-                c = v3[l, y, x]; v3[l, y, x] = max(int(c * 0.5), 1) if c > 0 else c
+        r = np.asarray(macro_obs[l - 1], np.int64).reshape(-1, 4)
+        gx0, gy0 = (r[:, 0] - X0) // tile, (r[:, 1] - Y0) // tile          # Grid::getBlockedTiles: corner gcells
+        gx1, gy1 = (r[:, 2] - X0) // tile, (r[:, 3] - Y0) // tile
+        fx, fy = gx0 - (gx0 >= nx), gy0 - (gy0 >= ny)
+        lastx, lasty = gx1 - (gx1 >= nx), gy1 - (gy1 >= ny)
+        keep = ~((fx == lastx) & (fy == lasty)) & (lastx > fx) & (lasty > fy)   # tiles x in [fx, lastx), y in [fy, lasty)
+        fx, fy, lastx, lasty = fx[keep], fy[keep], lastx[keep], lasty[keep]
+        if not len(fx):
+            continue
+        # the set of tiles: coverage counts on the box around them (corner differences, 2D prefix sums)
+        xm, ym = int(fx.min()), int(fy.min())
+        XW, YH = int(lastx.max()) - xm + 1, int(lasty.max()) - ym + 1
+        corner = lambda y, x: (y - ym) * XW + (x - xm)              # noqa: E731
+        D = np.bincount(np.concatenate([corner(fy, fx), corner(fy, lastx), corner(lasty, fx), corner(lasty, lastx)]),
+                        np.concatenate([np.ones(len(fx)), -np.ones(len(fx)), -np.ones(len(fx)), np.ones(len(fx))]),
+                        minlength=YH * XW)
+        cov = np.rint(D).astype(np.int64).reshape(YH, XW).cumsum(0).cumsum(1)
+        yy, xx = np.nonzero(cov > 0)
+        xy = np.stack([xx + xm, yy + ym], 1)
+        arr = h3[l] if horiz[l] else v3[l]
+        xy = xy[xy[:, 0] < h3.shape[2]] if horiz[l] else xy[xy[:, 1] < v3.shape[1]]
+        if not len(xy):
+            continue
+        H, Wd = arr.shape
+        if (xy[:, 1] >= H).any() or (xy[:, 1] < -H).any() or (xy[:, 0] >= Wd).any() or (xy[:, 0] < -Wd).any():
+            raise IndexError('transition-layer gcell outside the grid')
+        flat = np.where(xy[:, 1] < 0, xy[:, 1] + H, xy[:, 1]) * Wd + np.where(xy[:, 0] < 0, xy[:, 0] + Wd, xy[:, 0])
+        u, times = np.unique(flat, return_counts=True)
+        for k in range(int(times.max())):
+            sel = u[times > k]
+            yy, xx = sel // Wd, sel % Wd
+            c = arr[yy, xx]
+            arr[yy, xx] = np.where(c > 0, np.maximum(c // 2, 1), c)
 
 
 def _blocked_intervals(hint, vint, h3, v3, pitch):
-    """FastRouteCore::initBlockedIntervals: an edge's blocked intervals, merged, cost ceil(length / pitch) tracks."""
-    def blocked(v):
-        v.sort()
-        total, lo_, hi_ = 0, None, None
-        for s, e in v:
-            if e <= s:
-                continue
-            if hi_ is None:
-                lo_, hi_ = s, e
-            elif s <= hi_:
-                hi_ = max(hi_, e)
-            else:
-                total += hi_ - lo_; lo_, hi_ = s, e
-        if hi_ is not None:
-            total += hi_ - lo_
-        return total
-    for (x, y, l), v in hint.items():
-        if h3[l, y, x] > 0:
-            h3[l, y, x] = max(h3[l, y, x] - int(math.ceil(blocked(v) / pitch[l])), 0)
-    for (x, y, l), v in vint.items():
-        if v3[l, y, x] > 0:
-            v3[l, y, x] = max(v3[l, y, x] - int(math.ceil(blocked(v) / pitch[l])), 0)
+    """FastRouteCore::initBlockedIntervals: an edge's blocked intervals, merged, cost ceil(length / pitch) tracks.
+    hint / vint: (flat edge index, start, end) arrays (see _apply_obstructions). The merged length of an edge's
+    intervals, sorted by start, is the sum of what each one adds beyond the furthest end before it."""
+    for (key, s, e), cap in ((hint, h3), (vint, v3)):
+        m = e > s
+        key, s, e = key[m], s[m], e[m]
+        if not len(key) or not cap.size:
+            continue
+        o = np.lexsort((s, key))
+        key, s, e = key[o], s[o], e[o]
+        first = np.ones(len(key), bool); first[1:] = key[1:] != key[:-1]
+        gid = np.cumsum(first) - 1
+        base = int(e.min()); span = int(e.max()) - base + 1
+        run = np.maximum.accumulate(gid * span + (e - base)) - gid * span + base   # furthest end so far, per edge
+        prev = np.empty_like(run); prev[1:] = run[:-1]
+        add = np.where(first, e - s, np.maximum(e - np.maximum(s, prev), 0))
+        starts = np.nonzero(first)[0]
+        total = np.add.reduceat(add, starts)
+        idx = np.unravel_index(key[starts], cap.shape)
+        c = cap[idx]
+        pos = c > 0
+        idx, c, total = tuple(i[pos] for i in idx), c[pos], total[pos]
+        cap[idx] = np.maximum(c - np.ceil(total / pitch[idx[0]]).astype(np.int64), 0)
 
 
 # -- RUDY demand and overflow ------------------------------------------------------------------------------------------
@@ -549,8 +673,9 @@ def rudy(d, g, pos=None):
     c = (lo + hi) / 2
     sz = torch.maximum(hi - lo, torch.tensor([t, t], device=p.device))
     lo, hi = c - sz / 2, c + sz / 2
-    mh = grid_.accumulate(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], w / sz[:, 1]) / grid_.bin_area * t
-    mv = grid_.accumulate(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], w / sz[:, 0]) / grid_.bin_area * t
+    # summed in a fixed order: the same map, hence the same GROV, every call on the same placement
+    mh = grid_.accumulate(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], w / sz[:, 1], deterministic=True) / grid_.bin_area * t
+    mv = grid_.accumulate(lo[:, 0], lo[:, 1], hi[:, 0], hi[:, 1], w / sz[:, 0], deterministic=True) / grid_.bin_area * t
     return mh.double().cpu().numpy().T, mv.double().cpu().numpy().T
 
 
@@ -573,7 +698,7 @@ def overflow(d, pos=None, adjustment=None, layers=None, maps=False):
     """Global-routing overflow (GROV) estimated with RUDY on OpenROAD's grid and capacities: the share of gcell edges
     (horizontal and vertical) whose RUDY demand exceeds their capacity, in %, with per-direction values, the total
     overflow (tracks) and the worst edge utilization. maps=True adds the demand and capacity maps."""
-    g, h3, v3 = capacity(d, adjustment, layers)
+    g, h3, v3 = capacity(d, adjustment, layers, pos)       # pins and OBS where pos puts the instances
     dh, dv = rudy(d, g, pos)
     cap_h, cap_v = h3.sum(0).astype(np.float64), v3.sum(0).astype(np.float64)
     r = edge_overflow(dh, dv, cap_h, cap_v)

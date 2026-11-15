@@ -50,13 +50,16 @@ def export(d, out_def):
     na = names.get('net_attrs') or {'default': '', 'except': {}}
     masters = names['masters']; cm = a['c_master']
     lines = []
+    xs, ys, ol, fll, pl, cml = (xy[:, 0].tolist(), xy[:, 1].tolist(), o.tolist(), fl.tolist(), placed.tolist(),
+                                cm.tolist())                 # Python lists: no numpy scalar per component
+    exc, dflt = ca['except'], ca['default']
     for i in owned:
-        if fl[i] & ASIDE or not placed[i]:
+        if fll[i] & ASIDE or not pl[i]:
             state = 'UNPLACED'
         else:
-            state = 'FIXED' if fl[i] & FIXED else 'PLACED'
-        lines.append(comp_statement(cells[i], masters[cm[i]], state, int(xy[i, 0]), int(xy[i, 1]), ORIENTS[o[i]],
-                                    ca['except'].get(str(i), ca['default'])))
+            state = 'FIXED' if fll[i] & FIXED else 'PLACED'
+        lines.append(comp_statement(cells[i], masters[cml[i]], state, xs[i], ys[i], ORIENTS[ol[i]],
+                                    exc.get(str(i), dflt)))
     mpin_flat = [p for ms in names['master_pins'] for p in ms]
     is_term = (raw_fl & TERMINAL) != 0
     nets = net_statements(names['nets'], a['n_ptr'], a['p_cell'], a['p_mpin'], cells, is_term, mpin_flat,

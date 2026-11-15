@@ -326,9 +326,16 @@ def write_framed(frame, dst, comp_lines, net_lines):
     lines = frame.splitlines(True)
     counts = {}
     sec = None
+
+    def header(line):
+        """'COMPONENTS' / 'NETS' when line opens that section, else ''."""
+        if not line.lstrip().startswith(('COMPONENTS', 'NETS')):   # cheap test first: most lines are neither
+            return ''
+        k = line.split()[0]
+        return k if k in ('COMPONENTS', 'NETS') and line.strip().endswith(';') else ''
     for line in lines:                                    # statements the frame keeps per section
-        k = line.split()[0] if line.strip() else ''
-        if k in ('COMPONENTS', 'NETS') and line.strip().endswith(';'):
+        k = header(line)
+        if k:
             sec = k; counts[k] = 0
         elif sec and line.startswith('END ' + sec):
             sec = None
@@ -338,8 +345,8 @@ def write_framed(frame, dst, comp_lines, net_lines):
     with open(dst, 'w') as fo:
         sec = None
         for line in lines:
-            k = line.split()[0] if line.strip() else ''
-            if k in ('COMPONENTS', 'NETS') and line.strip().endswith(';'):
+            k = header(line)
+            if k:
                 sec = k
                 fo.write('%s %d ;\n' % (k, counts[k] + len(add[k])))
                 continue
@@ -358,12 +365,15 @@ def net_statements(net_names, n_ptr, p_cell, p_mpin, cell_names, is_term, mpin_f
     """NETS statements from CSR arrays: pins of net k are n_ptr[k]:n_ptr[k+1]; an IO terminal cell is '( PIN name )',
     a cell pin '( cell master_pin )'. attrs(k) -> ' + USE ...' of net k. skip: nets not to write (mask)."""
     out = []
+    lst = lambda v: v.tolist() if hasattr(v, 'tolist') else list(v)  # noqa: E731
+    ptr, pc, pm, term = lst(n_ptr), lst(p_cell), lst(p_mpin), lst(is_term)   # lists: no numpy scalar per net
+    skip = lst(skip) if skip is not None else None
     for k, name in enumerate(net_names):
         if skip is not None and skip[k]:
             continue
-        a, b = int(n_ptr[k]), int(n_ptr[k + 1])
-        conns = ['( PIN %s )' % cell_names[c] if is_term[c] else '( %s %s )' % (cell_names[c], mpin_flat[m])
-                 for c, m in zip(p_cell[a:b].tolist(), p_mpin[a:b].tolist())]
+        a, b = int(ptr[k]), int(ptr[k + 1])
+        conns = ['( PIN %s )' % cell_names[c] if term[c] else '( %s %s )' % (cell_names[c], mpin_flat[m])
+                 for c, m in zip(pc[a:b], pm[a:b])]
         body = '\n      '.join(' '.join(conns[i:i + 6]) for i in range(0, len(conns), 6))
         out.append('    - %s %s%s ;\n' % (name, body, attrs(k)))
     return out
