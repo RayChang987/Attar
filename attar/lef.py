@@ -101,7 +101,9 @@ def read_lef(paths, macros=None, tech=None):
                     elif k == 'SPACING' and 'spacing' not in layer and len(t) > 1:   # the plain minimum spacing
                         layer['spacing'] = float(t[1].rstrip(';'))
                     elif k == 'END' and len(t) > 1 and t[1] == layer['name']:
-                        if layer.get('type') == 'ROUTING':
+                        # a layer a LEF read before already defines keeps that definition (OpenROAD keeps the
+                        # first tech; ICCAD 2025's design LEFs repeat the layers with WIDTH 0)
+                        if layer.get('type') == 'ROUTING' and all(l['name'] != layer['name'] for l in tech['layers']):
                             tech['layers'].append(layer)
                         layer = None
                 elif site is not None:
