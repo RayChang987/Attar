@@ -8,12 +8,16 @@ import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(here, '..'))
+import torch  # noqa: E402
+
 import attar  # noqa: E402
+
+dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 name = sys.argv[1] if len(sys.argv) > 1 else 'after_fp/orfs_asap7/aes'
 tag = '_'.join(name.split('/')[-2:])                   # <suite>_<design>
 
-d = attar.load(name, device='cuda')                    # downloads the design on first use; the cells are unplaced
+d = attar.load(name, device=dev)                       # downloads the design on first use; the cells are unplaced
 d.status()                                             # what the design has and what it can do
 d.plot(os.path.join(here, tag + '_floorplan.png'))
 

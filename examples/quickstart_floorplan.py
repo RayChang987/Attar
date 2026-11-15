@@ -9,13 +9,17 @@ import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(here, '..'))
+import torch  # noqa: E402
+
 import attar  # noqa: E402
+
+dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 name = sys.argv[1] if len(sys.argv) > 1 else 'before_fp/gsrc_hard/n100'
 util = None if sys.argv[2:3] == ['-'] else float(sys.argv[2]) if len(sys.argv) > 2 else 0.85
 tag = '_'.join(name.split('/')[-2:])                   # <suite>_<design>
 
-d = attar.load(name, device='cuda')                    # the netlist; die, IO pins and macros are still open
+d = attar.load(name, device=dev)                       # the netlist; die, IO pins and macros are still open
 d.status()
 
 d.floorplan(utilization=util)                          # die, IO pins, macros: GP, then a legalizer that never overlaps
@@ -23,7 +27,7 @@ print('GP + LP legal:', d.floorplan_legal())
 d.plot(os.path.join(here, tag + '_fp.png'))
 
 if 'rows' not in d.facts and len(d.macros):            # block-level designs: B*-tree packing instead
-    p = attar.load(name, device='cuda')
+    p = attar.load(name, device=dev)
     p.floorplan(utilization=util, packing=True)
     print('packing legal:', p.floorplan_legal())
     p.plot(os.path.join(here, tag + '_fp_packed.png'))

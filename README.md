@@ -33,6 +33,11 @@ Python 3.8 or newer, with PyTorch (a CUDA GPU for the speed; everything also run
 the [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) on the Hugging Face Hub (246 designs, 731 MB
 in all); `attar.zoo(remote=True)` lists them. The latest code: `pip install git+https://github.com/RayChang987/Attar`.
 
+- The first timing run on a GPU machine compiles the timer's Triton kernels (about two minutes, once); later runs
+  reuse them and take seconds.
+- With `g++` on the path, nets of more than 256 pins get OpenROAD's exact Steiner parasitics (built on first use);
+  without it they fall back to a lumped wire model, with a warning.
+
 ## Why Attar
 
 1. **Speed decides quality.** When AI agents do the research, iteration speed is more than a metric: in our view it

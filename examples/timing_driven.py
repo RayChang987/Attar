@@ -8,12 +8,16 @@ import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(here, '..'))
+import torch  # noqa: E402
+
 import attar  # noqa: E402
+
+dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 name = sys.argv[1] if len(sys.argv) > 1 else 'after_fp/orfs_asap7/cva6'
 tag = '_'.join(name.split('/')[-2:])                   # <suite>_<design>
 
-d = attar.load(name, device='cuda')
+d = attar.load(name, device=dev)
 d.place()                                              # wirelength only
 d.plot(os.path.join(here, tag + '_wirelength.png'))
 d.timing_report(endpoints=0, path=False)

@@ -81,7 +81,7 @@ size_categories:
 as safetensors arrays, ready to load onto a GPU in a second or two.
 
 ```bash
-pip install git+https://github.com/RayChang987/Attar
+pip install attar
 ```
 
 ```python

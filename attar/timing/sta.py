@@ -126,6 +126,26 @@ def load_eval(state, elmore, rise, lthr, steps=None):
     return w.to(dt_out), sl.to(dt_out)
 
 
+_NOTICED = False
+
+
+def _first_compile_notice():
+    """Say so when the GPU timer's Triton kernels are not compiled on this machine yet: the first run compiles them
+    (about two minutes on an RTX 3080 Ti) into Triton's cache, and later runs, in any process, reuse them."""
+    global _NOTICED
+    if _NOTICED:
+        return
+    _NOTICED = True
+    try:
+        from triton.runtime.cache import default_cache_dir
+        cache = default_cache_dir()
+    except Exception:  # noqa: BLE001
+        cache = os.path.join(os.path.expanduser('~'), '.triton', 'cache')
+    if not os.path.isdir(cache) or not os.listdir(cache):
+        print('attar.timing: first GPU timing run on this machine: compiling its Triton kernels (a couple of minutes, '
+              'once; cached in %s)' % cache, flush=True)
+
+
 def compile_fn(fn):
     """torch.compile with dynamic shapes (Triton fuses a step into a few kernels); fn itself if unavailable."""
     try:
@@ -499,6 +519,8 @@ class Timer:
                 self._prepare_triton()
             except Exception:  # noqa: BLE001  (no Triton: the PyTorch reference path)
                 self.triton = None
+            if self.triton is not None:
+                _first_compile_notice()
         self._mp_names = None; self._sink_drv = None
 
     def _pin_vias(self, d, info, rc, p_cell, p_mpin, io_mask):
