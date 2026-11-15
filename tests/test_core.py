@@ -7,12 +7,13 @@ import numpy as np  # noqa: F401
 import torch  # noqa: F401
 
 from common import DEV, SMALL, MEDIUM, MACRO_DESIGNS, BOOKSHELF, need, gpl_final_hpwl, attar, source_def, source_lefs
-from attar import st, _slow_loop  # noqa: F401
-from attar.deffile import read_def  # noqa: F401
+from attar.io import st
+from attar import _slow_loop  # noqa: F401
+from attar.io.deffile import read_def  # noqa: F401
 from attar.design import _orient_offset  # noqa: F401
-from attar.distill import FIXED, MACRO, TERMINAL  # noqa: F401
+from attar.io.distill import FIXED, MACRO, TERMINAL  # noqa: F401
 from attar.facts import MissingFacts  # noqa: F401
-from attar.lef import read_lef  # noqa: F401
+from attar.io.lef import read_lef  # noqa: F401
 
 
 class SafetensorsTest(unittest.TestCase):
@@ -248,9 +249,9 @@ class VizTest(unittest.TestCase):
 
     def test_tiles_pin_access_is_the_dp_penalty(self):
         import numpy as np
-        from attar import pdn as PDN
+        from attar.rules import pdn as PDN
         from attar.facts import MissingFacts
-        from attar.distill import ASIDE, TERMINAL
+        from attar.io.distill import ASIDE, TERMINAL
         from attar.naive.lg import W_PA
         from attar.viz import tiles_pin_access
         d = need('after_fp/ns3k/gcd')
@@ -266,7 +267,7 @@ class VizTest(unittest.TestCase):
 
 class WritebackTest(unittest.TestCase):
     def test_unchanged_reference_exports_the_source_design(self):
-        from attar.deffile import same_design
+        from attar.io.deffile import same_design
         for name in (SMALL, MACRO_DESIGNS[0]):          # no template: the frame and the IR are the whole design
             d = need(name).restore('reference')
             with tempfile.TemporaryDirectory() as t:
@@ -294,7 +295,7 @@ class WritebackTest(unittest.TestCase):
         d = need(SMALL).restore('reference')
         fixed = ((d.flags & (FIXED | TERMINAL)) != 0)
         d.pos[fixed] += 5.0  # must be ignored by export
-        from attar.deffile import same_design
+        from attar.io.deffile import same_design
         with tempfile.TemporaryDirectory() as t:
             d.export(t + '/out.def')
             self.assertEqual(same_design(read_def(source_def(d)), read_def(t + '/out.def')), '')

@@ -23,10 +23,10 @@ import re
 import numpy as np
 import torch
 
-from . import st
+from ..io import st
 
 SCHEMA = 'attar-routing/0.1'
-# OpenROAD orientation as (a, b, c, d): x' = a x + b y, y' = c x + d y (attar.deffile.ORIENTS order)
+# OpenROAD orientation as (a, b, c, d): x' = a x + b y, y' = c x + d y (attar.io.deffile.ORIENTS order)
 _ORIENT = {'N': (1, 0, 0, 1), 'S': (-1, 0, 0, -1), 'W': (0, -1, 1, 0), 'E': (0, 1, -1, 0), 'FN': (-1, 0, 0, 1),
            'FS': (1, 0, 0, -1), 'FE': (0, 1, 1, 0), 'FW': (0, -1, -1, 0)}
 
@@ -189,7 +189,7 @@ def _layer_rules(lef_paths, layers, tech, dbu):
 def attach(ir_dir, lef_paths, layers=None, adjustment=None):
     """Distill the 'routing' fact into the IR at ir_dir from its LEF files (see the module doc). layers (lowest,
     highest routing layer name) and adjustment default to the manifest's 'routing' entry (ORFS designs have one)."""
-    from .lef import read_lef
+    from ..io.lef import read_lef
     with gzip.open(os.path.join(ir_dir, 'names.json.gz'), 'rt') as f:
         names = json.load(f)
     mf = os.path.join(ir_dir, 'manifest.json')
@@ -353,8 +353,8 @@ def _obstructions(d, t, lo, hi, horiz, pos=None):
     an obstructed one (extendObstructions); macro OBS grows across the layer's direction by the layer's spacing
     extension. Every other shape (pins, standard-cell OBS, special nets) blocks as it is. Standard cells are placed in
     one batch; macros one by one (few)."""
-    from .deffile import ORIENTS
-    from .distill import M_BLOCK
+    from ..io.deffile import ORIENTS
+    from ..io.distill import M_BLOCK
     macro_obs = {}
     parts = []                                       # (instance rank, sequence, layer, rect, is_macro)
     keep = (t['rm_layer'] >= lo) & (t['rm_layer'] <= hi)
@@ -657,9 +657,9 @@ def rudy(d, g, pos=None):
     """RUDY per gcell and direction on grid g, in tracks: (H [ny][nx], V [ny][nx]). A net spreads its horizontal wire
     (bbox width) evenly over its bbox: horizontal demand density 1 / bbox height, vertical 1 / bbox width (bbox at
     least one gcell each way); times the gcell area over the gcell length = wires crossing the gcell."""
-    from . import metrics as M
-    from .kernels import Grid
-    from .evaluator import Evaluator
+    from .. import metrics as M
+    from ..kernels import Grid
+    from ..evaluator import Evaluator
     ev = Evaluator(d)
     ev._prepare()
     s = 1.0 / d.dbu

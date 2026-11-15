@@ -59,10 +59,10 @@ The ORFS tools use the docker image `openroad/orfs:26Q4-368-g9ca2a9e76`.
 
 | reader | formats | facts |
 | --- | --- | --- |
-| `attar.distill` | LEF/DEF | netlist, geometry, pin offsets, die, IO pins and macros (when placed), rows, cell library, tracks, pin directions; Liberty files recorded (fidelity F1) |
-| `attar.bookshelf` | Bookshelf (.aux) | netlist, geometry, pin offsets, pin directions (`I`/`O` in .nets), die (rows + fixed nodes), IO, macros, rows; no cell library |
-| `attar.fpformats.distill_yal` | YAL (MCNC) | netlist, block geometry, pin offsets, die (parent outline), pads; blocks unplaced |
-| `attar.fpformats.distill_blocks` | GSRC/UCSC .blocks | netlist; hard blocks: geometry, pins at block centers; soft blocks: area and aspect range only (no geometry) |
+| `attar.io.distill` | LEF/DEF | netlist, geometry, pin offsets, die, IO pins and macros (when placed), rows, cell library, tracks, pin directions; Liberty files recorded (fidelity F1) |
+| `attar.io.bookshelf` | Bookshelf (.aux) | netlist, geometry, pin offsets, pin directions (`I`/`O` in .nets), die (rows + fixed nodes), IO, macros, rows; no cell library |
+| `attar.io.fpformats.distill_yal` | YAL (MCNC) | netlist, block geometry, pin offsets, die (parent outline), pads; blocks unplaced |
+| `attar.io.fpformats.distill_blocks` | GSRC/UCSC .blocks | netlist; hard blocks: geometry, pins at block centers; soft blocks: area and aspect range only (no geometry) |
 
 Rules every reader follows:
 
@@ -122,5 +122,5 @@ Rules every reader follows:
 
 ## Adding a reader
 
-A reader writes the IR with `attar.distill.save_arrays` and `save_names_manifest` (or `attar.fpformats._write`)
+A reader writes the IR with `attar.io.distill.save_arrays` and `save_names_manifest` (or `attar.io.fpformats._write`)
 and lists in `manifest['facts']` exactly the facts its format provides. `tests/test_readers.py` shows what to check.

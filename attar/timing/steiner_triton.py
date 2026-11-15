@@ -1,5 +1,5 @@
-"""attar.steiner.pd_tree as a Triton kernel: one program per net, the whole Prim-Dijkstra + steinerize in one launch per
-degree bucket. Same algorithm and tie-breaks as attar.steiner (which stays the reference and the CPU path)."""
+"""attar.timing.steiner.pd_tree as a Triton kernel: one program per net, the whole Prim-Dijkstra + steinerize in one launch per
+degree bucket. Same algorithm and tie-breaks as attar.timing.steiner (which stays the reference and the CPU path)."""
 import torch
 import triton
 import triton.language as tl
@@ -156,7 +156,7 @@ def _pd_body(b, x, y, valid, q_p, scr_p, pscr_p, alpha, D: tl.constexpr, N: tl.c
         p1 = pv == o1
         p2 = pv == o2
         both = new & ~p1 & ~p2
-        # rewire (attar.steiner.pd_tree, parent pointers)
+        # rewire (attar.timing.steiner.pd_tree, parent pointers)
         Pn = P
         Pn = tl.where((nl == o1) & (both | (new & p2)), sid, Pn)
         Pn = tl.where((nl == o2) & (both | (new & p1)), sid, Pn)
@@ -236,7 +236,7 @@ def _subtree(T, P, depth, maxd, f_p, nl, vv, V: tl.constexpr):
 def _rc_kernel(p_p, idx_p, real_p, cap_p, nets_p, elm_o, pi_o, len_o, q_p, scr_p, pscr_p, f_p, i_p, rv_p,
                alpha, dbu, r, c, D: tl.constexpr, N: tl.constexpr, ROUNDS: tl.constexpr,
                MAXDEG: tl.constexpr, V: tl.constexpr, LOGN: tl.constexpr):
-    """attar.sta.tree_elmore for one net per program: pin locations (dbu, rounded), the PD tree, its RC moments with
+    """attar.timing.sta.tree_elmore for one net per program: pin locations (dbu, rounded), the PD tree, its RC moments with
     every pin behind its via resistance rv (the driver's in series with the whole tree), the driving point pi model (O'Brien-Savarino); writes the pins' Elmore delays (P, V), the net's
     pi (E, V, 3) and tree length (E,)."""
     b = tl.program_id(0)
@@ -303,7 +303,7 @@ def _rc_kernel(p_p, idx_p, real_p, cap_p, nets_p, elm_o, pi_o, len_o, q_p, scr_p
 
 
 def pd_tree(q, valid, alpha=0.3, rounds=None, max_deg=MAX_DEG):
-    """attar.steiner.pd_tree on the GPU. Returns (xy, parent, alive) like it."""
+    """attar.timing.steiner.pd_tree on the GPU. Returns (xy, parent, alive) like it."""
     n, D, _ = q.shape
     D2 = max(2, triton.next_power_of_2(D))
     dev = q.device
@@ -332,7 +332,7 @@ def pd_tree(q, valid, alpha=0.3, rounds=None, max_deg=MAX_DEG):
 
 def rc_bucket(p, idx, real, cap, nets, elm, pi, tlen, alpha, dbu, r, c, rvia, rounds=None, max_deg=MAX_DEG,
               num_warps=None):
-    """One degree bucket of attar.sta.tree_elmore in one launch: idx (n, D) pin ids (D a power of two), real (n, D),
+    """One degree bucket of attar.timing.sta.tree_elmore in one launch: idx (n, D) pin ids (D a power of two), real (n, D),
     rvia (P,) the pins' via resistances; writes elm (P, V), pi (E, V, 3), tlen (E,) in place."""
     n, D = idx.shape
     assert D == triton.next_power_of_2(D) and D >= 2

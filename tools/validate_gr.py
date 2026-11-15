@@ -23,7 +23,7 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import attar  # noqa: E402
-from attar import routing as R  # noqa: E402
+from attar.rules import routing as R  # noqa: E402
 from orfs_roundtrip import RUNS, base_dir, inputs  # noqa: E402
 
 GRT = os.path.join(RUNS, 'grtcorr')

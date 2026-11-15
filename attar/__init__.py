@@ -2,7 +2,7 @@
 them (Evaluator), and a basic set of tensorized engines (attar.naive) makes them move. What a design can do follows
 from the facts it has. See README.md."""
 from .design import Design, load, zoo
-from .distill import distill
+from .io.distill import distill
 from .evaluator import Evaluator
 from .hub import fetch
 

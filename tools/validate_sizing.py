@@ -23,7 +23,7 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import attar  # noqa: E402
-from attar import liberty  # noqa: E402
+from attar.io import liberty  # noqa: E402
 from orfs_roundtrip import RUNS, base_dir, flow_dir, orfs, run_key, w  # noqa: E402
 import validate_sta as VS  # noqa: E402
 

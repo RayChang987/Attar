@@ -16,7 +16,7 @@ from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Patch, Rectangle  # noqa: E402
 
-from .distill import ASIDE, FIXED, MACRO, PHYSICAL, TERMINAL  # noqa: E402
+from .io.distill import ASIDE, FIXED, MACRO, PHYSICAL, TERMINAL  # noqa: E402
 
 # the logo's colors (docs/images/logo.png): its yellow -> amber -> orange -> coral gradient for cells and heat, cream
 # (the crossbar) and gold for macros, espresso (the background) for ink; status green / red only for legality
@@ -257,10 +257,10 @@ def tiles_density(d, pos=None, bins=None):
 
 def tiles_pin_access(d, pos=None, bins=None):
     """Pin-access penalty of the PDN-aware detailed placement (attar.naive.lg._pdn_dp): w_pa for every cell with a
-    signal pin on a PDN pin blockage of its layer (attar.pdn.conflicts), summed per bin of the global placement grid.
+    signal pin on a PDN pin blockage of its layer (attar.rules.pdn.conflicts), summed per bin of the global placement grid.
     -> (map [ny][nx], NaN where 0; x edges; y edges; stats)."""
     import torch
-    from . import pdn as PDN
+    from .rules import pdn as PDN
     from .naive.lg import W_PA
     p = d.pos if pos is None else pos
     conf = PDN.conflicts(d, pos=p) & ((d.flags & (TERMINAL | ASIDE)) == 0)
@@ -285,7 +285,7 @@ def tiles_gr_overflow(d, pos=None, adjustment=None):
     r = d.gr_overflow(pos, adjustment=adjustment, maps=True)
     dh, dv, ch, cv = r['demand_h'], r['demand_v'], r['cap_h'], r['cap_v']
     ny, nx = dh.shape
-    eh = (dh[:, :-1] + dh[:, 1:]) / 2; ev = (dv[:-1, :] + dv[1:, :]) / 2       # as attar.routing.edge_overflow
+    eh = (dh[:, :-1] + dh[:, 1:]) / 2; ev = (dv[:-1, :] + dv[1:, :]) / 2       # as attar.rules.routing.edge_overflow
     ratio = lambda e, c: np.where(c > 0, e / np.maximum(c, 1e-9), np.where(e > 0, np.inf, 0.0))  # noqa: E731
     uh, uv = ratio(eh, ch), ratio(ev, cv)
     m = np.zeros((ny, nx))

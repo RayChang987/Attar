@@ -1,10 +1,10 @@
-"""Static timing analysis on the GPU: the 'sta' capability (needs the 'timing' fact, see attar.timing).
+"""Static timing analysis on the GPU: the 'sta' capability (needs the 'timing' fact, see attar.timing.ir).
 
 Graph: a node per pin and transition (rise, fall); net arcs (driver -> sink) and cell arcs (one per Liberty timing arc
 and instance). Clocks are ideal (pre-CTS): a register clock pin sees its clock's edge plus the ideal latency, slew 0
 Arrivals are kept per tag (launching clock, launching edge), so setup and hold
 use OpenSTA's edge relationships between any two clocks. Delays: NLDM tables, bilinear with linear extrapolation
-(OpenSTA's rule), at the effective capacitance of the driver's pi model (OpenSTA's DmpCeff, attar.dmp). Wires
+(OpenSTA's rule), at the effective capacitance of the driver's pi model (OpenSTA's DmpCeff, attar.timing.dmp). Wires
 (parasitics='placement'): OpenROAD's estimate_parasitics -placement: per net its Steiner tree (pdr::primDijkstra,
 alpha 0.3), a pi segment per branch (set_wire_rc -signal), each pin at OpenROAD's location (the mean of its LEF
 rectangles' centers, _pin_setup) behind its via resistance; reduced as OpenSTA does to the driver's pi model and
@@ -22,10 +22,10 @@ import warnings
 import numpy as np
 import torch
 
-from . import metrics as M
-from .distill import D_IN, D_INOUT, D_OUT
-from . import timing as timing_mod
-from .timing import (S_NEG, S_NON, S_POS, T_CLEAR, T_COMB, T_FALL_EDGE, T_HOLD_F, T_HOLD_R, T_PRESET, T_RISE_EDGE,
+from .. import metrics as M
+from ..io.distill import D_IN, D_INOUT, D_OUT
+from . import ir as timing_mod
+from .ir import (S_NEG, S_NON, S_POS, T_CLEAR, T_COMB, T_FALL_EDGE, T_HOLD_F, T_HOLD_R, T_PRESET, T_RISE_EDGE,
                      T_SETUP_F, T_SETUP_R, T_TRISTATE)
 
 warnings.filterwarnings('ignore', message='index_reduce')     # torch marks index_reduce beta; it is what we need
@@ -96,7 +96,7 @@ STATE = ('valid', 'k0', 'k1', 'k2', 'k3', 'k4', 'p1', 'p2', 't0', 'dt', 'vo_dela
 
 
 def arc_eval(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr, steps=None):
-    """OpenSTA's dmp_ceff_elmore gate delay for a batch of cell arcs (attar.dmp.gate): gate delay, driver slew and the
+    """OpenSTA's dmp_ceff_elmore gate delay for a batch of cell arcs (attar.timing.dmp.gate): gate delay, driver slew and the
     driver model each load's wire delay needs, packed as STATE columns. ctot: the driven net's total capacitance for
     this analysis (max or min pin caps), (c_far, rpi): its pi model's far capacitance and resistance (the near one is
     ctot - c_far). thr: the driver library's (output threshold, slew lower, slew upper, slew derate)."""
@@ -113,7 +113,7 @@ def arc_eval(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr, steps=Non
 
 
 def load_eval(state, elmore, rise, lthr, steps=None):
-    """Wire delay and load slew of the loads of a batch of arcs (attar.dmp.load), at the loads' thresholds
+    """Wire delay and load slew of the loads of a batch of arcs (attar.timing.dmp.load), at the loads' thresholds
     (DelayCalcBase::thresholdAdjust). state: the arcs' STATE rows, one per load; lthr: the loads' (input threshold,
     slew lower, slew upper, slew derate)."""
     from . import dmp
@@ -188,7 +188,7 @@ def _side_stream(dev):
 
 def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
     """Elmore delay from each net's driver to every pin and the driver's pi model, on OpenROAD's estimate-parasitics
-    tree (attar.steiner.pd_tree: Prim-Dijkstra alpha 0.3 on nearest neighbors, steinerized; dbu coordinates), each
+    tree (attar.timing.steiner.pd_tree: Prim-Dijkstra alpha 0.3 on nearest neighbors, steinerized; dbu coordinates), each
     branch a pi segment of wire RC r, c per um, every pin behind its via resistance rcut (a scalar, OpenROAD's average
     cut resistance, or per pin (P,): the vias up to the wire's layer), the driver's in series with the whole tree (EstimateParasitics::estimateWireParasiticSteiner, parasiticNodeConnectPins). cap: pin capacitance (P,).
     Nets above the largest bucket: from plan['big_buf'] (their exact trees, filled by Timer._big_update), else lumped
@@ -269,7 +269,7 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
         ctot = torch.zeros(n_nets, V, device=dev).index_add_(0, net_of, cap) + c * length[:, None]
         out = torch.where(plan['pin_big'][:, None], r * dd[:, None] * ctot[net_of] / 2, out)
         pi[big] = torch.stack([ctot[big], torch.zeros_like(ctot[big]), torch.zeros_like(ctot[big])], -1)
-    if plan.get('big_buf') is not None:              # large data nets: their exact trees (attar.steiner_big, host)
+    if plan.get('big_buf') is not None:              # large data nets: their exact trees (attar.timing.steiner_big, host)
         nets_b, pins_b, elm_b, pi_b, len_b = plan['big_buf']
         out[pins_b] = elm_b
         pi[nets_b] = pi_b
@@ -293,7 +293,7 @@ class Timer:
         raise AttributeError(name)
 
     def __init__(self, d, parasitics='placement', exact_trees=True, precision='double'):
-        """exact_trees: every net that can carry a data arrival gets OpenROAD's tree on the host (attar.steiner_big,
+        """exact_trees: every net that can carry a data arrival gets OpenROAD's tree on the host (attar.timing.steiner_big,
         an exact port including its tie-breaks); False: the GPU kernel for nets up to 256 pins (faster; its ties
         differ from OpenROAD's on a few nets in 10^4), the host for larger ones.
         precision: the GPU delay model's, 'double' (OpenSTA's; float32 fails or drifts on strongly resistive nets),
@@ -306,7 +306,7 @@ class Timer:
         self.parasitics = parasitics
         with open(os.path.join(d.path, 'timing.json')) as f:
             self.info = info = json.load(f)
-        # the cell data: from the design's library chain (bundle + local) or its timing.safetensors (attar.timing.arrays)
+        # the cell data: from the design's library chain (bundle + local) or its timing.safetensors (attar.timing.ir.arrays)
         t, info['functions'], info['arc_when'] = timing_mod.arrays(d)
         a = d.raw
         T = lambda x, dt=None: torch.as_tensor(np.asarray(x), device=dev, dtype=dt)
@@ -544,7 +544,7 @@ class Timer:
         same pins when another one's `when` is 1 (Sim::isDisabledCond). Returns (arcs to disable, arc senses).
         Sets self.const_net (net -> 0 / 1 / -1)."""
         from itertools import product
-        from .liberty import parse_function
+        from ..io.liberty import parse_function
         E = len(n_ptr) - 1
         self.const_net = cn = np.full(E, -1, np.int64)
         off = np.zeros(len(fr), bool)
@@ -709,7 +709,7 @@ class Timer:
     def _wire_setup(self):
         """Placement-independent parts of the wire model: the pins' locations (_pin_setup), Steiner (RMST) buckets
         and the tree plan, so that wires() has no host sync (CUDA-graph capturable)."""
-        from .evaluator import Evaluator
+        from ..evaluator import Evaluator
         ev = self.ev = Evaluator(self.d)
         ev.off = ev.off.clone()                         # the timer's own pin offsets (_pin_setup), updated in place
         self._pin_setup()
@@ -741,7 +741,7 @@ class Timer:
             self.plan['big_buf'] = (big, pins_t, torch.zeros(len(pins), 4, device=self.dev),
                                     torch.zeros(len(bn), 4, 3, device=self.dev), torch.zeros(len(bn), device=self.dev))
         elif big is not None and not steiner_big.available():
-            warnings.warn('attar.sta: %d nets above %d pins use a lumped wire model (%s)'
+            warnings.warn('attar.timing.sta: %d nets above %d pins use a lumped wire model (%s)'
                           % (len(big), TREE_BUCKETS[-1][1], steiner_big.error()))
         self.big_steiner = ev.deg > M.RMST_MAX_DEGREE
 
@@ -749,7 +749,7 @@ class Timer:
         """Where estimate_parasitics puts each pin: OpenROAD's dbNetwork::location, dbITerm::getAvgXY, the mean of the
         centers of the pin's LEF rectangles (not the center of their bounding box, the Evaluator's pin offset: they
         differ on pins of several rectangles, most ASAP7 pins), oriented with the cell and truncated to the database
-        unit as OpenROAD's int(). From the library chain (attar.timing.pin_locations); pins it does not locate (no
+        unit as OpenROAD's int(). From the library chain (attar.timing.ir.pin_locations); pins it does not locate (no
         chain, a bundle without lp_loc) and ports keep the Evaluator's offsets."""
         d = self.d
         loc = timing_mod.pin_locations(d)
@@ -771,7 +771,7 @@ class Timer:
         if key == self._pin_key:
             return
         self._pin_key = key
-        from .design import _orient_offset
+        from ..design import _orient_offset
         c = d.p_cell
         w, h = d.size_n[c, 0].double(), d.size_n[c, 1].double()
         o = _orient_offset(d.orient[c], self._loc_n[:, 0], self._loc_n[:, 1], w, h)
@@ -799,7 +799,7 @@ class Timer:
         return reach
 
     def _big_update(self, pos):
-        """The large nets' parasitics at pos, on the host (attar.steiner_big), into plan['big_buf']."""
+        """The large nets' parasitics at pos, on the host (attar.timing.steiner_big), into plan['big_buf']."""
         if self._big is None:
             return
         from . import steiner_big
@@ -993,7 +993,7 @@ class Timer:
             self.launch_t[:2 * C] = self.wf[tags[:2 * C] // 2, tags[:2 * C] % 2]
 
     def _prepare_triton(self):
-        """Per level, the int32 arrays of the fused stage kernel (attar.dmp_triton.stage)."""
+        """Per level, the int32 arrays of the fused stage kernel (attar.timing.dmp_triton.stage)."""
         i32 = lambda x: x.to(torch.int32).contiguous()  # noqa: E731
         dev = self.dev
 

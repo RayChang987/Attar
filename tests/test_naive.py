@@ -58,7 +58,7 @@ class NaiveTest(unittest.TestCase):
 
 class RailTest(unittest.TestCase):
     def test_rails_follow_openroad_rules(self):
-        from attar import rails as RL
+        from attar.rules import rails as RL
         d = need(MEDIUM)                                          # ASAP7: VSS at the bottom of single-row cells
         I = RL.info(d)
         self.assertTrue(I['known'])
@@ -71,7 +71,7 @@ class RailTest(unittest.TestCase):
         self.assertFalse(RL.info(b)['known'])                     # Bookshelf: no rails, no constraint
 
     def test_even_height_cells_need_matching_rows(self):
-        from attar import rails as RL
+        from attar.rules import rails as RL
         rb = torch.tensor([RL.VDD, RL.VSS, RL.VDD, RL.VSS]); rt = torch.tensor([RL.VSS, RL.VDD, RL.VSS, RL.VDD])
         keep, flip = RL.compatible(torch.tensor([RL.VDD]), torch.tensor([RL.VDD]), torch.tensor([2]), rb, rt)
         self.assertEqual((keep | flip)[0].tolist(), [True, False, True, False])   # VDD/VDD 2-row cell: VDD rows only
@@ -94,7 +94,7 @@ class RailTest(unittest.TestCase):
         self.assertEqual(attar.Evaluator(d).legality()['wrong_rail'], 20)
 
     def test_rows_spanned_counts_partial_overlaps(self):
-        from attar.rails import rows_spanned
+        from attar.rules.rails import rows_spanned
         ys = torch.arange(10, dtype=torch.float32) * 0.27
         lo, hi = rows_spanned(ys, 0.27, torch.tensor([0.27 * 2 + 0.2]), torch.tensor([0.27 * 5 + 0.01]))
         self.assertEqual((lo.item(), hi.item()), (2, 6))           # bottom and top rows partly covered count
@@ -253,7 +253,7 @@ class FloorplanTest(unittest.TestCase):
 
     def test_macro_pins_land_on_their_tracks(self):
         from attar import naive
-        from attar.lef import read_lef
+        from attar.io.lef import read_lef
         try:
             d = attar.load('before_fp/orfs_asap7/riscv32i', DEV, download=False)
         except FileNotFoundError:
@@ -287,7 +287,8 @@ class FloorplanTest(unittest.TestCase):
         self.assertIn('export', d.capabilities())
 
     def test_pins_keep_clear_of_the_pdn(self):
-        from attar import naive, pdn
+        from attar import naive
+        from attar.rules import pdn
         d = need('after_fp/ns3k/aes')                      # NS3K: PG via stacks from the M0 rails cross the M1 pin layer
         self.assertIn('pdn', d.facts)
         naive.global_place(d, verbose=False)
@@ -351,8 +352,8 @@ class FloorplanTest(unittest.TestCase):
         self.assertAlmostEqual(attar.Evaluator(d, fast=True).hpwl().item(), d.hpwl().item(), delta=1e-2)
 
     def test_macro_grid_from_the_ir_alone(self):
-        from attar.deffile import read_def
-        from attar.lef import read_lef
+        from attar.io.deffile import read_def
+        from attar.io.lef import read_lef
         done = 0
         for name in ('before_fp/orfs_asap7/riscv32i', 'before_fp/orfs_asap7/tinyRocket'):
             try:

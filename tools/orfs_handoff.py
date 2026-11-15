@@ -28,7 +28,7 @@ import time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
-from attar.deffile import read_def  # noqa: E402
+from attar.io.deffile import read_def  # noqa: E402
 from orfs_roundtrip import RUNS, design_config, metrics, openroad, orfs, w  # noqa: E402
 
 PLATFORM = '/OpenROAD-flow-scripts/flow/platforms/asap7'

@@ -23,7 +23,7 @@ import time
 
 import torch
 
-from ..distill import ASIDE, MACRO, PHYSICAL, TERMINAL
+from ..io.distill import ASIDE, MACRO, PHYSICAL, TERMINAL
 from ..kernels import overlapping as _overlapping
 from .rowops import _pack
 

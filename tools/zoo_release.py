@@ -222,7 +222,7 @@ def main(root=None, hub=None):
     missing = sorted({k.rpartition('/')[0] for k in designs} - set(SUITES))
     if missing:
         raise SystemExit('describe these suites in SUITES first: %s' % ', '.join(missing))
-    # shared cell libraries (attar.library bundles) the designs reference
+    # shared cell libraries (attar.timing.library bundles) the designs reference
     libraries = {}
     for lj in sorted(glob.glob(os.path.join(zoo, 'libraries', '*', 'library.json'))):
         folder = os.path.dirname(lj)

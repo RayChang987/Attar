@@ -38,7 +38,7 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
     'output_delay': [...], 'input_transition': {port: ps}, 'load': {port: fF}, 'clock_groups': [...],
     'path_delays': [{'kind': 'max'|'min', 'value', 'from', 'to': [(kind, name)] or None, 'ignore_clock_latency'}],
     'unsupported': {command: count}} with times and capacitances in the SDC's units (OpenSTA: the first Liberty
-    file's units; attar.timing.attach converts them to ps / fF)."""
+    file's units; attar.timing.ir.attach converts them to ps / fF)."""
     import tkinter
     tcl = tkinter.Tcl()
     ports = list(ports_in) + list(ports_out)

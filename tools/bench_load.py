@@ -9,7 +9,7 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import attar  # noqa: E402
-from attar import st  # noqa: E402
+from attar.io import st  # noqa: E402
 from attar.paths import zoo_dir  # noqa: E402
 
 dev = 'cuda' if torch.cuda.is_available() else 'cpu'

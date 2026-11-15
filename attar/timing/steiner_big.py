@@ -1,6 +1,6 @@
 """Large nets of the timer's placement parasitics on the CPU: OpenROAD's estimate-parasitics tree for nets of any size
-(pdr::primDijkstra: nearest-neighbor sweep, Prim-Dijkstra, steinerize) and the RC moments attar.sta.tree_elmore
-computes on the GPU for nets up to 256 pins. The C++ (attar/csrc/pdtree.cpp) is built with g++ on first use into
+(pdr::primDijkstra: nearest-neighbor sweep, Prim-Dijkstra, steinerize) and the RC moments attar.timing.sta.tree_elmore
+computes on the GPU for nets up to 256 pins. The C++ (attar/timing/csrc/pdtree.cpp) is built with g++ on first use into
 ~/.cache/attar and loaded with ctypes; available() is False when that fails (the timer then lumps large nets)."""
 import ctypes
 import hashlib
@@ -54,10 +54,10 @@ def error():
 def pd_rc(x, y, ptr, drv, cap, rv, r, c, dbu, alpha=0.3, threads=None):
     """Per net (CSR ptr over pins): x, y pin locations in dbu (int), drv the driver's index within its net, cap (M, V)
     pin capacitances, rv (M,) the pins' via resistances; r, c wire RC per um. Returns (elm (M, V) Elmore delays at the
-    pins, pi (E, V, 3) near C / R / far C, length (E,) um), as attar.sta.tree_elmore."""
+    pins, pi (E, V, 3) near C / R / far C, length (E,) um), as attar.timing.sta.tree_elmore."""
     lib = _build()
     if lib is None:
-        raise RuntimeError('attar.steiner_big unavailable: %s' % _ERR)
+        raise RuntimeError('attar.timing.steiner_big unavailable: %s' % _ERR)
     x = np.ascontiguousarray(x, np.int32); y = np.ascontiguousarray(y, np.int32)
     ptr = np.ascontiguousarray(ptr, np.int64); drv = np.ascontiguousarray(drv, np.int64)
     cap = np.ascontiguousarray(cap, np.float32); rv = np.ascontiguousarray(rv, np.float32)

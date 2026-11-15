@@ -17,7 +17,7 @@ import time
 
 import torch
 
-from ..distill import ASIDE, MACRO, TERMINAL
+from ..io.distill import ASIDE, MACRO, TERMINAL
 from .. import metrics as M
 from ..kernels import Grid, default_bins
 
@@ -58,7 +58,7 @@ def _track_capacity(d, g, ra):
     ['adjustment'] held back), less the layers up to the macros' highest pin layer over the part of a bin macros
     cover."""
     import os
-    from .. import st
+    from ..io import st
     tp, _ = st.load(os.path.join(d.path, 'tech_profile.safetensors'))
     names = d.names['layers']
     rt = d.manifest.get('routing', {})                     # the source flow's own routing resources, when recorded

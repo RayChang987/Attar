@@ -67,7 +67,7 @@ class ReportsTest(unittest.TestCase):
         d = need(MEDIUM)
         if 'resize' not in d.capabilities():
             raise unittest.SkipTest('no library fact')
-        from attar import sizing
+        from attar.timing import sizing
         L, _ = sizing.lib_cell(d, 'DFFHQNx1_ASAP7_75t_R')
         if L is None:
             raise unittest.SkipTest('not an ASAP7 library')
@@ -109,7 +109,7 @@ class DelayCalcTest(unittest.TestCase):
         # OpenSTA GateTableModel::gateDelay: a table slew extrapolated below 0 (a huge input slew off an unbuffered
         # net) is 0; a negative one used to drive min slews and arrivals negative downstream (hold off by ~60 ns)
         import torch
-        from attar import dmp
+        from attar.timing import dmp
         ax1 = torch.tensor([[10.0, 20.0]]); ax2 = torch.tensor([[1.0, 2.0]]); n = torch.tensor([[2, 2]])
         delay = torch.tensor([[[5.0, 6.0], [7.0, 8.0]]]); slew = torch.tensor([[[30.0, 32.0], [20.0, 22.0]]])
         tab = (ax1, ax2, delay, n, ax1, ax2, slew, n)
@@ -128,7 +128,7 @@ class PinLocationTest(unittest.TestCase):
     def test_lef_pin_location_is_the_mean_of_its_rectangles(self):
         import os
         import tempfile
-        from attar.lef import read_lef
+        from attar.io.lef import read_lef
         lef = ('MACRO X\n CLASS CORE ;\n SIZE 1 BY 1 ;\n PIN A\n  DIRECTION INPUT ;\n  PORT\n   LAYER M1 ;\n'
                '    RECT 0 0 0.1 1 ;\n    RECT 0 0.9 1 1 ;\n  END\n END A\nEND X\n')
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,7 +145,7 @@ class PinLocationTest(unittest.TestCase):
         d = need(SMALL).restore('reference')
         d.timing()
         t = d._timer
-        loc = attar.timing.pin_locations(d)
+        loc = attar.timing.ir.pin_locations(d)
         pm = d.raw['p_mpin'].astype(np.int64)
         c = d.raw['p_cell'].astype(np.int64)
         o = d.orient.cpu().numpy()[c]
@@ -163,7 +163,7 @@ class PinLocationTest(unittest.TestCase):
         self.assertTrue((box != got).any())                     # multi-rectangle ASAP7 pins
 
     def test_timer_follows_orientation_changes(self):
-        from attar.sta import Timer
+        from attar.timing.sta import Timer
         d = need(SMALL).restore('reference')
         d.timing()
         d.orient = torch.where(d.orient == 0, torch.full_like(d.orient, 4), d.orient)   # N -> FN
