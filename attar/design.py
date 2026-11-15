@@ -594,6 +594,23 @@ class Design:
             self._timer = Timer(self)
         return self._timer.run(pos)
 
+    def drv(self, pos=None):
+        """Electrical design rules at pos (default: the current placement): max slew, max capacitance and max fanout
+        per pin, as OpenSTA's report_check_types -max_slew -max_capacitance -max_fanout (attar.timing.drv.DrvResult:
+        .summary(), .report(), .violators(kind)). Times the design first (d.timing)."""
+        return self.timing(pos).drv()
+
+    def power(self, pos=None):
+        """Power at pos (default: the current placement), as OpenSTA's report_power: per instance internal,
+        switching and leakage power (W) from propagated activities, the timer's slews and estimated parasitics
+        (attar.timing.power.PowerResult: .summary(), .report(), .instances()). Times the design first."""
+        res = self.timing(pos)
+        T = res.timer
+        if getattr(T, '_power', None) is None:
+            from .timing.power import Power
+            T._power = Power(T)
+        return T._power.run(res)
+
     def timing_report(self, pos=None, endpoints=10, path=True, file=None):
         """Print (and return) a timing summary: WNS, TNS, violations, hold, the worst endpoints and the worst path
         (attar.timing.sta.TimingResult.report)."""

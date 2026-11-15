@@ -113,6 +113,12 @@ def _sdc_units(s, tu, cu):
             e['value'] *= tu
     s['input_transition'] = {p: v * tu for p, v in s['input_transition'].items()}
     s['load'] = {p: v * cu for p, v in s['load'].items()}
+    for kind, u in (('max_transition', tu), ('max_capacitance', cu)):
+        L = s.get('limits', {}).get(kind)
+        if L:
+            L['design'] = None if L['design'] is None else L['design'] * u
+            L['ports'] = {p: v * u for p, v in L['ports'].items()}
+            L['clocks'] = {c: {k: v * u for k, v in d.items()} for c, d in L['clocks'].items()}
 
 
 def find_bundle(ir_dir, name):
@@ -195,7 +201,7 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=
     m_ptr = a['m_pin_ptr'].astype(np.int64)
     used = set(a['c_master'][a['c_master'] >= 0].tolist())
     # the design's own Liberty files: the first definition of a cell wins (OpenSTA warns on duplicates)
-    own = Library.build(lib_paths, source_ref=source_ref)
+    own = Library.build(lib_paths, source_ref=source_ref, power=False)   # timing arrays only: the bundle check
     tens, functions, arc_when, missing_cells = design_arrays([own], masters, mpins, m_ptr, used)
     lib_refs = own.meta['sources']['lib']
     default_thr = own.meta['default_thresholds']                 # OpenSTA: ports use the first library read
@@ -209,9 +215,11 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=
         B = _load_library(bundle)
         have = {r.get('sha256') for r in B.meta['sources']['lib']}
         local = [p for p, r in zip(lib_paths, lib_refs) if r.get('sha256') not in have]
-        L = Library.build(local, source_ref=source_ref, name='local') if local else None
+        L = Library.build(local, source_ref=source_ref, name='local') if local else None   # with power
         t2, f2, w2, m2 = design_arrays(([L] if L else []) + [B], masters, mpins, m_ptr, used)
-        same = (all(np.array_equal(tens[k], t2[k]) for k in tens) and f2 == functions and w2 == arc_when
+        eq = lambda x, y: x.shape == y.shape and bool(np.all((x == y) | (np.isnan(x) & np.isnan(y))  # noqa: E731
+                                                                if x.dtype.kind == 'f' else x == y))
+        same = (all(k in t2 and eq(tens[k], t2[k]) for k in tens) and f2 == functions and w2 == arc_when
                 and m2 == missing_cells)
         if same:
             if L is not None:
@@ -243,6 +251,10 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=
         info['input_transition'] = {str(port_idx[p]): v for p, v in s['input_transition'].items() if p in port_idx}
         info['load'] = {str(port_idx[p]): v for p, v in s['load'].items() if p in port_idx}
         info['clock_groups'] = s['clock_groups']
+        # design rule limits (ps, fF, fanout): the design's, by IO cell index for ports, by name for clocks
+        info['limits'] = {k: {'design': L['design'], 'ports': {str(port_idx[p]): v for p, v in L['ports'].items()
+                                                             if p in port_idx}, 'clocks': L['clocks']}
+                          for k, L in s['limits'].items()}
         # path delays: endpoints of -from / -to as cell indices (cells: instances; ports: their IO cell)
         cell_idx = {n.replace('\\', ''): i for i, n in enumerate(cell_names)}    # DEF escapes ('a\\[0\\]'), SDC does not
         def cells_of(objs):

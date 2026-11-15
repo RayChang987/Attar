@@ -2,17 +2,19 @@
 lsearch, loops all work), with the SDC commands bound to Python recorders.
 
 Kept: clocks (period, waveform, source ports), ideal clock latency, uncertainty and transition, input / output delays,
-input transitions, port loads, clock groups, set_max_delay / set_min_delay with -from / -to (no -through). Recorded but not
-modeled (listed in 'unsupported'): set_false_path, set_multicycle_path, path delays with -through or rise/fall
-qualifiers, driving cells, derates. Ignored: group_path,
-design rule limits (set_max_fanout, ...), set_units, and other commands that do not change timing.
+input transitions, port loads, clock groups, set_propagated_clock (clocks or their source ports), set_max_delay /
+set_min_delay with -from / -to (no -through), and the
+design rule limits set_max_transition / set_max_capacitance / set_max_fanout on the design, ports and (transition)
+clocks. Recorded but not modeled (listed in 'unsupported'): set_false_path, set_multicycle_path, path delays with
+-through or rise/fall qualifiers, driving cells, derates, limits on cells or with -min. Ignored: group_path,
+set_units, and other commands that do not change timing.
 """
 import fnmatch
 
 UNMODELED = ('set_false_path', 'set_multicycle_path', 'set_driving_cell',
-             'set_timing_derate', 'set_case_analysis', 'set_disable_timing', 'set_propagated_clock',
+             'set_timing_derate', 'set_case_analysis', 'set_disable_timing',
              'create_generated_clock', 'set_clock_sense', 'set_data_check')
-IGNORED = ('group_path', 'set_max_fanout', 'set_max_transition', 'set_max_capacitance', 'set_units', 'set_max_area',
+IGNORED = ('group_path', 'set_units', 'set_max_area',
            'set_dont_touch', 'set_dont_use', 'set_wire_load_model', 'set_operating_conditions', 'set_ideal_network',
            'set_max_dynamic_power', 'set_max_leakage_power', 'set_clock_gating_check', 'set_fanout_load',
            'set_logic_zero', 'set_logic_one', 'set_load_unit', 'set_time_unit')
@@ -44,7 +46,9 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
     ports = list(ports_in) + list(ports_out)
     port_set = set(ports)
     res = {'clocks': {}, 'input_delay': [], 'output_delay': [], 'input_transition': {}, 'load': {},
-           'clock_groups': [], 'path_delays': [], 'unsupported': {}}
+           'clock_groups': [], 'path_delays': [], 'unsupported': {},
+           'limits': {k: {'design': None, 'ports': {}, 'clocks': {}} for k in ('max_transition', 'max_capacitance',
+                                                                             'max_fanout')}}
 
     def split(s):
         return list(tcl.splitlist(s)) if s else []
@@ -197,6 +201,49 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
             return ''
         return f
 
+    def limit(kind):
+        """set_max_transition / set_max_capacitance / set_max_fanout (OpenSTA's Sdc::setSlewLimit, ...): the design
+        (current_design), ports, and for transitions clocks (-clock_path / -data_path, both without either). The
+        smallest value wins where one is set twice, as OpenSTA keeps the tighter max limit."""
+        def f(*args):
+            o, pos = _opts(args, ('-clock_path', '-data_path', '-rise', '-fall', '-min', '-max'), ())
+            name = 'set_' + kind
+            if o.get('-min') or o.get('-rise') or o.get('-fall') or len(pos) < 2:
+                res['unsupported'][name] = res['unsupported'].get(name, 0) + 1
+                return ''
+            val = float(pos[0]); L = res['limits'][kind]
+            tight = lambda old: val if old is None else min(old, val)  # noqa: E731
+            for a in pos[1:]:
+                ob = objs(a) or ([('design', a)] if a == design or not design else [])
+                for k, n in ob:
+                    if k == 'design' or (k not in ('port', 'clock') and n == design):
+                        L['design'] = tight(L['design'])
+                    elif k == 'port':
+                        L['ports'][n] = tight(L['ports'].get(n))
+                    elif k == 'clock' and kind == 'max_transition':
+                        paths = [p for p in ('clock', 'data') if o.get('-%s_path' % p)] or ['clock', 'data']
+                        for p in paths:
+                            L['clocks'].setdefault(n, {})[p] = tight(L['clocks'].get(n, {}).get(p))
+                    else:
+                        res['unsupported'][name] = res['unsupported'].get(name, 0) + 1
+            return ''
+        return f
+
+    def set_propagated_clock(*args):
+        """Clocks given (get_clocks) or sourced at the ports given: their latency is the clock tree's (timed), not ideal."""
+        o, pos = _opts(args, (), ())
+        for a in pos:
+            for k, n in objs(a, 'clock'):
+                if k == 'clock' and n in res['clocks']:
+                    res['clocks'][n]['propagated'] = True
+                elif k == 'port':
+                    for c in res['clocks'].values():
+                        if n in c['sources']:
+                            c['propagated'] = True
+                else:
+                    res['unsupported']['set_propagated_clock'] = res['unsupported'].get('set_propagated_clock', 0) + 1
+        return ''
+
     def unsupported(name):
         def f(*args):
             res['unsupported'][name] = res['unsupported'].get(name, 0) + 1
@@ -214,6 +261,8 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
             'set_load': set_load, 'set_clock_groups': set_clock_groups, 'set_clock_transition': set_clock_transition,
             'remove_from_collection': remove_from_collection, 'delete_from_list': remove_from_collection,
             'set_max_delay': path_delay('max'), 'set_min_delay': path_delay('min'),
+            'set_max_transition': limit('max_transition'), 'set_max_capacitance': limit('max_capacitance'),
+            'set_max_fanout': limit('max_fanout'), 'set_propagated_clock': set_propagated_clock,
             'get_name': lambda x: x.partition(':')[2], 'get_full_name': lambda x: x.partition(':')[2],
             'get_object_name': lambda x: x.partition(':')[2]}
     for n in UNMODELED:
