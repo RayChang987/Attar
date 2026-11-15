@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+- `examples/timing_driven_colab.ipynb`: the README demo as a Colab notebook (Open in Colab from the README).
+- `d.plot()` no longer switches matplotlib to Agg inside Jupyter or Colab: 1.0.0 did, which hid the notebook's own
+  plots from the first `d.plot()` on.
+
 ## 1.0.0
 
 The first release on PyPI (`pip install attar`).

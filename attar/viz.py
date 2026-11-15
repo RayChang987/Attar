@@ -6,9 +6,12 @@ its espresso, IO pins by direction (input gold, output rust, inout plum), thin o
 axes: a scale bar and a title block with the design's numbers instead. Block-level floorplans also show the connections
 between macros and IO pins: one ink, width and opacity by connection strength (nets between the two, clique model).
 Tile maps (plot(tiles=...)): global-routing overflow, pin-access penalty, cell density."""
+import sys
+
 import matplotlib
 
-matplotlib.use('Agg')
+if 'ipykernel' not in sys.modules:                       # scripts: files only, no windows; Jupyter / Colab keep inline
+    matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402

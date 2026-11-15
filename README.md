@@ -37,6 +37,8 @@ in all); `attar.zoo(remote=True)` lists them. The latest code: `pip install git+
   reuse them and take seconds.
 - With `g++` on the path, nets of more than 256 pins get OpenROAD's exact Steiner parasitics (built on first use);
   without it they fall back to a lumped wire model, with a warning.
+- No GPU at hand: the demo below runs in Colab (free T4, `g++` included):
+  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/timing_driven_colab.ipynb)
 
 ## Why Attar
 
@@ -96,7 +98,8 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 
 <img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="Timing-driven placement written in fifteen lines of Python, run on cva6 and swerv: place for wirelength, time it, weight the nets by their slack as OpenROAD's global placement does, place again, time it" width="920">
 
-<sub><b>Your algorithm, in fifteen lines</b> (<a href="examples/timing_driven.py">examples/timing_driven.py</a>). Real
+<sub><b>Your algorithm, in fifteen lines</b> (<a href="examples/timing_driven.py">examples/timing_driven.py</a>;
+<a href="https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/timing_driven_colab.ipynb">run it in Colab</a>). Real
 runs on an RTX 3080 Ti, the same code on two ASAP7 designs: place for wirelength, take every net's slack
 (<code>net_slack()</code>, as OpenSTA's), weight the worst 10% of the nets from 1 to 5 by criticality as OpenROAD's
 timing-driven global placement does, place again. <b>cva6</b> (121k cells, 8 SRAMs): WNS -195 to -75 ps, TNS
