@@ -80,8 +80,12 @@ size_categories:
 [Attar](https://github.com/RayChang987/Attar) IR: netlist, cell and macro geometry, pin offsets, die, rows and IO pins
 as safetensors arrays, ready to load onto a GPU in a second or two.
 
+```bash
+pip install git+https://github.com/RayChang987/Attar
+```
+
 ```python
-import attar                                   # pip install attar
+import attar
 d = attar.load('after_fp/ispd2005/adaptec1')  # downloads this design on first use
 attar.zoo(remote=True)                         # every design here
 attar.fetch('after_fp/ispd2015')               # a whole suite

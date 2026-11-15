@@ -11,12 +11,26 @@ Place and evaluate a 100k-cell design in seconds.
 [![Tests](https://img.shields.io/badge/tests-106%20passing-5f7f1e?style=flat-square)](tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](LICENSE)
 
-[Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
+[Install](#install) &nbsp;·&nbsp; [Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
 [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery)
 
 </div>
 
 <br>
+
+## Install
+
+```bash
+pip install git+https://github.com/RayChang987/Attar
+```
+
+```python
+import attar
+d = attar.load('after_fp/orfs_asap7/aes', device='cuda')   # downloaded from the zoo on first use
+```
+
+The designs come from the [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) on the Hugging Face Hub
+(246 designs, 731 MB in all); `attar.zoo(remote=True)` lists them.
 
 ## Why Attar
 
@@ -105,7 +119,7 @@ with the PDN its flow drew.
 | the answer | target utilization (the die), IO pin placement, macro placement | standard-cell placement; then timing optimization and global routing on the same floorplan |
 | one call | `d.floorplan(utilization=0.6)` | `d.place()` |
 | goes out as | a DEF: your flow draws the PDN and places | a DEF: your flow routes and times |
-| in the zoo | 55 designs, 6 suites | 192 designs, 17 suites |
+| in the zoo | 55 designs, 6 suites | 191 designs, 16 suites |
 
 Attar measures wirelength, congestion (RUDY, GROV), density, legality and timing; see the [roadmap](#roadmap).
 
