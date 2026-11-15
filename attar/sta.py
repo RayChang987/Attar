@@ -486,6 +486,7 @@ class Timer:
         self._prepare_static()
         self._wire_setup()
         self._graph = None
+        self._warming = False
         self.use_graph = self.dev.type == 'cuda'
         from . import dmp
         self.steps = dmp.EAGER
@@ -687,8 +688,8 @@ class Timer:
                     break
                 ei = np.repeat(lo - np.cumsum(rep) + rep, rep) + np.arange(rep.sum())
                 nx = t2[ei]
-                np.subtract.at(indeg, nx, 1)
-                cand = np.unique(nx)
+                cand, cnt = np.unique(nx, return_counts=True)
+                indeg[cand] -= cnt                             # np.subtract.at(indeg, nx, 1), without ufunc.at
                 cur = cand[indeg[cand] == 0]
                 k += 1
             if done.all():
@@ -794,7 +795,7 @@ class Timer:
         bounds = np.searchsorted(self.level[g_fr], np.arange(int(self.level.max(initial=0)) + 2))
         for a, b in zip(bounds[:-1], bounds[1:]):
             if b > a:
-                np.logical_or.at(reach, g_to[a:b], reach[g_fr[a:b]])
+                reach[g_to[a:b][reach[g_fr[a:b]]]] = True       # np.logical_or.at, without ufunc.at
         return reach
 
     def _big_update(self, pos):
@@ -821,7 +822,7 @@ class Timer:
     def wires(self, pos=None):
         """Placement parasitics: per net the wire capacitance, per net arc the Elmore delay (ps)."""
         p = self.ev._pins(pos)
-        if not (p.is_cuda and torch.cuda.is_current_stream_capturing()):
+        if not (p.is_cuda and torch.cuda.is_current_stream_capturing()) and not self._warming:
             self._big_update(pos)
         L = self.steiner(p)
         caps = torch.cat([self.pin_cap, self.pin_cap_min], 1)            # rise / fall max, rise / fall min
@@ -1025,9 +1026,13 @@ class Timer:
             if self._graph is None:
                 self._pos_buf = pos.detach().clone()
                 st_ = torch.cuda.Stream(); st_.wait_stream(torch.cuda.current_stream())
-                with torch.cuda.stream(st_):
-                    for _ in range(2):
-                        self._run_core(self._pos_buf)
+                self._warming = True                    # warm-up results are dropped: no host trees for them
+                try:
+                    with torch.cuda.stream(st_):
+                        for _ in range(2):
+                            self._run_core(self._pos_buf)
+                finally:
+                    self._warming = False
                 torch.cuda.current_stream().wait_stream(st_)
                 g = torch.cuda.CUDAGraph()
                 with torch.cuda.graph(g):
