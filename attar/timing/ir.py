@@ -136,8 +136,11 @@ _BUNDLES = {}
 
 
 def _load_library(folder):
+    """A cell library, loaded once per process and file version (a library fetched again, attar.fetch(force=True),
+    is read again)."""
     from .library import Library
-    key = os.path.abspath(folder)
+    f = os.path.join(folder, 'library.safetensors')
+    key = (os.path.abspath(folder), os.path.getmtime(f) if os.path.exists(f) else None)
     if key not in _BUNDLES:
         _BUNDLES[key] = Library.load(folder)
     return _BUNDLES[key]

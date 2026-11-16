@@ -148,6 +148,27 @@ class CtsTest(unittest.TestCase):
                 self.assertLessEqual(float((xy[g].max(0) - xy[g].min(0)).sum()), 50.0)
 
 
+class LibraryCacheTest(unittest.TestCase):
+    def test_reload_after_update(self):
+        """A library fetched again (attar.fetch(force=True)) is read again in the same process."""
+        import shutil
+        import tempfile
+        from attar import paths
+        from attar.timing import ir
+        src = os.path.join(paths.zoo_dir(), 'libraries', 'nangate45_typical')
+        if not os.path.exists(os.path.join(src, 'library.safetensors')):
+            self.skipTest('no local nangate45_typical bundle')
+        with tempfile.TemporaryDirectory() as t:
+            dst = os.path.join(t, 'lib')
+            shutil.copytree(src, dst)
+            a = ir._load_library(dst)
+            self.assertIs(ir._load_library(dst), a)
+            f = os.path.join(dst, 'library.safetensors')
+            st = os.stat(f)
+            os.utime(f, (st.st_atime, st.st_mtime + 10))
+            self.assertIsNot(ir._load_library(dst), a)
+
+
 class LevelizeTest(unittest.TestCase):
     def test_cycle_broken_at_latch(self):
         """A cycle a -> b -> c -> a whose c -> a edge is a latch D -> Q arc: that edge is dropped, levels follow the
