@@ -584,15 +584,45 @@ class Design:
         return torch.where(self.n_mask, w, torch.zeros_like(w)).sum()
 
     # -- timing and routing congestion --------------------------------------------------------------------------------
-    def timing(self, pos=None):
+    def timing(self, pos=None, crpr=True):
         """Static timing at pos (default: the current placement): an attar.timing.sta.TimingResult with per-endpoint setup /
         hold slack, WNS / TNS. Needs the 'timing' fact (attar.timing.ir.attach). The timer is built once per design and
-        kept; on CUDA a re-time is a CUDA-graph replay."""
+        kept; on CUDA a re-time is a CUDA-graph replay. crpr: with propagated clocks, remove clock reconvergence
+        pessimism (OpenSTA's default; False: sta::set_crpr_enabled 0)."""
         self.require('sta')
         from .timing.sta import Timer
         if self._timer is None:
             self._timer = Timer(self)
-        return self._timer.run(pos)
+        return self._timer.run(pos, crpr=crpr)
+
+    def propagate_clocks(self, clocks=None):
+        """Time the clocks given (names; default: every clock with a source pin) as propagated, through their clock
+        trees, as the SDC command set_propagated_clock (for a design whose clock trees are built: attar.naive.cts).
+        The timer is rebuilt on the next timing()."""
+        import json as _json
+        with open(os.path.join(self.path, 'timing.json')) as f:
+            cl = _json.load(f)['clocks']
+        names = [k for k, c in cl.items() if c.get('sources')] if clocks is None else list(clocks)
+        self._propagated = sorted(set(getattr(self, '_propagated', None) or ()) | set(names))
+        self._netlist_changed('clocks were set to propagated')
+        return self._propagated
+
+    def drv(self, pos=None):
+        """Electrical design rules at pos (default: the current placement): max slew, max capacitance and max fanout
+        per pin, as OpenSTA's report_check_types -max_slew -max_capacitance -max_fanout (attar.timing.drv.DrvResult:
+        .summary(), .report(), .violators(kind)). Times the design first (d.timing)."""
+        return self.timing(pos).drv()
+
+    def power(self, pos=None):
+        """Power at pos (default: the current placement), as OpenSTA's report_power: per instance internal,
+        switching and leakage power (W) from propagated activities, the timer's slews and estimated parasitics
+        (attar.timing.power.PowerResult: .summary(), .report(), .instances()). Times the design first."""
+        res = self.timing(pos)
+        T = res.timer
+        if getattr(T, '_power', None) is None:
+            from .timing.power import Power
+            T._power = Power(T)
+        return T._power.run(res)
 
     def timing_report(self, pos=None, endpoints=10, path=True, file=None):
         """Print (and return) a timing summary: WNS, TNS, violations, hold, the worst endpoints and the worst path

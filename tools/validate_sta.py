@@ -246,6 +246,7 @@ def compare(ours, ref, frac=0.01):
     r = {'endpoints_ref': len(ref), 'endpoints_ours': len(ours), 'matched': len(common),
          'setup_pearson': float(np.corrcoef(a, b)[0, 1]) if len(a) > 2 else None,
          'setup_mae': float(np.abs(a - b).mean()) if len(a) else None,
+         'setup_maxe': float(np.abs(a - b).max()) if len(a) else None,
          'setup_bias': float((a - b).mean()) if len(a) else None,
          'worst_ours': float(a.min()) if len(a) else None, 'worst_ref': float(b.min()) if len(b) else None,
          'tns_ours': float(np.minimum(a, 0).sum()), 'tns_ref': float(np.minimum(b, 0).sum()),
@@ -253,7 +254,8 @@ def compare(ours, ref, frac=0.01):
          'wns_err_pct': pct(min(a.min(), 0), min(b.min(), 0)) if len(a) else None,
          'tns_err_pct': pct(np.minimum(a, 0).sum(), np.minimum(b, 0).sum()),
          'hold_pearson': float(np.corrcoef(ha, hb)[0, 1]) if len(ha) > 2 else None,
-         'hold_mae': float(np.abs(ha - hb).mean()) if len(ha) else None}
+         'hold_mae': float(np.abs(ha - hb).mean()) if len(ha) else None,
+         'hold_maxe': float(np.abs(ha - hb).max()) if len(ha) else None}
     return r, common, a, b
 
 

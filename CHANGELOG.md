@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- `d.drv()`: max slew / capacitance / fanout checks, as OpenSTA's `report_check_types`; SDC `set_max_transition`,
+  `set_max_capacitance`, `set_max_fanout` are read now.
+- `d.power()`: OpenROAD's `report_power` on the GPU (activity propagation, internal, switching and leakage power).
+- Propagated clocks: `set_propagated_clock` in the SDC, or `d.propagate_clocks()`; clock RC on non-leaf clock nets.
+- `attar.naive.cts`: buffered, balanced clock trees: OpenROAD's clock buffer inference (no hold buffers), repeaters
+  at OpenROAD's max wire length, TritonCTS's sink clustering diameter, latency padding across clock gates, level by
+  level balancing on the timer. On ORFS's asap7 gcd / aes / riscv32i / jpeg: a smaller clock spread than TritonCTS,
+  WNS / TNS as good or better on three, 2.5-4x less clock power.
+- Timer: with propagated clocks, a cycle through a clock gating latch is broken at the latch D -> Q arc (as OpenSTA's
+  levelization), and arrivals entering a clock network from data pins (a gate's enable) are not clock arrivals.
+- CRPR: with propagated clocks, register checks remove clock reconvergence pessimism as OpenSTA does by default
+  (`attar.timing.crpr`; exact, every launch clock pin that can still be worst is kept); `d.timing(crpr=False)` for
+  `sta::set_crpr_enabled 0`.
+- Timer: slews from every arc of OpenSTA's delay calculation (constant-disabled and unclocked arcs too), ideal
+  clock networks timed for their slews; agreement with OpenSTA improves (cva6 TNS error 0.96% -> 0.03%).
+- Library bundles carry design rule limits and power data (rebuild with tools/distill_library.py); Liberty reader
+  fixes (an attribute without ';' before a group, line continuations inside strings).
+
 ## 1.0.1
 
 - `examples/timing_driven_colab.ipynb`: the README demo as a Colab notebook (Open in Colab from the README).
