@@ -1,9 +1,11 @@
 """Design rules (attar.timing.drv), power (attar.timing.power), the Liberty and SDC data they read, and propagated
 clocks. Agreement with OpenSTA is checked by tools/validate_drv.py, validate_power.py and validate_cts.py; these tests
 check the plumbing on the zoo's small designs."""
+import math
 import os
 import unittest
 
+import numpy as np
 import torch
 
 from common import SMALL, need
@@ -123,6 +125,38 @@ class CtsTest(unittest.TestCase):
             self.assertLessEqual(float((a[ok] - b[ok]).max()), cap + 1e-4)
         r2 = d.timing()
         self.assertTrue(torch.equal(r.setup, r2.setup) and torch.equal(r.hold, r2.hold))
+        # the tree's buffers are OpenROAD's inferred clock buffers (ASAP7: BUFx*, not the HB* hold buffers)
+        import importlib
+        C = importlib.import_module('attar.naive.cts')
+        cb = C._clock_buffers(d)
+        self.assertTrue(cb and all('BUF' in b.upper() for b in cb))
+        used = {d.names['masters'][int(d.raw['c_master'][c])] for c, n in enumerate(d.names['cells'])
+                if n.startswith('attar_cts_')}
+        self.assertTrue(used <= set(cb))
+        self.assertTrue(math.isfinite(st['repeater']['spacing_um']) and st['repeater']['spacing_um'] > 0)
+
+    def test_bisect_span(self):
+        import importlib
+        C = importlib.import_module('attar.naive.cts')
+        rng = np.random.default_rng(0)
+        xy = rng.uniform(0, 400, (500, 2))
+        groups = C._bisect(xy, np.arange(500), 20, 50.0)
+        self.assertEqual(sorted(np.concatenate(groups).tolist()), list(range(500)))
+        for g in groups:
+            self.assertLessEqual(len(g), 20)
+            if len(g) > 1:
+                self.assertLessEqual(float((xy[g].max(0) - xy[g].min(0)).sum()), 50.0)
+
+
+class LevelizeTest(unittest.TestCase):
+    def test_cycle_broken_at_latch(self):
+        """A cycle a -> b -> c -> a whose c -> a edge is a latch D -> Q arc: that edge is dropped, levels follow the
+        rest (OpenSTA's levelization never follows latch D -> Q arcs)."""
+        from attar.timing.sta import Timer
+        fr = np.array([0, 1, 2]); to = np.array([1, 2, 0])
+        lev, dropped = Timer._levelize(3, fr, to, prefer=np.array([False, False, True]))
+        self.assertEqual(dropped, 1)
+        self.assertEqual(lev.tolist(), [0, 1, 2])
 
 
 if __name__ == '__main__':

@@ -458,14 +458,21 @@ class Timer:
         sel = lambda m: (T(lib_id[m]), T(fr[m]), T(to[m]), T(asense[m]), T(atype[m]))
         self.c_lib, self.c_fr, self.c_to, self.c_sense, self.c_type = sel(ck)
         self.c_sense_lib = T(asense_lib[ck])
-        self.c_arr = T(((comb & ~iclk[fr] & ~iclk[to]) | plaunch)[ck] & ~off[ck])   # the search's (the rest: slews)
+        # (a data pin into a propagated clock network, e.g. a clock gate's enable: its arrivals are data, not the
+        # clock's (OpenSTA's tags are not clock tags there), so they do not become clock arrivals; slews only)
+        d2c = ~clk_net[fr] & pclk[to]
+        self.c_arr = T(((comb & ~iclk[fr] & ~iclk[to] & ~d2c) | plaunch)[ck] & ~off[ck])   # the search's (the rest: slews)
         self.l_lib, self.l_fr, self.l_to, self.l_sense, self.l_type = sel(launch)
         chk = np.isin(atype, (T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F)) & (clk_of[fr] >= 0) & ~off
         self.k_lib, self.k_fr, self.k_to, self.k_sense, self.k_type = sel(chk)
 
         # levels (Kahn) over net + combinational arcs (and the slew-only arcs)
         g_fr = np.concatenate([n_fr[nk], fr[ck]]); g_to = np.concatenate([n_to[nk], to[ck]])
-        lev, dropped = self._levelize(P, g_fr, g_to)
+        # latch D -> Q arcs: OpenSTA's levelization never follows them (Levelize::searchThru); here a cycle is broken
+        # there first (with propagated clocks, a clock gating latch closes one: register clock -> Q -> ... -> latch
+        # D -> Q -> gate enable -> gated clock tree -> register clock)
+        ldq = self._latch_d_to_q(d, t, lib_id, atype)
+        lev, dropped = self._levelize(P, g_fr, g_to, prefer=np.concatenate([np.zeros(int(nk.sum()), bool), ldq[ck]]))
         self.n_cycle_edges = dropped
         self.level = lev
         psrc = np.nonzero(pclk & np.isin(p_cell, [c_ for _, c in clocks for c_ in c['sources']]))[0]
@@ -740,8 +747,34 @@ class Timer:
         return off, asense
 
     @staticmethod
-    def _levelize(P, fr, to):
-        """Longest-path levels of a DAG (Kahn by layers). Edges inside cycles are dropped (count returned)."""
+    def _latch_d_to_q(d, t, lib_id, atype):
+        """Per instance arc: a latch D -> Q arc, as OpenSTA's LibertyBuilder (a combinational arc into an output whose
+        function is a latch's state variable, from a pin of the latch's data_in)."""
+        import re
+        names = d.names
+        m_ptr = d.raw['m_pin_ptr'].astype(np.int64)
+        fdefs = timing_mod.arrays(d)[1]
+        seqs = {}
+        for L in d.library():
+            for cn, v in (L.meta.get('sequentials') or {}).items():
+                seqs.setdefault(cn, v)
+        tok = lambda e: set(re.findall(r'[A-Za-z_][A-Za-z0-9_\[\]]*', e or ''))  # noqa: E731
+        lib_dq = np.zeros(len(t['a_master']), bool)
+        for a in np.nonzero(t['a_type'] == T_COMB)[0]:
+            m = int(t['a_master'][a])
+            sq = [q for q in (seqs.get(names['masters'][m]) or {}).get('seq', []) if q['kind'] in ('latch', 'latch_bank')]
+            if not sq:
+                continue
+            pins = names['master_pins'][m]
+            fp, tp = pins[int(t['a_from'][a]) - m_ptr[m]], pins[int(t['a_to'][a]) - m_ptr[m]]
+            tf = tok((fdefs.get(str(m)) or {}).get(tp))
+            lib_dq[a] = any(fp in tok(q['data']) and tf & set(q['vars']) for q in sq)
+        return lib_dq[lib_id] & (atype == T_COMB)
+
+    @staticmethod
+    def _levelize(P, fr, to, prefer=None):
+        """Longest-path levels of a DAG (Kahn by layers). Edges inside cycles are dropped (count returned): those
+        marked prefer first (latch D -> Q arcs, as OpenSTA's levelization), the rest only if cycles remain."""
         dropped = 0
         while True:
             indeg = np.bincount(to, minlength=P)
@@ -766,8 +799,12 @@ class Timer:
             if done.all():
                 return lev, dropped
             bad = ~done[to] & ~done[fr]
+            if prefer is not None and bool((bad & prefer).any()):
+                bad &= prefer
             dropped += int(bad.sum())
             fr, to = fr[~bad], to[~bad]
+            if prefer is not None:
+                prefer = prefer[~bad]
 
     def _group(self, lev):
         if not len(lev):

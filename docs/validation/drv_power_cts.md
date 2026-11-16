@@ -78,7 +78,18 @@ From ORFS's 3_5 placement (`tools/validate_cts_engine.py`). Agreement: OpenROAD 
 
 | design | clock arrival err max | endpoint setup MAE (CRPR off / on) | Attar bufs / latency / spread / WNS / TNS / clock power | TritonCTS bufs / latency / spread / WNS / TNS / clock power |
 | --- | ---: | ---: | --- | --- |
-| gcd | 0.0000 | 0.0002 / 0.0002 | 3 / 45.4 / 1.1 / -50.32 / -118.4 / 0.064 | 5 / 39.1 / 1.5 / -47.29 / -108.4 / 0.156 |
-| aes | 0.1102 | 0.0388 / 0.0392 | 32 / 94.5 / 10.3 / -9.72 / -45.9 / 0.814 | 31 / 78.4 / 7.2 / -5.44 / -15.9 / 2.197 |
-| riscv32i | 0.0000 | 0.0226 / 0.0226 | 61 / 110.2 / 14.3 / -23.91 / -5634.0 / 0.717 | 61 / 111.7 / 18.3 / -28.66 / -9705.6 / 1.771 |
-| jpeg | 0.0000 | 0.0012 / 0.0012 | 274 / 176.3 / 22.8 / -104.94 / -23065.5 / 5.111 | 562 / 163.1 / 21.5 / -98.40 / -22523.5 / 20.354 |
+| gcd | 0.0000 | 0.0002 / 0.0002 | 3 / 36.7 / 1.1 / -41.65 / -90.4 / 0.067 | 5 / 39.1 / 1.5 / -47.29 / -108.4 / 0.156 |
+| aes | 0.2787 | 0.0475 / 0.0488 | 32 / 89.5 / 3.5 / -5.17 / -9.2 / 0.885 | 31 / 78.4 / 7.2 / -5.44 / -15.9 / 2.197 |
+| riscv32i | 0.0000 | 0.0226 / 0.0226 | 61 / 101.9 / 6.8 / -24.07 / -5907.3 / 0.735 | 61 / 111.7 / 18.3 / -28.66 / -9705.6 / 1.771 |
+| jpeg | 0.0000 | 0.0012 / 0.0011 | 274 / 155.3 / 8.6 / -102.81 / -21484.6 / 5.298 | 562 / 163.1 / 21.5 / -98.40 / -22523.5 / 20.354 |
+
+Larger designs (the zoo's after_fp placements; no TritonCTS run to compare with): latency and spread of the register clock pins (ps), clock power (mW), the worst register clock pin slew (ps), the largest legalization move of a tree buffer (um), Attar's CTS time (s). Repeaters: on tree edges longer than the max wire length; pads: latency padding of register trees earlier than their clock's latest (clock gating).
+
+| design | buffers | repeaters | pads | latency | spread | clock power | clock pin slew max | max move | seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| swerv | 639 | 0 | 0 | 206.9 | 15.5 | 7.787 | 36.6 | 10.7 | 14.7 |
+| cva6 | 485 | 1 | 0 | 170.1 | 28.6 | 6.020 | 70.1 | 23.2 | 13.4 |
+| coralnpu | 540 | 1 | 31 | 312.8 | 52.1 | 34.494 | 116.7 | 7.2 | 22.4 |
+| jpeg_x20 | 5450 | 87 | 0 | 466.8 | 72.6 | – | 43.5 | 10.0 | 117.7 |
+
+The spread on the largest designs comes from the upper levels of the trees (fanout-8 groups whose children sit at different distances); resizing cannot remove it. A delay-balanced topology (DME, H-tree) is the next step. Clock power "–": d.power() did not fit in 12 GB of GPU memory (3.5 M pins).

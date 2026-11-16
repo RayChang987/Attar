@@ -70,7 +70,7 @@ names; an unknown fact, capability, metric or snapshot raises `KeyError` with th
 | `global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, movable=None, macro_halo=0, routability=False, route_args=None)` | |
 | `legalize(d, max_rounds=5, window=8, improve=True, passes=3, macro_halo=0)` | |
 | `place(d, target_density=None, gp_args=None, lg_args=None, macro_halo=0)` | |
-| `cts(d, leaf_size=20, fanout=8, target_slew=None, buffers=None, balance_rounds=4)` | buffered clock trees on every ideal clock net (balanced recursive bisection, Liberty-sized buffers, only the new buffers legalized), clocks set propagated, leaf buffers resized to balance the clock arrivals; nets get `USE CLOCK` for `d.export` |
+| `cts(d, leaf_size=20, fanout=8, target_slew=None, buffers=None, balance_rounds=None, max_diameter=50.0)` | buffered clock trees on every ideal clock net: OpenROAD's inferred clock buffers, clusters bounded by size and TritonCTS's sink clustering diameter, repeaters on edges longer than OpenROAD's max wire length (as many on every edge into a level), buffers kept out of macros, only the new buffers legalized; clocks set propagated; register trees behind clock gates latency-padded, then balanced level by level from the root on the timer (resizes predicted from measured delays); nets get `USE CLOCK` for `d.export` |
 
 Floorplan engines, for the `before_fp` problems (the die, IO pins and macros are the answer; the result is exported
 and handed to a flow that draws the power grid):

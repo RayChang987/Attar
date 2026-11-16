@@ -81,7 +81,7 @@ def main():
               'truncated, so the errors with CRPR are those of the timer without it.']
     # -- CTS engine
     eng = {}
-    for p in sorted(glob.glob(os.path.join(VAL, 'cts_engine*.json'))):
+    for p in sorted(x for x in glob.glob(os.path.join(VAL, 'cts_engine*.json')) if not x.endswith('_large.json')):
         eng.update(json.load(open(p)))
     if eng:
         L += ['', '## Clock tree synthesis (`attar.naive.cts`)', '',
@@ -101,6 +101,22 @@ def main():
                         op['crpr_on']['wns'], op['crpr_on']['tns'], 1e3 * sum(o['power_clock']), b['buffers'][0],
                         b['latency'], b['spread'], b['crpr_on']['wns'], b['crpr_on']['tns'],
                         1e3 * b['power_clock'][3]))
+    p = os.path.join(VAL, 'cts_engine_large.json')
+    if os.path.exists(p):
+        L += ['', 'Larger designs (the zoo\'s after_fp placements; no TritonCTS run to compare with): latency and spread '
+              'of the register clock pins (ps), clock power (mW), the worst register clock pin slew (ps), the largest '
+              'legalization move of a tree buffer (um), Attar\'s CTS time (s). Repeaters: on tree edges longer than '
+              'the max wire length; pads: latency padding of register trees earlier than their clock\'s latest '
+              '(clock gating).', '',
+              '| design | buffers | repeaters | pads | latency | spread | clock power | clock pin slew max | max move | '
+              'seconds |', '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+        for dn, r in json.load(open(p)).items():
+            L.append('| %s | %d | %d | %d | %.1f | %.1f | %s | %.1f | %.1f | %.1f |' % (
+                dn, r['buffers'], r['repeaters'] or 0, r['pads'] or 0, r['latency'], r['spread'], f(r['clock_power_mw'], '%.3f'),
+                r['ck_slew_max'], r['legalize_max_disp'], r['seconds']))
+        L += ['', 'The spread on the largest designs comes from the upper levels of the trees (fanout-8 groups whose '
+              'children sit at different distances); resizing cannot remove it. A delay-balanced topology (DME, H-tree) '
+              'is the next step. Clock power "–": d.power() did not fit in 12 GB of GPU memory (3.5 M pins).']
     open(a.out, 'w').write('\n'.join(L) + '\n')
     print(a.out)
 
