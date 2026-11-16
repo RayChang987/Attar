@@ -325,6 +325,9 @@ class Timer:
         self.parasitics = parasitics
         with open(os.path.join(d.path, 'timing.json')) as f:
             self.info = info = json.load(f)
+        for k in (getattr(d, '_propagated', None) or ()):     # Design.propagate_clocks (after a clock tree is built)
+            if k in info['clocks']:
+                info['clocks'][k]['propagated'] = True
         # the cell data: from the design's library chain (bundle + local) or its timing.safetensors (attar.timing.ir.arrays)
         t, info['functions'], info['arc_when'] = timing_mod.arrays(d)
         a = d.raw
@@ -440,19 +443,22 @@ class Timer:
         # arcs whose clock pin no clock reaches): they set slews only (c_arr False)
         # (OpenROAD's delay calculation skips arcs out of constant pins, as the search does: an output whose inputs are
         # all constant keeps slew 0; an arc from a live input into a constant output still sets its slew)
-        # a propagated clock's network and launch arcs (clock pin -> output) are ordinary arcs of the search
-        nk = ~iclk[n_to] & ~iclk[n_fr]
+        # a propagated clock's network and launch arcs (clock pin -> output) are ordinary arcs of the search; an
+        # ideal clock's network sets slews only (OpenSTA's graph slews there, with no wire parasitics: wires())
+        nk = np.ones(len(n_to), bool)
         edge = np.isin(atype, (T_RISE_EDGE, T_FALL_EDGE))
         from_const = self.const_net[p_net[fr]] >= 0
         plaunch = edge & pclk[fr] & ~clk_net[to] & ~off
-        ck = (((comb | (edge & (clk_of[fr] < 0))) & ~iclk[to] & ~iclk[fr]) | plaunch) & ~from_const
+        ck = ((comb | (edge & (clk_of[fr] < 0))) | plaunch) & ~from_const
         launch = edge & iclk[fr] & ~clk_net[to] & ~off
+        self.net_iclk = np.zeros(len(n_ptr) - 1, bool)
+        self.net_iclk[drv >= 0] = iclk[drv[drv >= 0]]
         self.n_fr, self.n_to = T(n_fr[nk]), T(n_to[nk])
         self.n_net = T(p_net[n_to[nk]])
         sel = lambda m: (T(lib_id[m]), T(fr[m]), T(to[m]), T(asense[m]), T(atype[m]))
         self.c_lib, self.c_fr, self.c_to, self.c_sense, self.c_type = sel(ck)
         self.c_sense_lib = T(asense_lib[ck])
-        self.c_arr = T((comb | plaunch)[ck] & ~off[ck])      # arcs of the arrival search (the rest: slews only)
+        self.c_arr = T(((comb & ~iclk[fr] & ~iclk[to]) | plaunch)[ck] & ~off[ck])   # the search's (the rest: slews)
         self.l_lib, self.l_fr, self.l_to, self.l_sense, self.l_type = sel(launch)
         chk = np.isin(atype, (T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F)) & (clk_of[fr] >= 0) & ~off
         self.k_lib, self.k_fr, self.k_to, self.k_sense, self.k_type = sel(chk)
@@ -815,6 +821,13 @@ class Timer:
             warnings.warn('attar.timing.sta: %d nets above %d pins use a lumped wire model (%s)'
                           % (len(big), TREE_BUCKETS[-1][1], steiner_big.error()), stacklevel=2)
         self.big_steiner = ev.deg > M.RMST_MAX_DEGREE
+        self._iclk_pi = None
+        if self.net_iclk.any():
+            from .drv import SegSum
+            ni = torch.as_tensor(self.net_iclk, device=self.dev)
+            self.net_iclk_t = ni
+            tot = SegSum(self.d.p_net, ev.E)(torch.cat([self.pin_cap, self.pin_cap_min], 1))     # (E, 4)
+            self._iclk_pi = torch.stack([tot, torch.zeros_like(tot), torch.zeros_like(tot)], -1)
 
     def _pin_setup(self):
         """Where estimate_parasitics puts each pin: OpenROAD's dbNetwork::location, dbITerm::getAvgXY, the mean of the
@@ -899,16 +912,21 @@ class Timer:
         caps = torch.cat([self.pin_cap, self.pin_cap_min], 1)            # rise / fall max, rise / fall min
         elm_pin, pi, L2 = tree_elmore(p, self.plan, self.ev.E, caps, self.r_sig, self.c_sig, L,
                                       self.d.dbu, rcut=self.pin_rvia)
-        if self.plan_clk is None:
-            self.pi = pi
-            return L2 * self.c_sig, elm_pin[self.n_to]                   # (A, 4): Elmore per variant
-        e2, pi2, L3 = tree_elmore(p, self.plan_clk, self.ev.E, caps, self.r_clk, self.c_clk, L,
-                                  self.d.dbu, rcut=self.pin_rvia)
-        nc = self.net_clkrc_t
-        elm_pin = torch.where(nc[self.pin_net][:, None], e2, elm_pin)
-        self.pi = torch.where(nc[:, None, None], pi2, pi)
-        L2 = torch.where(nc, L3, L2)
-        return L2 * torch.where(nc, torch.full_like(L2, self.c_clk), torch.full_like(L2, self.c_sig)), elm_pin[self.n_to]
+        cw = L2 * self.c_sig
+        if self.plan_clk is not None:
+            e2, pi2, L3 = tree_elmore(p, self.plan_clk, self.ev.E, caps, self.r_clk, self.c_clk, L,
+                                      self.d.dbu, rcut=self.pin_rvia)
+            nc = self.net_clkrc_t
+            elm_pin = torch.where(nc[self.pin_net][:, None], e2, elm_pin)
+            pi = torch.where(nc[:, None, None], pi2, pi)
+            cw = torch.where(nc, L3 * self.c_clk, cw)
+        if self._iclk_pi is not None:                # ideal clock nets: no parasitics (estimate_parasitics skips
+            ni = self.net_iclk_t                     # them): the pins' capacitance, lumped, no wire delay
+            elm_pin = torch.where(ni[self.pin_net][:, None], torch.zeros_like(elm_pin), elm_pin)
+            pi = torch.where(ni[:, None, None], self._iclk_pi, pi)
+            cw = torch.where(ni, torch.zeros_like(cw), cw)
+        self.pi = pi
+        return cw, elm_pin[self.n_to]                                   # (A, 4): Elmore per variant
 
     def _lookup(self, lib, slot, x, y):
         return nldm(self.t_ix1[lib, slot], self.t_ix2[lib, slot], self.t_val[lib, slot], self.t_n[lib, slot], x, y)

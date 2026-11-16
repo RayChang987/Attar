@@ -37,6 +37,9 @@ names; an unknown fact, capability, metric or snapshot raises `KeyError` with th
 | `snapshot(name)`, `restore(name)`, `unplace()` | solution state |
 | `timing(pos=None)`, `timing_report(pos=None, endpoints=10, path=True)` | static timing (`attar.timing.sta`): a `TimingResult` (`summary()`, `path()`, `report()`, `pin_slack()`, `net_slack()`); the report prints WNS / TNS, the worst endpoints and path; `pin_slack()` / `net_slack()` give every pin's / net's setup slack (inf where unconstrained), as OpenSTA's, from the required times of the run (computed on first use) |
 | `gr_overflow(pos=None, adjustment=None, maps=False)` | global-routing overflow (GROV): RUDY demand against OpenROAD's gcell capacities |
+| `drv(pos=None)` | electrical design rules of a timing run (`attar.timing.drv`): max slew, capacitance and fanout per pin, as OpenSTA's `report_check_types` (limits from the SDC, the Liberty pins and the libraries' defaults); `summary()`, `report()`, `violators(kind)` |
+| `power(pos=None)` | power of a timing run (`attar.timing.power`), as OpenROAD's `report_power`: propagated activities, internal / switching / leakage power per instance (W); `summary()`, `report()` (the report_power groups), `instances()` |
+| `propagate_clocks(clocks=None)` | time clocks through their trees (`set_propagated_clock`): clock arrivals and slews at the register clock pins come from the timed clock network; checks use them (no CRPR yet) |
 | `equivalents(cell)`, `resize(cells, masters)` | gate sizing within a master's equivalence class (`attar.timing.sizing`) |
 | `edit()` | a batch of netlist edits (`attar.netlist.Edit`), applied when its `with` block ends: `insert_buffer(net, loads=None, master=None, xy=None)` and `clone(cell, loads)` return (new cell, new net); `add_cell`, `add_net`, `connect`, `move`, `remove_cell` are the primitives. New cells and nets are appended (no cell or net index moves); pins are renumbered (`e.pin_map[old]`); a TimingResult of before is stale; new cells sit where put (`insert_buffer`: on its loads), legalize them. Clock nets are refused (clocks are ideal) |
 | `debuffer(buffers=True, inverters=True)` | remove the netlist's buffers and double inversions (OpenROAD's `remove_buffers`, plus inverter pairs: an even chain goes whole, an odd one keeps one inverter); loads go back onto the net that fed them, which keeps the name of the net with the IO pin, else of the driver's. Not touched: clock nets, fixed cells, joins that would put two IO pins on one net. Removed cells stay as tombstones (flags `ASIDE | REMOVED`, not placed, not exported). Returns counts |
@@ -67,6 +70,7 @@ names; an unknown fact, capability, metric or snapshot raises `KeyError` with th
 | `global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, movable=None, macro_halo=0, routability=False, route_args=None)` | |
 | `legalize(d, max_rounds=5, window=8, improve=True, passes=3, macro_halo=0)` | |
 | `place(d, target_density=None, gp_args=None, lg_args=None, macro_halo=0)` | |
+| `cts(d, leaf_size=20, fanout=8, target_slew=None, buffers=None, balance_rounds=4)` | buffered clock trees on every ideal clock net (balanced recursive bisection, Liberty-sized buffers, only the new buffers legalized), clocks set propagated, leaf buffers resized to balance the clock arrivals; nets get `USE CLOCK` for `d.export` |
 
 Floorplan engines, for the `before_fp` problems (the die, IO pins and macros are the answer; the result is exported
 and handed to a flow that draws the power grid):
@@ -91,6 +95,6 @@ Each engine checks its facts first (`MissingFacts` otherwise) and writes its ans
 | `attar/hub.py`, `paths.py` | the zoo: where it lives, downloads from the Hugging Face Hub |
 | `attar/viz.py` | `plot` |
 | `attar/io/` | raw files in and out: `lef.py`, `deffile.py`, `bookshelf.py`, `fpformats.py`, `liberty.py`, `sdc.py`, `st.py` (safetensors); `distill.py` (LEF/DEF to the IR), `export.py` (DEF write-back into the source frame) |
-| `attar/timing/` | `ir.py` (the timing fact), `library.py` (cell libraries), `sta.py` (static timing), `dmp.py` / `dmp_triton.py` (delay calculation), `steiner*.py` + `csrc/` (placement parasitics), `sizing.py` (`resize`, `equivalents`) |
+| `attar/timing/` | `ir.py` (the timing fact), `library.py` (cell libraries), `sta.py` (static timing, ideal and propagated clocks), `drv.py` (design rules), `power.py` (power), `dmp.py` / `dmp_triton.py` (delay calculation), `steiner*.py` + `csrc/` (placement parasitics), `sizing.py` (`resize`, `equivalents`) |
 | `attar/rules/` | `routing.py` (global-routing capacity and overflow), `rails.py` (power-rail parity), `pdn.py` (PDN blockages) |
 | `attar/naive/` | engines: `floorplan.py` (die, IO, macros), `gp.py`, `lg.py`, `flow.py` (`floorplan`, `place`) |

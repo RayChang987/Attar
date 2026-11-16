@@ -27,7 +27,8 @@ import validate_sta as VS  # noqa: E402
 from orfs_roundtrip import RUNS, base_dir, flow_dir, openroad, run_key, w  # noqa: E402
 
 RULES = ('slew', 'capacitance', 'fanout')
-ROW = re.compile(r'^(\S+)\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+\((MET|VIOLATED)\)')
+# (OpenSTA prints a fanout slack of -1 as an empty field: then slack = limit - value)
+ROW = re.compile(r'^(\S+)\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)?\s*\((MET|VIOLATED)\)')
 
 
 def parse_checks(text):
@@ -45,7 +46,8 @@ def parse_checks(text):
         elif cur:
             m = ROW.match(s)
             if m:
-                out[cur][m.group(1).replace('\\', '')] = tuple(float(m.group(i)) for i in (2, 3, 4))
+                lim, val = float(m.group(2)), float(m.group(3))
+                out[cur][m.group(1).replace('\\', '')] = (lim, val, float(m.group(4)) if m.group(4) else lim - val)
     return out
 
 

@@ -270,8 +270,9 @@ def read(path, power=False):
                         arcs.append({'from': rp, 'to': name, 'sense': ta.get('timing_sense', ''),
                                      'type': ta.get('timing_type', 'combinational'), 'when': ta.get('when', ''),
                                      'tables': tables})
-            # internal power (LibertyReader::readInternalPowerGroups): rise_power / fall_power, or power for both
-            for ip in g.sub('internal_power'):
+            # internal power (LibertyReader::readInternalPowerGroups): rise_power / fall_power, or power for both. A
+            # bus group's go to the bus port, which no instance pin (a bit) is: OpenSTA never uses them
+            for ip in (g.sub('internal_power') if g.kind != 'bus' else ()):
                 ia = ip.attrs
                 tabs = {}
                 for tg in ip.groups:

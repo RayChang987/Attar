@@ -54,24 +54,25 @@ def run_dir(plat, design):
     return os.path.join(CTS, '%s_%s_base' % (plat, design))
 
 
-def distill(plat, design):
-    """The scratch Attar design of the run's 4_cts stage (made once)."""
+def distill(plat, design, stage='4_cts', sdc='4_cts.sdc'):
+    """A scratch Attar design of a stage of the run (made once): 4_cts (TritonCTS's trees, propagated clocks) or
+    3_5_place_dp with 3_place.sdc (the placement CTS starts from, ideal clocks)."""
     base = run_dir(plat, design)
     res = flow_dir(base)
-    ir = os.path.join(CTS, '_ir', '%s_%s' % (plat, design))
+    ir = os.path.join(CTS, '_ir', '%s_%s' % (plat, design) + ('' if stage == '4_cts' else '_' + stage))
     if os.path.exists(os.path.join(ir, 'timing.json')):
         return ir
     rt = os.path.join(CTS, '_rt', '%s_%s' % (plat, design)); os.makedirs(rt, exist_ok=True)
-    src = os.path.join(rt, '4_cts.def')
+    src = os.path.join(rt, stage + '.def')
     if not os.path.exists(src):
-        openroad('read_db %s\nwrite_def %s' % (w(res + '/4_cts.odb'), w(src)), 'cts_export_%s_%s' % (plat, design))
+        openroad('read_db %s\nwrite_def %s' % (w(res + '/%s.odb' % stage), w(src)), 'cts_export_%s_%s' % (plat, design))
     lefs, libs = inputs(VS.base_dir(run_key(plat, design)))
-    attar.distill(src, lefs, ir, lib_paths=libs, reference='orfs 4_cts (TritonCTS)',
-                  extra={'suite': 'orfs/' + plat, 'orfs_stage': '4_cts',
+    attar.distill(src, lefs, ir, lib_paths=libs, reference='orfs ' + stage,
+                  extra={'suite': 'orfs/' + plat, 'orfs_stage': stage,
                          'routing': routing_resources(run_key(plat, design))})
     from attar.timing import ir as timing
     bundle = os.path.join(attar.paths.zoo_dir(), 'libraries', BUNDLE[plat])
-    timing.attach(ir, libs, os.path.join(res, '4_cts.sdc'), VS.platform_file(plat, 'setRC.tcl'), bundle=bundle)
+    timing.attach(ir, libs, os.path.join(res, sdc), VS.platform_file(plat, 'setRC.tcl'), bundle=bundle)
     return ir
 
 

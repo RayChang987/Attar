@@ -594,6 +594,18 @@ class Design:
             self._timer = Timer(self)
         return self._timer.run(pos)
 
+    def propagate_clocks(self, clocks=None):
+        """Time the clocks given (names; default: every clock with a source pin) as propagated, through their clock
+        trees, as the SDC command set_propagated_clock (for a design whose clock trees are built: attar.naive.cts).
+        The timer is rebuilt on the next timing()."""
+        import json as _json
+        with open(os.path.join(self.path, 'timing.json')) as f:
+            cl = _json.load(f)['clocks']
+        names = [k for k, c in cl.items() if c.get('sources')] if clocks is None else list(clocks)
+        self._propagated = sorted(set(getattr(self, '_propagated', None) or ()) | set(names))
+        self._netlist_changed('clocks were set to propagated')
+        return self._propagated
+
     def drv(self, pos=None):
         """Electrical design rules at pos (default: the current placement): max slew, max capacitance and max fanout
         per pin, as OpenSTA's report_check_types -max_slew -max_capacitance -max_fanout (attar.timing.drv.DrvResult:

@@ -45,7 +45,10 @@ TOL = 0.01                       # PropActivityVisitor::change_tolerance_
 MAX_PASSES = 50                  # Power::max_activity_passes_
 O_UNKNOWN, O_INPUT, O_PROP, O_CLOCK, O_CONST = 0, 1, 2, 3, 4
 F64 = torch.float64
-R_PIN, R_SEQ, R_NONE = 0, 1, 2   # an expression variable: an instance pin, a register state, absent
+ACT = torch.float32              # activities, as OpenSTA keeps them (float): a register loop that has not converged
+#                                  after its 50 passes ends where float rounding takes it
+R_PIN, R_SEQ, R_NONE, R_PAD = 0, 1, 2, 3   # an expression variable: an instance pin, a register state, absent,
+#                                            padding (constant 0: merged groups of a level, see Power.__init__)
 
 
 def _truth(vs, f):
@@ -92,8 +95,8 @@ class _Exprs:
             bits = ((np.arange(R)[:, None] >> np.arange(kk)[None]) & 1).astype(np.float64)
             self.groups[k] = {'kind': T_(kind, torch.long), 'idx': T_(idx, torch.long),
                               'tid': T_(np.concatenate(g['tid']) if g['n'] else np.zeros(0, np.int64), torch.long),
-                              'bank': T_(np.stack(g['bank']) if g['bank'] else np.zeros((0, R)), F64),
-                              'bits': T_(bits, F64), 'n': g['n'], 'flip_base': torch.arange(R, device=self.dev)}
+                              'bank': T_(np.stack(g['bank']) if g['bank'] else np.zeros((0, R)), ACT),
+                              'bits': T_(bits, ACT), 'n': g['n'], 'flip_base': torch.arange(R, device=self.dev)}
         self.rows = None
 
     def table(self, k, rows):
@@ -103,11 +106,12 @@ class _Exprs:
     def _vars(self, k, rows, act):
         """Per entry and variable: duty, density, launch period, is a clock pin (the variable's activity)."""
         g = self.groups[k]
+        k = g.get('K', k)
         kind, idx = g['kind'][rows], g['idx'][rows]
         pin_u, pin_d, seq_u, seq_d, per, clk = act
         P, S = len(pin_u), len(seq_u)
         ip, iq = idx.clamp(max=P - 1), idx.clamp(max=max(S - 1, 0))
-        z = torch.zeros_like(idx, dtype=F64)
+        z = torch.zeros_like(idx, dtype=ACT)
         sq = lambda x: x[iq] if S else z  # noqa: E731
         u = torch.where(kind == R_PIN, pin_u[ip], torch.where(kind == R_SEQ, sq(seq_u), z))
         d = torch.where(kind == R_PIN, pin_d[ip], torch.where(kind == R_SEQ, sq(seq_d), z))
@@ -118,7 +122,7 @@ class _Exprs:
     @staticmethod
     def _weights(bits, p, k):
         """(n, 2^k) probabilities of the truth table's rows."""
-        w = torch.ones(p.shape[0], bits.shape[0], dtype=F64, device=p.device)
+        w = torch.ones(p.shape[0], bits.shape[0], dtype=ACT, device=p.device)
         for j in range(k):
             w = w * torch.where(bits[None, :, j] > 0.5, p[:, j:j + 1], 1 - p[:, j:j + 1])
         return w
@@ -126,6 +130,7 @@ class _Exprs:
     def duty(self, k, rows, act):
         g = self.groups[k]
         tab = self.table(k, rows)
+        k = g.get('K', k)
         if k == 0:
             return tab[:, 0]
         _, u, _, _, _ = self._vars(k, rows, act)
@@ -135,9 +140,10 @@ class _Exprs:
         """(duty, density) of the entries: Power::evalActivity's BDD path (evalBddDuty, evalBddActivity)."""
         g = self.groups[k]
         tab = self.table(k, rows)
+        kind, u, d, per, ck = self._vars(k, rows, act)
+        k = g.get('K', k)
         if k == 0:
             return tab[:, 0], torch.zeros_like(tab[:, 0])
-        kind, u, d, per, ck = self._vars(k, rows, act)
         n, R = tab.shape
         w = self._weights(g['bits'], u, k)
         duty = (w * tab).sum(1)
@@ -162,7 +168,7 @@ class _Exprs:
         dens_change = change / period
         # Boolean difference sum over the pin variables (register states have no pin: not counted); computed for
         # every entry (no host sync: CUDA-graph capturable)
-        dsum = torch.zeros(n, dtype=F64, device=self.dev)
+        dsum = torch.zeros(n, dtype=ACT, device=self.dev)
         r = g['flip_base']
         for j in range(k):
             flip = tab[:, r ^ (1 << j)]
@@ -480,16 +486,50 @@ class Power:
             st_ = dv[fn_kind[dv] == 2]
             fp = dv[fn_kind[dv] == 1]
             fun = []
-            for k in np.unique(fn_k[fp]):
-                v = fp[fn_k[fp] == k]
-                fun.append((int(k), v, Tt(v), Tt(fn_row[v])))
+            if len(fp):                        # one group per level: every function padded to the level's widest
+                K = int(fn_k[fp].max())
+                kinds, idxs, tids, bank, bid = [], [], [], [], {}
+                for k in np.unique(fn_k[fp]):
+                    k = int(k)
+                    sel = fp[fn_k[fp] == k]
+                    g = X.groups[k]
+                    rr = torch.as_tensor(fn_row[sel], device=dev)
+                    kd = np.full((len(sel), max(K, 1)), R_PAD, np.int64); ix = np.zeros_like(kd)
+                    if k:
+                        kd[:, :k] = g['kind'][rr][:, :k].cpu().numpy(); ix[:, :k] = g['idx'][rr][:, :k].cpu().numpy()
+                    tid = g['tid'][rr].cpu().numpy()
+                    for t in np.unique(tid):
+                        if (k, int(t)) not in bid:
+                            bid[(k, int(t))] = len(bank)
+                            bank.append(np.tile(g['bank'][int(t)].cpu().numpy(), 1 << (K - k)))
+                    kinds.append(kd); idxs.append(ix); tids.append(np.array([bid[(k, int(t))] for t in tid]))
+                    fun_pins = sel if not fun else np.concatenate([fun[0], sel])
+                    fun = [fun_pins]
+                key = ('level', L)
+                R = 1 << K
+                X.groups[key] = {'kind': Tt(np.concatenate(kinds)), 'idx': Tt(np.concatenate(idxs)),
+                                 'tid': Tt(np.concatenate(tids)), 'bank': Tt(np.stack(bank), ACT),
+                                 'bits': Tt(((np.arange(R)[:, None] >> np.arange(max(K, 1))[None]) & 1).astype(np.float64), ACT),
+                                 'n': len(fun[0]), 'K': K, 'flip_base': torch.arange(R, device=dev)}
+                v = fun[0]
+                fun = [(key, v, Tt(v), torch.arange(len(v), device=dev))]
             self.levels.append({'load': (ld, Tt(ld)), 'load_drv': Tt(drv_of_net[p_net[ld]]), 'state': (st_, Tt(st_)),
                                 'fun': fun})
         self.is_seq_load = is_load & (p_mpin >= 0) & np.where(p_mpin >= 0, seq_cell[p_cell], False)
         self.is_drv_t = Tt(is_drv, torch.bool)
         self.is_clock = Tt(clock, torch.bool)
         self.is_iclock = Tt(T.iclk, torch.bool)               # ideal clock pins (getSlew: the clock's transition)
-        self.clk_of = Tt(np.maximum(T.clk_of, 0))
+        # Power::findClk on a clock network pin: the fastest clock of the paths through it, its own and those of the
+        # input delays on its clock's source ports (their data arrivals run through the clock network too)
+        cidx = {k: i for i, k in enumerate(T.clock_names)}
+        per_ = [c['period'] for c in T.clocks]
+        eff = list(range(len(T.clocks)))
+        for ci, c in enumerate(T.clocks):
+            for e in T.info.get('input_delay', []):
+                cj = cidx.get(e.get('clock'))
+                if e.get('cell') in c['sources'] and cj is not None and per_[cj] < per_[eff[ci]]:
+                    eff[ci] = cj
+        self.clk_of = Tt(np.asarray(eff, np.int64)[np.maximum(T.clk_of, 0)] if len(eff) else np.zeros(P, np.int64))
         self.p_cell_t = Tt(p_cell)
         self.p_net = d.p_net
         self.r = {k: Tt(rows[k], torch.bool if k == 'inv' else torch.long)
@@ -535,8 +575,8 @@ class Power:
         self.min_period = min(per) if per else 0.0
         self.in_density = 0.1 / (self.min_period if self.min_period > 0 else 1.0)
         wf = [c['waveform'] for c in T.clocks]
-        self.clk_period = Tt([c['period'] for c in T.clocks] or [INF], F64)
-        self.clk_duty = Tt([(w[1] - w[0]) / c['period'] for w, c in zip(wf, T.clocks)] or [0.0], F64)
+        self.clk_period = Tt([c['period'] for c in T.clocks] or [INF], ACT)
+        self.clk_duty = Tt([(w[1] - w[0]) / c['period'] for w, c in zip(wf, T.clocks)] or [0.0], ACT)
         self.debug = 0
 
     # ------------------------------------------------------------------------------------------------------------
@@ -545,7 +585,7 @@ class Power:
         clock network pin's clock), else the fastest clock in the design (0 without clocks)."""
         T = self.T
         C = len(T.clocks)
-        per = torch.full((T.P,), INF, dtype=F64, device=self.dev)
+        per = torch.full((T.P,), INF, dtype=ACT, device=self.dev)
         if C:
             ok = torch.isfinite(T.amax[:, :, :2 * C]).any(1) | torch.isfinite(T.amin[:, :, :2 * C]).any(1)  # (P, 2C)
             cp = self.clk_period.repeat_interleave(2)[None].expand_as(ok)
@@ -559,7 +599,7 @@ class Power:
         fd = torch.where(clk, 2.0 / self.clk_period[self.clk_of], dens)
         fu = torch.where(clk, self.clk_duty[self.clk_of], duty)
         cst = self.const_pin >= 0
-        return torch.where(cst, torch.zeros_like(fd), fd), torch.where(cst, self.const_pin.double(), fu)
+        return torch.where(cst, torch.zeros_like(fd), fd), torch.where(cst, self.const_pin.to(fu.dtype), fu)
 
     def _dense_setup(self):
         """Static tensors for the dense (GPU-resident) propagation: per level the successor edges of its pins, the
@@ -603,12 +643,12 @@ class Power:
         one CUDA graph on the GPU (persistent buffers); one host sync per register pass."""
         D = self._dense_setup()
         B = self._buffers()
-        avg = slew_min.double().mean(1)
+        avg = slew_min.to(ACT).mean(1)
         B['cap'].copy_(torch.where(avg > 0, 1.0 / avg.clamp(min=1e-30), torch.full_like(avg, INF)))
         lp = self._launch_period()
         self._lp = lp
         B['lp'].copy_(lp)
-        pc = torch.where(lp > 0, torch.where(self.is_clock, 2.0, 1.0).double() / lp.clamp(min=1e-30),
+        pc = torch.where(lp > 0, torch.where(self.is_clock, 2.0, 1.0).to(ACT) / lp.clamp(min=1e-30),
                          torch.full_like(lp, INF))
         B['prop_cap'].copy_(torch.where(self.is_drv_t, pc, torch.full_like(pc, INF)))
         for k in ('dens', 'duty', 'orig', 'sq_d', 'sq_u', 'sq_o', 'enq', 'regs'):
@@ -632,7 +672,7 @@ class Power:
     def _buffers(self):
         if not hasattr(self, '_B'):
             dev, P, S = self.dev, self.T.P, self.S
-            f = lambda n: torch.zeros(n, dtype=F64, device=dev)  # noqa: E731
+            f = lambda n: torch.zeros(n, dtype=ACT, device=dev)  # noqa: E731
             self._B = {'dens': f(P), 'duty': f(P), 'orig': torch.zeros(P, dtype=torch.long, device=dev),
                        'sq_d': f(S), 'sq_u': f(S), 'sq_o': torch.zeros(S, dtype=torch.long, device=dev),
                        'enq': torch.zeros(P, dtype=torch.uint8, device=dev),
@@ -653,7 +693,7 @@ class Power:
         R = self.n_reg
 
         def pct(v, prev):
-            return torch.where(prev == 0, (v != 0).to(F64), (v - prev).abs() / prev.abs().clamp(min=1e-300))
+            return torch.where(prev == 0, (v != 0).to(v.dtype), (v - prev).abs() / prev.abs().clamp(min=1e-300))
 
         def set_check(pins, nd, nu, no):
             m = enq[pins] > 0
@@ -668,28 +708,39 @@ class Power:
             fd, fu = self._find(dens, duty, orig)
             return (fu, fd, sq_u, sq_d, lp, self.is_clock)
 
+        def step(L, Ld):
+            """One level of the breadth-first visit."""
+            ld = Ld['load'][1]
+            if len(ld):
+                dr = Ld['load_drv']
+                ch = set_check(ld, dens[dr], duty[dr], torch.full_like(ld, O_PROP))
+                changed[ld] = ch
+                regs.scatter_reduce_(0, p_cell[ld], (ch & isl[ld]).to(torch.uint8), 'amax')
+            stt = Ld['state'][1]
+            if len(stt):
+                s_ = self.fn_seq[stt]
+                changed[stt] = set_check(stt, sq_d[s_], sq_u[s_], sq_o[s_])
+            if Ld['fun']:
+                a_ = act()
+                for k, _, pins, rows_ in Ld['fun']:
+                    u, dd = X.activity(k, rows_, a_, self.min_period, 1.0)
+                    changed[pins] = set_check(pins, dd, u, torch.full_like(pins, O_PROP))
+            src, dst = D['edges'][L]
+            if len(src):
+                enq.scatter_reduce_(0, dst, changed[src].to(torch.uint8), 'amax')
+
+        def segment(lo, hi, first, last):
+            def f():
+                if first:
+                    changed.zero_()
+                for L in range(lo, hi):
+                    step(L, self.levels[L])
+                if last:
+                    enq.zero_()
+            return f
+
         def sweep():
-            changed.zero_()
-            for L, Ld in enumerate(self.levels):
-                ld = Ld['load'][1]
-                if len(ld):
-                    dr = Ld['load_drv']
-                    ch = set_check(ld, dens[dr], duty[dr], torch.full_like(ld, O_PROP))
-                    changed[ld] = ch
-                    regs.scatter_reduce_(0, p_cell[ld], (ch & isl[ld]).to(torch.uint8), 'amax')
-                stt = Ld['state'][1]
-                if len(stt):
-                    s_ = self.fn_seq[stt]
-                    changed[stt] = set_check(stt, sq_d[s_], sq_u[s_], sq_o[s_])
-                if Ld['fun']:
-                    a_ = act()
-                    for k, _, pins, rows_ in Ld['fun']:
-                        u, dd = X.activity(k, rows_, a_, self.min_period, 1.0)
-                        changed[pins] = set_check(pins, dd, u, torch.full_like(pins, O_PROP))
-                src, dst = D['edges'][L]
-                if len(src):
-                    enq.scatter_reduce_(0, dst, changed[src].to(torch.uint8), 'amax')
-            enq.zero_()
+            segment(0, len(self.levels), True, True)()
 
         def seed():
             """seedRegOutputActivities for the registers whose inputs changed (regs), their state pins enqueued."""
@@ -698,7 +749,7 @@ class Power:
             a_ = act()
             ins = []
             for which in (1, 2):                          # data, clock: duty and density of every register
-                u_ = torch.zeros(R, dtype=F64, device=dev); d_ = torch.zeros_like(u_)
+                u_ = torch.zeros(R, dtype=ACT, device=dev); d_ = torch.zeros_like(u_)
                 for k, jj, rr in D['regs'][which]:
                     uu, dd = X.activity(k, rr, a_, self.min_period, 1.0)
                     u_[jj] = uu; d_[jj] = dd
@@ -720,32 +771,76 @@ class Power:
             return self._G
         # capture: warm up on a side stream with copies of the state, then record each function once
         saved = {k: v.clone() for k, v in B.items()}
+        dev = torch.device(dev)
+        dev = torch.device('cuda', dev.index if dev.index is not None else torch.cuda.current_device())
+        # warm-up on a side stream, level by level, measuring each level's working memory: a capture keeps the working
+        # memory of everything it records, so the levels are captured in segments (one graph each, sharing one pool,
+        # replayed in order) whose summed working memory fits; too little room: run eagerly (an out-of-memory error
+        # inside a capture leaves the CUDA graph state unusable)
+        torch.cuda.synchronize(dev)
+        need = []
         st_ = torch.cuda.Stream(device=dev); st_.wait_stream(torch.cuda.current_stream(dev))
         with torch.cuda.stream(st_):
-            sweep()
+            changed.zero_()
+            for L, Ld in enumerate(self.levels):
+                torch.cuda.synchronize(dev)
+                base = torch.cuda.memory_allocated(dev)
+                torch.cuda.reset_peak_memory_stats(dev)
+                step(L, Ld)
+                torch.cuda.synchronize(dev)
+                need.append(torch.cuda.max_memory_allocated(dev) - base + (2 << 20))
+            enq.zero_()
+            base = torch.cuda.memory_allocated(dev)
+            torch.cuda.reset_peak_memory_stats(dev)
             if R:
                 seed()
+            torch.cuda.synchronize(dev)
+            need_seed = torch.cuda.max_memory_allocated(dev) - base + (2 << 20)
         torch.cuda.current_stream(dev).wait_stream(st_)
+        torch.cuda.synchronize(dev)
+        free, _ = torch.cuda.mem_get_info(dev)
+        room = free + torch.cuda.memory_reserved(dev) - torch.cuda.memory_allocated(dev)
+        budget = room // 4
+        if max(need + [need_seed]) > budget:
+            self._G = (sweep, seed if R else (lambda: None))
+            for k, v in saved.items():
+                B[k].copy_(v)
+            return self._G
+        segs, lo, acc = [], 0, 0
+        for L, b in enumerate(need):
+            if (acc + b > budget or L - lo >= 8) and L > lo:      # (and few levels: instantiating a graph of many
+                                                                   # thousand kernels needs driver memory too)
+                segs.append((lo, L)); lo, acc = L, 0
+            acc += b
+        segs.append((lo, len(need)))
+        pool = torch.cuda.graph_pool_handle()
         graphs = []
-        try:
-            for fn in ((sweep, seed) if R else (sweep,)):
-                for k, v in saved.items():
-                    B[k].copy_(v)
-                g = torch.cuda.CUDAGraph()
-                with torch.cuda.graph(g):
-                    fn()
-                graphs.append(g)
-        except RuntimeError as e:                         # out of memory while capturing: run eagerly
-            if 'out of memory' not in str(e):
-                raise
-            graphs = None
-            torch.cuda.empty_cache()
+        fns = [segment(lo, hi, i == 0, i == len(segs) - 1) for i, (lo, hi) in enumerate(segs)]
+        # an instantiated graph holds driver memory too (about its kernel count): capture while there is room for
+        # another of the largest seen, run the remaining segments eagerly
+        cost = 0
+        for fn in ([seed] if R else []) + fns:
+            free0, _ = torch.cuda.mem_get_info(dev)
+            if free0 < 3 * cost + (2 << 30):           # (leave room for the evaluation that follows)
+                graphs.append(fn)
+                continue
+            for k, v in saved.items():
+                B[k].copy_(v)
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g, pool=pool):
+                fn()
+            graphs.append(g.replay)
+            cost = max(cost, free0 - torch.cuda.mem_get_info(dev)[0])
         for k, v in saved.items():                        # capture runs nothing: restore anyway
             B[k].copy_(v)
-        if graphs is None:
-            self._G = (sweep, seed if R else (lambda: None))
-        else:
-            self._G = (graphs[0].replay, graphs[1].replay if R else (lambda: None))
+        seed_fn = graphs.pop(0) if R else (lambda: None)
+        sw_fns = graphs
+
+        def sweep_graph():
+            for f in sw_fns:
+                f()
+        self.n_segments = len(fns)
+        self._G = (sweep_graph, seed_fn)
         return self._G
 
     def run(self, result):
@@ -784,13 +879,17 @@ class Power:
             ix1, ix2, val, nn = self.ip_tab
             energy = torch.zeros(n, dtype=F64, device=dev)
             relc = rel.clamp(min=0)
-            for trf in (0, 1):
-                frf = torch.where(r['inv'], torch.full_like(g, 1 - trf), torch.full_like(g, trf))
-                s_rel = slew[relc, frf]
-                s_in = torch.where(out, torch.where(rel >= 0, s_rel, torch.zeros_like(s_rel)), slew[pin, trf])
-                cl = torch.where(out | self.is_drv_t[pin], load[pin], torch.zeros_like(s_in))
-                e = nldm(ix1[g, trf], ix2[g, trf], val[g, trf], nn[g, trf].long(), s_in, cl).double()
-                energy = energy + torch.where(nn[g, trf, 0] > 0, e, torch.zeros_like(e))
+            CH = 1 << 20                                    # rows per chunk: the gathered tables stay small
+            for a0 in range(0, n, CH):
+                sl_ = slice(a0, min(n, a0 + CH))
+                gg, oo, rr, pp = g[sl_], out[sl_], rel[sl_], pin[sl_]
+                for trf in (0, 1):
+                    frf = torch.where(r['inv'][sl_], torch.full_like(gg, 1 - trf), torch.full_like(gg, trf))
+                    s_rel = slew[relc[sl_], frf]
+                    s_in = torch.where(oo, torch.where(rr >= 0, s_rel, torch.zeros_like(s_rel)), slew[pp, trf])
+                    cl = torch.where(oo | self.is_drv_t[pp], load[pp], torch.zeros_like(s_in))
+                    e = nldm(ix1[gg, trf], ix2[gg, trf], val[gg, trf], nn[gg, trf].long(), s_in, cl).double()
+                    energy[sl_] += torch.where(nn[gg, trf, 0] > 0, e, torch.zeros_like(e))
             energy = energy / 2
             fdr = torch.where(rel >= 0, fd[relc], torch.zeros_like(energy))
             contrib = torch.where(out & (rel >= 0), fdr * gd, torch.zeros_like(energy))
@@ -830,7 +929,7 @@ class Power:
         """Duty of every expression handle: the internal power rows', then the leakage rows'."""
         out = torch.zeros(self.n_h, dtype=F64, device=self.dev)
         for k, ii, rr in self._hk:
-            out[ii] = self.X.duty(k, rr, a_)
+            out[ii] = self.X.duty(k, rr, a_).to(out.dtype)
         return out
 
     def _leakage(self, duty):
@@ -868,8 +967,8 @@ class Power:
         if hasattr(self, '_ct'):
             return self._ct
         cst = self.const_pin
-        fu = torch.where(cst >= 0, cst.double(), torch.full_like(cst, 0, dtype=F64) + 0.5)
-        sq = torch.full((self.S,), 0.5, dtype=F64, device=self.dev)
+        fu = torch.where(cst >= 0, cst.to(ACT), torch.full_like(cst, 0, dtype=ACT) + 0.5)
+        sq = torch.full((self.S,), 0.5, dtype=ACT, device=self.dev)
         z = torch.zeros_like(fu)
         a_ = (fu, z, sq, torch.zeros_like(sq), z, self.is_clock)
         v = self._eval_handles(a_)[self.n_ip:]

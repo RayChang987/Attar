@@ -90,5 +90,26 @@ class DrvPowerTest(unittest.TestCase):
         self.assertEqual(int(T.iclk.sum()), int((T.clk_of >= 0).sum()))
 
 
+class CtsTest(unittest.TestCase):
+    def test_cts_gcd(self):
+        import attar.naive as N
+        from attar.io.distill import N_CLOCK
+        d = need(SMALL)
+        d.restore('reference')
+        N.legalize(d, verbose=False)
+        n0 = len(d.names['cells'])
+        st = N.cts(d, verbose=False)
+        self.assertGreater(st['buffers'], 0)
+        self.assertEqual(len(d.names['cells']), n0 + st['buffers'])
+        r = d.timing()
+        T = r.timer
+        real = [i for i, c in enumerate(T.clocks) if c['sources']]      # virtual clocks have no tree: ideal
+        self.assertTrue(bool(T.prop_clk[real].all()))
+        ca = r.clock_arrivals()
+        self.assertTrue(all(v[0] > 0 and v[0] < float('inf') for v in ca.values()))     # timed through the tree
+        new = [k for k, n in enumerate(d.names['nets']) if n.startswith('attar_cts_net')]
+        self.assertTrue(all(d.raw['n_flags'][k] & N_CLOCK for k in new))
+
+
 if __name__ == '__main__':
     unittest.main()

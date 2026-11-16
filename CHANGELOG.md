@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `d.drv()`: max slew / capacitance / fanout checks, as OpenSTA's `report_check_types`; SDC `set_max_transition`,
+  `set_max_capacitance`, `set_max_fanout` are read now.
+- `d.power()`: OpenROAD's `report_power` on the GPU (activity propagation, internal, switching and leakage power).
+- Propagated clocks: `set_propagated_clock` in the SDC, or `d.propagate_clocks()`; clock RC on non-leaf clock nets.
+- `attar.naive.cts`: buffered, balanced clock trees.
+- Timer: slews from every arc of OpenSTA's delay calculation (constant-disabled and unclocked arcs too), ideal
+  clock networks timed for their slews; agreement with OpenSTA improves (cva6 TNS error 0.96% -> 0.03%).
+- Library bundles carry design rule limits and power data (rebuild with tools/distill_library.py); Liberty reader
+  fixes (an attribute without ';' before a group, line continuations inside strings).
+
 ## 1.0.1
 
 - `examples/timing_driven_colab.ipynb`: the README demo as a Colab notebook (Open in Colab from the README).
