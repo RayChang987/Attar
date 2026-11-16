@@ -130,7 +130,7 @@ class Crpr:
             data = arr & ~cn[f] & ~cn[t_]
             lv_raw.append((f * 2 + irf, t_ * 2 + orf, launch, data, ea, en))
         feeds = torch.zeros(self.R, device=dev, dtype=torch.bool)       # rows that are an arc's input
-        for fi, ti, launch, data, ea, en in lv_raw:
+        for fi, _ti, _launch, data, _ea, _en in lv_raw:
             feeds[fi[data]] = True
         two = lambda x: torch.cat([x, x + RG])  # noqa: E731
         self.levs = [None] if T.lc is not None else []                 # ideal clocks' launches: no propagated tag
@@ -188,7 +188,7 @@ class Crpr:
         return self
 
     def _propagate(self, A, B):
-        T, R, G, RG = self.T, self.R, self.G, self.RG
+        T, G, RG = self.T, self.G, self.RG
         dev = self.dev
         S = _Store(2 * RG, dev)
         kl, ke = self.seeds

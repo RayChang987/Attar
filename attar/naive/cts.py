@@ -415,7 +415,7 @@ def _balance(d, res, tree, level, table, order, target_slew):
     arr = T.amax[:, 0].amax(-1)                                         # (P,) rise, latest over tags
     pnet = d.p_net.cpu().numpy()
     rng = {}
-    for c, lv, kids, _, _ in sorted(tree, key=lambda x: x[1]):         # leaves first
+    for c, _lv, kids, _, _ in sorted(tree, key=lambda x: x[1]):         # leaves first
         if kids:
             lo = min(rng[k][0] for k in kids if k in rng) if any(k in rng for k in kids) else np.nan
             hi = max(rng[k][1] for k in kids if k in rng) if any(k in rng for k in kids) else np.nan
@@ -526,7 +526,7 @@ def _pad(d, domains, table, pad, target_slew, stats, passes=3):
     pads (up to `passes` times). Returns the number of pad buffers."""
     if len(domains) < 2:
         return 0
-    a, names = d.raw, d.names
+    names = d.names
     cin = table[pad][2]
     s = target_slew
     for _ in range(8):
@@ -546,7 +546,7 @@ def _pad(d, domains, table, pad, target_slew, stats, passes=3):
         po = pins[d.raw['p_dir'][pins] == 1]
         out = dict(zip(d.raw['p_cell'][po].tolist(), po.tolist()))
         late = {}
-        for root, lv, ck, k in domains:
+        for root, lv, _ck, _k in domains:
             v = []
             for c in lv:
                 n = int(pnet[out[c]])
