@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.2
 
 - `d.drv()`: max slew / capacitance / fanout checks, as OpenSTA's `report_check_types`; SDC `set_max_transition`,
   `set_max_capacitance`, `set_max_fanout` are read now.
