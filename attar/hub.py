@@ -48,14 +48,17 @@ def local_name(hub_name):
     return hub_name[:-len(ZST)] if hub_name.endswith(ZST) else hub_name
 
 
-def fetch(*names, root=None, repo=REPO_ID, revision=None):
+def fetch(*names, root=None, repo=REPO_ID, revision=None, force=False):
     """Download designs ('after_fp/orfs_asap7/aes'), suites ('after_fp/ispd2005') or modes ('before_fp') into the zoo (`root`, default paths.zoo_dir()),
     with the shared cell libraries they reference (libraries/<name>); everything when no name is given. Files already
-    there are not downloaded again. Returns the zoo folder."""
+    there are not downloaded again, unless force=True (to update designs and libraries downloaded by an older attar:
+    attar.fetch('after_fp/orfs_asap7', force=True) also refreshes the libraries they reference). Returns the zoo
+    folder."""
     dest = zoo_dir(root)
     files = _hub().list_repo_files(repo, repo_type='dataset', revision=revision)
     prefixes = [n.strip('/') + '/' for n in names]
-    _download([f for f in files if not prefixes or any(f.startswith(p) for p in prefixes)], dest, repo, revision)
+    _download([f for f in files if not prefixes or any(f.startswith(p) for p in prefixes)], dest, repo, revision,
+              force=force)
     if prefixes:                   # the shared cell libraries the fetched designs reference (zoo/libraries/<name>)
         import glob
         need = set()
@@ -66,15 +69,15 @@ def fetch(*names, root=None, repo=REPO_ID, revision=None):
                 if b:
                     need.add('libraries/%s/' % b)
         if need:
-            _download([f for f in files if any(f.startswith(p) for p in need)], dest, repo, revision)
+            _download([f for f in files if any(f.startswith(p) for p in need)], dest, repo, revision, force=force)
     return dest
 
 
-def _download(files, dest, repo, revision, workers=8):
-    """Download the hub files whose local file is missing into dest, decompressing .zst ones. Each file lands under a
-    temporary name and is renamed into place, and a design's manifest.json goes last: a design folder with a
-    manifest is complete."""
-    todo = sorted((f for f in files if not os.path.exists(os.path.join(dest, local_name(f)))),
+def _download(files, dest, repo, revision, workers=8, force=False):
+    """Download the hub files whose local file is missing (every one with force) into dest, decompressing .zst ones.
+    Each file lands under a temporary name and is renamed into place, and a design's manifest.json goes last: a
+    design folder with a manifest is complete."""
+    todo = sorted((f for f in files if force or not os.path.exists(os.path.join(dest, local_name(f)))),
                   key=lambda f: (os.path.basename(f) == 'manifest.json', f))
     if not todo:
         return

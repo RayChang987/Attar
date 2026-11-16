@@ -2,6 +2,12 @@
 
 ## 1.0.2
 
+**Upgrading.** The zoo's cell libraries now carry design rule limits and power data, and the ORFS designs their SDC
+limits. Designs downloaded by attar 1.0.0 / 1.0.1 stay as they were (`d.power()` asks for an update; `d.drv()` finds
+no slew limits): `attar.fetch('after_fp/orfs_asap7', force=True)` (any suite, mode or design) downloads them again
+with their libraries. Attar 1.0.0 / 1.0.1 read the new zoo as before.
+
+- `attar.fetch(..., force=True)`: download again what is already in the local zoo.
 - `d.drv()`: max slew / capacitance / fanout checks, as OpenSTA's `report_check_types`; SDC `set_max_transition`,
   `set_max_capacitance`, `set_max_fanout` are read now.
 - `d.power()`: OpenROAD's `report_power` on the GPU (activity propagation, internal, switching and leakage power).

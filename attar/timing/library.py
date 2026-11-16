@@ -435,8 +435,9 @@ def design_power(chain, masters, mpins, m_ptr, used):
     M, n_mp = len(masters), int(m_ptr[-1])
     for L in chain:
         if 'ip_cell' not in L.a:
-            raise ValueError('library %r has no power data (distilled before attar 1.1): rebuild it'
-                             % L.meta.get('name'))
+            raise ValueError('library %r has no power data: it was downloaded or distilled before attar 1.0.2. A zoo '
+                             'design: download it again, attar.fetch(<its suite>, force=True) (e.g. '
+                             "'after_fp/orfs_asap7'); your own: distill it again" % L.meta.get('name'))
     m_cleak = np.full(M, np.nan, np.float32); m_volt = np.zeros(M, np.float32); m_kind = np.zeros(M, np.uint8)
     m_lib = np.zeros(M, np.uint8); mp_volt = np.full(n_mp, np.nan, np.float32)
     lk = {'lk_master': [], 'lk_val': [], 'lk_pg': [], 'lk_primary': []}
