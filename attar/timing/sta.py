@@ -755,9 +755,12 @@ class Timer:
         m_ptr = d.raw['m_pin_ptr'].astype(np.int64)
         fdefs = timing_mod.arrays(d)[1]
         seqs = {}
-        for L in d.library():
-            for cn, v in (L.meta.get('sequentials') or {}).items():
-                seqs.setdefault(cn, v)
+        if 'library' in d.manifest:                   # the timer's own library chain (no 'library' fact needed)
+            for L in timing_mod.chain(d.path, d.manifest):
+                for cn, v in (L.meta.get('sequentials') or {}).items():
+                    seqs.setdefault(cn, v)
+        if not seqs:                                  # timing.safetensors designs: no sequential data, no latch arcs
+            return np.zeros(len(lib_id), bool)
         tok = lambda e: set(re.findall(r'[A-Za-z_][A-Za-z0-9_\[\]]*', e or ''))  # noqa: E731
         lib_dq = np.zeros(len(t['a_master']), bool)
         for a in np.nonzero(t['a_type'] == T_COMB)[0]:
