@@ -9,7 +9,8 @@ Per design (an ORFS run carried through CTS by tools/orfs_run_cts.sh, orfs_runs/
            and dumps every endpoint's setup / hold slack, every register clock pin's clock arrival (max / min, rise /
            fall) and slew, WNS / TNS with CRPR on (OpenSTA's default) and off, report_clock_skew. Cached in
            orfs_runs/cts/_truth/<platform>_<design>/.
-  attar:   d.restore('reference'); d.timing(); clock arrivals at the register clock pins.
+  attar:   d.restore('reference'); d.timing() (CRPR on, against OpenSTA's default) and d.timing(crpr=False) (against
+           OpenSTA with sta::set_crpr_enabled 0); clock arrivals at the register clock pins.
 usage: validate_cts.py <design> ... [--platform asap7] [--json out] [--truth-only]"""
 import argparse
 import json
@@ -156,14 +157,16 @@ def main():
         d = attar.load(ir, dev)
         d.restore('reference')
         sync = torch.cuda.synchronize if dev == 'cuda' else (lambda: None)
+        res0 = d.timing(crpr=False); sync()
+        t = time.time(); res0 = d.timing(crpr=False); sync(); sec0 = time.time() - t
+        r0, *_ = VS.compare(res0.endpoint_slacks(), meta.pop('ep_nocrpr'))
         res = d.timing(); sync()
         t = time.time(); res = d.timing(); sync(); sec = time.time() - t
         ours = res.endpoint_slacks()
         r, *_ = VS.compare(ours, ep)
-        r0, *_ = VS.compare(ours, meta.pop('ep_nocrpr'))
-        r['nocrpr'] = {k: r0[k] for k in ('setup_mae', 'hold_mae', 'worst_ours', 'worst_ref', 'tns_ours', 'tns_ref',
-                                          'wns_err_pct', 'tns_err_pct', 'matched')}
-        r.update({'attar_s': sec, 'ref': meta})
+        r['nocrpr'] = {k: r0[k] for k in ('setup_mae', 'setup_maxe', 'hold_mae', 'hold_maxe', 'worst_ours', 'worst_ref',
+                                          'tns_ours', 'tns_ref', 'wns_err_pct', 'tns_err_pct', 'matched')}
+        r.update({'attar_s': sec, 'attar_nocrpr_s': sec0, 'ref': meta, 'crpr': res.crpr})
         ca = res.clock_arrivals() if hasattr(res, 'clock_arrivals') else {}
         common = [k for k in ck if k in ca]
         if common:
@@ -177,11 +180,11 @@ def main():
         print('   CRPR off: WNS %.2f vs %.2f TNS %.1f vs %.1f | setup MAE %.4f ps, hold MAE %.4f ps (%d endpoints)' % (
             min(n0['worst_ours'], 0), min(n0['worst_ref'], 0), n0['tns_ours'], n0['tns_ref'], n0['setup_mae'],
             n0['hold_mae'] or 0, n0['matched']))
-        print('   attar: WNS %.2f vs %.2f (%.2f%%) TNS %.1f vs %.1f | setup MAE %.3f ps, hold MAE %s | clock pins %s '
-              'arrival MAE %s max %s | %.1f ms' % (
+        print('   CRPR on:  WNS %.2f vs %.2f (%.2f%%) TNS %.1f vs %.1f | setup MAE %.4f ps max %.4f, hold MAE %s max %s | '
+              'clock pins %s arrival MAE %s max %s | %.1f ms (%.1f ms without CRPR) %s' % (
                   min(r['worst_ours'], 0), min(r['worst_ref'], 0), r['wns_err_pct'] or 0, r['tns_ours'], r['tns_ref'],
-                  r['setup_mae'], r['hold_mae'], r.get('ck_matched'), r.get('ck_arrival_mae'),
-                  r.get('ck_arrival_maxe'), 1000 * sec), flush=True)
+                  r['setup_mae'], r.get('setup_maxe', float('nan')), r['hold_mae'], r.get('hold_maxe'), r.get('ck_matched'),
+                  r.get('ck_arrival_mae'), r.get('ck_arrival_maxe'), 1000 * sec, 1000 * sec0, res.crpr), flush=True)
     if a.json:
         json.dump(rows, open(a.json, 'w'), indent=1, default=str)
 

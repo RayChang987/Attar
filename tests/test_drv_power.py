@@ -109,6 +109,20 @@ class CtsTest(unittest.TestCase):
         self.assertTrue(all(v[0] > 0 and v[0] < float('inf') for v in ca.values()))     # timed through the tree
         new = [k for k, n in enumerate(d.names['nets']) if n.startswith('attar_cts_net')]
         self.assertTrue(all(d.raw['n_flags'][k] & N_CLOCK for k in new))
+        # CRPR (attar.timing.crpr): every check covered by the entries, a credit between 0 and the largest late /
+        # early difference at a clock pin, deterministic
+        self.assertIsNotNone(r.crpr)
+        self.assertEqual(r.crpr['uncovered'], 0)
+        r0 = d.timing(crpr=False)
+        self.assertIsNone(r0.crpr)
+        cap = float(T._crpr.D.view(T.P, 2, -1)[torch.as_tensor(T.pclk, device=T.dev)].max())
+        for a, b in ((r.setup, r0.setup), (r.hold, r0.hold)):
+            ok = torch.isfinite(b)
+            self.assertTrue(bool(torch.equal(torch.isfinite(a), ok)))
+            self.assertGreaterEqual(float((a[ok] - b[ok]).min()), -1e-4)
+            self.assertLessEqual(float((a[ok] - b[ok]).max()), cap + 1e-4)
+        r2 = d.timing()
+        self.assertTrue(torch.equal(r.setup, r2.setup) and torch.equal(r.hold, r2.hold))
 
 
 if __name__ == '__main__':

@@ -520,8 +520,8 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
                       amax, amin, smax, smin, w_o, N, M,
                       NT, RIT: tl.constexpr, BLOCK: tl.constexpr, MODE: tl.constexpr):
     """One level's loads, 2M lanes (max analysis, then min): DMP wire delay and load slew from the arc's row of
-    stage_gate_kernel, threshold adjustment, the load pin's arrivals and slews by float atomics; the max lanes' wire
-    delays in w_o (M,), for the required times (attar.timing.sta.Timer.required)."""
+    stage_gate_kernel, threshold adjustment, the load pin's arrivals and slews by float atomics; every lane's wire
+    delay in w_o (2M,: max, then min), for required times (attar.timing.sta.Timer.required) and CRPR (attar.timing.crpr)."""
     l = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = l < 2 * M
     mn = l >= M
@@ -554,7 +554,7 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
     w, sl = _load_dev(ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo, ub, ds, vth, vl, vh, der, elm, orf == 0,
                       lvth, lvl, lvh, lder, RIT, MODE)
     delay = delay.to(tl.float32)                           # (float64 rows in MODE 2)
-    tl.store(w_o + e, w.to(tl.float32), mask=mask & ~mn)
+    tl.store(w_o + l, w.to(tl.float32), mask=mask)
     si = sk * 2 + orf
     INF = float('inf')
     for g in range(NT):
@@ -602,14 +602,16 @@ def load(state, elmore, rise, lthr):
 def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin, precision='double'):
     """One level of the timer on the GPU: stage_gate_kernel then stage_load_kernel. tables: (ix1, ix2, val, n32, thr);
     lev: the level's static arrays (lib, fi, t, orf, net, t0, tag, ea, en, s0, arr); precision: see MODES. Returns the
-    max analysis's gate delay of every arc (N,) and wire delay of every load (M,), float32, for required times."""
+    gate delay of every arc (N,) and wire delay of every load (M,), float32, of the max analysis then of the min:
+    (dmax, wmax, dmin, wmin), for required times and CRPR."""
     mode = MODES[precision]
     ix1, ix2, val, n32, thr = tables
     lib, fi, t, orf, net, t0, tag, ea, en, s0, arr = lev
     N, M = len(lib), len(ea)
-    w = torch.empty(M, device=amax.device)
+    w = torch.empty(2 * M, device=amax.device)
     if not N:
-        return torch.empty(0, device=amax.device), w
+        e = torch.empty(0, device=amax.device)
+        return e, w[:M], e, w[M:]
     NT = amax.shape[1]
     st = torch.empty(2 * N, 20, device=amax.device, dtype=torch.float64 if mode == 2 else torch.float32)
     stage_gate_kernel[(triton.cdiv(2 * N, BLOCK),)](ix1, ix2, val, n32, thr, lib, fi, t, orf, net, t0, tag, s0, arr, pi,
@@ -620,4 +622,4 @@ def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin, precision='do
         stage_load_kernel[(triton.cdiv(2 * M, BLOCK),)](st, ea, en, fi, orf, t0, tag, nto, elm, sthr,
                                                         amax, amin, smax, smin, w, N, M, NT=NT, RIT=ROOT_N,
                                                         BLOCK=BLOCK, MODE=mode)
-    return st[:N, 17].float(), w
+    return st[:N, 17].float(), w[:M], st[N:, 17].float(), w[M:]

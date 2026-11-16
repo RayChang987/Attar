@@ -58,19 +58,27 @@ def main():
     # -- propagated clocks
     p = os.path.join(VAL, 'cts_asap7.json')
     if os.path.exists(p):
-        L += ['', '## Propagated clocks', '',
+        L += ['', '## Propagated clocks and CRPR', '',
               'ORFS\'s own clock trees (TritonCTS, the 4_cts stage, `tools/orfs_run_cts.sh`) timed with '
-              '`set_propagated_clock` (`tools/validate_cts.py`). Attar does not remove clock reconvergence '
-              'pessimism (CRPR) yet: the comparison is against OpenSTA with `sta::set_crpr_enabled 0`; OpenSTA\'s '
-              'default (CRPR on) is listed for scale.', '',
-              '| design | clock pins | arrival err max (ps) | endpoints | setup MAE (ps) | hold MAE (ps) | WNS Attar / '
-              'OpenSTA (CRPR off) | WNS OpenSTA CRPR on |', '| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |']
+              '`set_propagated_clock` (`tools/validate_cts.py`): `d.timing()` against OpenSTA\'s default (clock '
+              'reconvergence pessimism removal on, `attar.timing.crpr`) and `d.timing(crpr=False)` against '
+              '`sta::set_crpr_enabled 0`. Errors are per endpoint (ps); WNS / TNS Attar / OpenSTA; time is one '
+              're-time with CRPR (without).', '',
+              '| design | clock pins | arrival err max | endpoints | CRPR on: setup MAE / max | hold MAE / max | WNS | TNS '
+              '| CRPR off: setup MAE / max | WNS | Attar ms |',
+              '| --- | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- | ---: |']
         for dn, r in json.load(open(p)).items():
             n0 = r['nocrpr']
-            L.append('| %s | %s | %s | %d | %s | %s | %s / %s | %s |' % (
-                dn, r.get('ck_matched'), f(r.get('ck_arrival_maxe'), '%.4f'), n0['matched'], f(n0['setup_mae'], '%.4f'),
-                f(n0['hold_mae'], '%.4f'), f(min(n0['worst_ours'], 0)), f(min(n0['worst_ref'], 0)),
-                f(r['ref']['wns'])))
+            L.append('| %s | %s | %s | %d | %s / %s | %s / %s | %s / %s | %s / %s | %s / %s | %s / %s | %.0f (%.0f) |' % (
+                dn, r.get('ck_matched'), f(r.get('ck_arrival_maxe'), '%.4f'), r['matched'], f(r['setup_mae'], '%.4f'),
+                f(r.get('setup_maxe'), '%.3f'), f(r['hold_mae'], '%.4f'), f(r.get('hold_maxe'), '%.3f'),
+                f(r['worst_ours']), f(r['worst_ref']), f(r['tns_ours'], '%.1f'), f(r['tns_ref'], '%.1f'),
+                f(n0['setup_mae'], '%.4f'), f(n0.get('setup_maxe'), '%.3f'), f(min(n0['worst_ours'], 0)),
+                f(min(n0['worst_ref'], 0)), 1e3 * r['attar_s'], 1e3 * r.get('attar_nocrpr_s', float('nan'))))
+        L += ['', 'WNS here is the worst endpoint slack (positive when every endpoint meets timing). CRPR keeps, per '
+              'data pin, the arrivals of every launch clock pin that can still be worst (OpenSTA\'s pruning) and '
+              'credits each register check at the launch and capture clock paths\' last common pin; nothing is '
+              'truncated, so the errors with CRPR are those of the timer without it.']
     # -- CTS engine
     eng = {}
     for p in sorted(glob.glob(os.path.join(VAL, 'cts_engine*.json'))):
@@ -78,17 +86,18 @@ def main():
     if eng:
         L += ['', '## Clock tree synthesis (`attar.naive.cts`)', '',
               'From ORFS\'s 3_5 placement (`tools/validate_cts_engine.py`). Agreement: OpenROAD reads the DEF Attar '
-              'exports and times it (CRPR off). Quality: TritonCTS on the same placement, through ORFS\'s CTS steps '
+              'exports and times it (CRPR off and on). Quality: TritonCTS on the same placement, through ORFS\'s CTS steps '
               'without repair_timing; both measured by OpenSTA with CRPR on. Latency and spread: the latest register '
               'clock pin\'s arrival and the spread of all of them (ps); power in mW.', '',
-              '| design | clock arrival err max | endpoint setup MAE | Attar bufs / latency / spread / WNS / TNS / '
-              'clock power | TritonCTS bufs / latency / spread / WNS / TNS / clock power |',
+              '| design | clock arrival err max | endpoint setup MAE (CRPR off / on) | Attar bufs / latency / spread / WNS / '
+              'TNS / clock power | TritonCTS bufs / latency / spread / WNS / TNS / clock power |',
               '| --- | ---: | ---: | --- | --- |']
         for dn, r in eng.items():
             o, g, b = r['attar'], r['agreement'], r['triton']
             op = g['opensta']
-            L.append('| %s | %s | %s | %d / %.1f / %.1f / %.2f / %.1f / %.3f | %d / %.1f / %.1f / %.2f / %.1f / %.3f |'
-                     % (dn, f(g['ck_max'], '%.4f'), f(g['setup_mae'], '%.4f'), o['buffers'], o['latency'], o['spread'],
+            L.append('| %s | %s | %s / %s | %d / %.1f / %.1f / %.2f / %.1f / %.3f | %d / %.1f / %.1f / %.2f / %.1f / %.3f |'
+                     % (dn, f(g['ck_max'], '%.4f'), f(g['setup_mae'], '%.4f'), f((g.get('crpr') or {}).get('setup_mae'), '%.4f'),
+                        o['buffers'], o['latency'], o['spread'],
                         op['crpr_on']['wns'], op['crpr_on']['tns'], 1e3 * sum(o['power_clock']), b['buffers'][0],
                         b['latency'], b['spread'], b['crpr_on']['wns'], b['crpr_on']['tns'],
                         1e3 * b['power_clock'][3]))

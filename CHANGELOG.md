@@ -7,6 +7,9 @@
 - `d.power()`: OpenROAD's `report_power` on the GPU (activity propagation, internal, switching and leakage power).
 - Propagated clocks: `set_propagated_clock` in the SDC, or `d.propagate_clocks()`; clock RC on non-leaf clock nets.
 - `attar.naive.cts`: buffered, balanced clock trees.
+- CRPR: with propagated clocks, register checks remove clock reconvergence pessimism as OpenSTA does by default
+  (`attar.timing.crpr`; exact, every launch clock pin that can still be worst is kept); `d.timing(crpr=False)` for
+  `sta::set_crpr_enabled 0`.
 - Timer: slews from every arc of OpenSTA's delay calculation (constant-disabled and unclocked arcs too), ideal
   clock networks timed for their slews; agreement with OpenSTA improves (cva6 TNS error 0.96% -> 0.03%).
 - Library bundles carry design rule limits and power data (rebuild with tools/distill_library.py); Liberty reader

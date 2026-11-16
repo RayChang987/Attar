@@ -217,7 +217,7 @@ def cts(d, leaf_size=20, fanout=8, target_slew=None, buffers=None, balance_round
     hist, best = [], None
     leaf_t = np.asarray(leaf_cells, np.int64)
     for rnd in range(balance_rounds + 1):
-        res = d.timing()
+        res = d.timing(crpr=False)                          # clock latencies only
         lat, skew, per_leaf = _latencies(d, res, leaf_cells)
         hist.append({'round': rnd, 'latency_max': lat[1], 'latency_min': lat[0], 'skew': skew})
         if best is None or skew < best[0]:

@@ -1142,13 +1142,15 @@ class Timer:
         self.tri_nto = i32(self.n_to)
 
     # -- propagation ----------------------------------------------------------------------------------------------------
-    def run(self, pos=None):
+    def run(self, pos=None, crpr=True):
         """Time the design at pos (default: the design's placement). Returns a TimingResult. On CUDA the whole
-        computation is recorded once as a CUDA graph and replayed (positions copied into a static buffer)."""
+        computation is recorded once as a CUDA graph and replayed (positions copied into a static buffer).
+        crpr: with propagated clocks, remove clock reconvergence pessimism from register checks (OpenSTA's default,
+        attar.timing.crpr; after the replay, eager); False: as OpenSTA's sta::set_crpr_enabled 0."""
         pos = self.d.pos if pos is None else pos
         self._sync_pins()
         if not self.use_graph:
-            return TimingResult(self, *self._run_core(pos))
+            return self._result(*self._run_core(pos), crpr=crpr)
         with torch.cuda.device(self.dev):
             if self._graph is None:
                 self._pos_buf = pos.detach().clone()
@@ -1168,7 +1170,20 @@ class Timer:
             self._pos_buf.copy_(pos)
             self._big_update(pos)                       # large nets on the host, into the graph's static buffers
             self._graph.replay()
-            return TimingResult(self, self._g_out[0].clone(), self._g_out[1].clone())
+            return self._result(self._g_out[0].clone(), self._g_out[1].clone(), crpr=crpr)
+
+    def _result(self, setup, hold, crpr=True):
+        cr = None
+        if crpr and bool(self.prop_clk.any()) and len(self.k_lib):
+            if getattr(self, '_crpr', None) is None:
+                from .crpr import Crpr
+                self._crpr = Crpr(self)
+            cr = self._crpr
+            cr.uncovered = 0
+            setup, hold = self._checks(crpr=cr.run())
+        res = TimingResult(self, setup, hold)
+        res.crpr = None if cr is None else {'entries': cr.entries, 'uncovered': cr.uncovered, 'clock_muxes': cr.n_multi}
+        return res
 
     def _run_core(self, pos):
         dev, P, NT = self.dev, self.P, self.NT
@@ -1195,16 +1210,20 @@ class Timer:
             smin.scatter_reduce_(0, self.in_sl_p * 2 + rf, self.in_sl_v, 'amin')
         from . import dmp
         # nets driven by input ports: no driver model, the wire alone (dspfWireDelaySlew + thresholdAdjust)
+        self._pa_w = []                                       # their wire delays [(rf, max, min)] (attar.timing.crpr)
         if len(self.pa):
             f, t_, w4 = self.n_fr[self.pa], self.n_to[self.pa], elm[self.pa]
             for rf in (0, 1):
                 lt = self.sink_thr[t_, rf]
+                wds = []
                 for A, S, red, w in ((amax, smax, 'amax', w4[:, rf]), (amin, smin, 'amin', w4[:, 2 + rf])):
                     wd, ls = dmp.input_port_load(S[f * 2 + rf], w, lt[:, 0], lt[:, 1], lt[:, 2], lt[:, 3])
                     A.index_reduce_(0, t_ * 2 + rf, A[f * 2 + rf] + wd[:, None], red)
                     S.scatter_reduce_(0, t_ * 2 + rf, ls, red)
+                    wds.append(wd)
+                self._pa_w.append((rf, *wds))
 
-        rec = []                                      # per stage, the max gate and wire delays (required())
+        rec = []                       # per stage, the gate and wire delays, max and min (required(), attar.timing.crpr)
 
         def stage(lib, fi, t_, orf, t0, tag, ea, en, sx, sn, arr=None):
             """Arcs into drivers t_ (output transition orf): gate delays and driver slews (DMP), arrivals at the
@@ -1251,7 +1270,8 @@ class Timer:
                 amin.index_reduce_(0, si, an[ea] + wn[:, None], 'amin')
                 smax.scatter_reduce_(0, si, lsx, 'amax')
                 smin.scatter_reduce_(0, si, lsn, 'amin')
-            rec.append((dmax.float(), wx.float() if len(ea) else torch.zeros(0, device=dev)))
+            z0 = torch.zeros(0, device=dev)
+            rec.append((dmax.float(), wx.float() if len(ea) else z0, dmin.float(), wn.float() if len(ea) else z0))
         if self.triton is not None and self.fused:               # one fused kernel per level
             pic, elc = pi.contiguous(), elm.contiguous()
             self._rec = [self.triton.stage(self.tri_tables, lv, self.tri_sthr, pic, elc, self.tri_nto, amax, amin,
@@ -1277,15 +1297,20 @@ class Timer:
         return self._checks()
 
     # -- checks -------------------------------------------------------------------------------------------------------------
-    def _checks(self):
+    def _checks(self, crpr=None):
+        """Setup and hold slack per pin (P,), inf where unchecked. crpr: an attar.timing.crpr.Crpr of this run (register
+        checks of propagated clocks less the clock reconvergence pessimism, per launch clock pin)."""
         dev, P = self.dev, self.P
         amax, amin, smin = self.amax, self.amin, self.smin
         lt = self.launch_t
         fin = lambda x: torch.where(torch.isnan(x) | ~torch.isfinite(x), torch.full_like(x, INF), x)
         sp = torch.full((P,), INF, device=dev); hp = torch.full((P,), INF, device=dev)
         A = amax.reshape(P * 2, -1)
-        for rows, req in self._setup_required():                 # setup: required time less arrival, per launch tag
-            sp.scatter_reduce_(0, rows // 2, fin(req - A[rows]).amin(1), 'amin')
+        for rows, req, rf in self._setup_required():             # setup: required time less arrival, per launch tag
+            v = fin(req - A[rows])
+            if crpr is not None and rf is not None:
+                v = crpr.setup(rf, req, v)
+            sp.scatter_reduce_(0, rows // 2, v.amin(1), 'amin')
         if len(self.k_lib):
             lat = self._cap_lat(early=False)                    # hold: the capture clock's late arrival
             cslew = self._cap_slew(self.smax)                   # (OCV: the check reads the opposite analysis's)
@@ -1294,7 +1319,10 @@ class Timer:
                 cmin = self._lookup(self.k_lib, rf, smin[self.k_to, rf], cslew)
                 req_h = (lt[None] + self.rel_hold[:, self.k_ctag].T + lat + cmin[:, None] + self.unc_h[self.k_ck][:, None]
                          - self.k_ctp_max[:, None])
-                h = fin(amin[self.k_to, rf] - req_h).amin(1)
+                h = fin(amin[self.k_to, rf] - req_h)
+                if crpr is not None:
+                    h = crpr.hold(rf, req_h, h)
+                h = h.amin(1)
                 hp.scatter_reduce_(0, self.k_to, torch.where(ok & ~self.k_setup, h, torch.full_like(h, INF)), 'amin')
         p, rf, ct, off = self.op_ho
         if len(p):
@@ -1322,7 +1350,7 @@ class Timer:
 
     def _setup_required(self):
         """Setup required times at the endpoints of the last run, per launch tag: [(rows pin * 2 + transition,
-        required (n, NT))], inf where a check does not apply. Register checks (setup time from the data and clock
+        required (n, NT), the transition of register checks (rows k_to * 2 + rf) or None)], inf where a check does not apply. Register checks (setup time from the data and clock
         slews), output delays, and path delay exceptions (their own tag). An endpoint's setup slack is its required
         time less its arrival (_checks); every other pin's goes back from here (required)."""
         dev, smax, lt, NT = self.dev, self.smax, self.launch_t, self.NT
@@ -1335,14 +1363,15 @@ class Timer:
                 cmax = self._lookup(self.k_lib, rf, smax[self.k_to, rf], cslew)
                 req = (lt[None] + self.rel_setup[:, self.k_ctag].T + lat - cmax[:, None] - self.unc_s[self.k_ck][:, None]
                        - self.k_ctp_min[:, None])
-                out.append((self.k_to * 2 + rf, torch.where((ok & self.k_setup)[:, None], req, torch.full_like(req, INF))))
+                out.append((self.k_to * 2 + rf, torch.where((ok & self.k_setup)[:, None], req, torch.full_like(req, INF)),
+                            rf))
         p, rf, ct, off = self.op_su
         if len(p):
-            out.append((p * 2 + rf, lt[None] + self.rel_setup[:, ct].T + off[:, None]))
+            out.append((p * 2 + rf, lt[None] + self.rel_setup[:, ct].T + off[:, None], None))
 
         def one_tag(rows, tag, v):                                  # a required time for one tag only
             req = torch.full((len(rows), NT), INF, device=dev)
-            return rows, req.scatter_(1, tag[:, None], v[:, None])
+            return rows, req.scatter_(1, tag[:, None], v[:, None]), None
         # path delay exceptions: registers (setup time from the constrained slew) and output ports
         if len(self.k_lib) and len(self.kx[0]):
             a_, tg, rq = self.kx
@@ -1371,7 +1400,7 @@ class Timer:
         dev, P, NT = self.dev, self.P, self.NT
         A = self.amax.reshape(P * 2, NT); S = self.smax.reshape(-1)
         r = torch.full((P * 2, NT), INF, device=dev)
-        for rows, req in self._setup_required():
+        for rows, req, _ in self._setup_required():
             r.index_reduce_(0, rows, torch.where(torch.isnan(req), INF, req), 'amin')   # NaN: no relationship
         through = torch.full((P * 2,), INF, device=dev)
         levs = []                                   # as the forward pass ran them: launch arcs, then level by level
@@ -1441,7 +1470,9 @@ class TimingResult:
     def pin_slack(self):
         """Setup slack of every pin (P,), ps; inf where no constrained path passes: the worst path through the pin,
         required time less arrival, as OpenSTA's pin slack (max analysis). An endpoint's is its setup slack (a latch
-        D pin: also the paths through it); the pins of the worst path have the WNS. Computed on the first call
+        D pin: also the paths through it); the pins of the worst path have the WNS. With propagated clocks these do
+        not remove the clock reconvergence pessimism (the endpoints' setup slacks do: attar.timing.crpr), so a pin's
+        can be below its endpoints' by up to the credit. Computed on the first call
         (Timer.required: one batched delay evaluation, then index reductions back through the levels); valid for the
         last run of this result's timer, as path()."""
         if self._pin_slack is None:

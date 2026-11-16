@@ -584,15 +584,16 @@ class Design:
         return torch.where(self.n_mask, w, torch.zeros_like(w)).sum()
 
     # -- timing and routing congestion --------------------------------------------------------------------------------
-    def timing(self, pos=None):
+    def timing(self, pos=None, crpr=True):
         """Static timing at pos (default: the current placement): an attar.timing.sta.TimingResult with per-endpoint setup /
         hold slack, WNS / TNS. Needs the 'timing' fact (attar.timing.ir.attach). The timer is built once per design and
-        kept; on CUDA a re-time is a CUDA-graph replay."""
+        kept; on CUDA a re-time is a CUDA-graph replay. crpr: with propagated clocks, remove clock reconvergence
+        pessimism (OpenSTA's default; False: sta::set_crpr_enabled 0)."""
         self.require('sta')
         from .timing.sta import Timer
         if self._timer is None:
             self._timer = Timer(self)
-        return self._timer.run(pos)
+        return self._timer.run(pos, crpr=crpr)
 
     def propagate_clocks(self, clocks=None):
         """Time the clocks given (names; default: every clock with a source pin) as propagated, through their clock

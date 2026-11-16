@@ -7,9 +7,9 @@ Per design (an ORFS run carried through CTS by tools/orfs_run_cts.sh, orfs_runs/
              (tools/validate_cts.distill).
   attar:     attar.naive.cts, then Attar's own timing (propagated clocks), clock arrivals and power; the result is
              exported (DEF) with an SDC that adds set_propagated_clock to 3_place.sdc.
-  agreement: OpenROAD reads that DEF, the SDC and setRC.tcl, estimate_parasitics -placement: WNS / TNS / WHS (CRPR
-             off, Attar's model, and on, OpenSTA's default), every endpoint's slack (CRPR off), every register clock
-             pin's arrival, report_clock_skew, report_power.
+  agreement: OpenROAD reads that DEF, the SDC and setRC.tcl, estimate_parasitics -placement: WNS / TNS / WHS and
+             every endpoint's slack with CRPR on (OpenSTA's default, against d.timing()) and off (against
+             d.timing(crpr=False)), every register clock pin's arrival, report_clock_skew, report_power.
   baseline:  OpenROAD reads 3_5_place_dp.odb and runs ORFS's CTS steps (repair_clock_inverters, clock_tree_synthesis
              -sink_clustering_enable -repair_clock_nets, set_propagated_clock, detailed_placement; no repair_timing):
              the same metrics, its clock buffers and run time.
@@ -42,6 +42,13 @@ proc dump_all {dir} {
   set f [open $dir/ck.tsv w]
   foreach p [all_registers -clock_pins] {
     puts $f "[get_full_name $p] [get_property $p arrival_max_rise] [get_property $p arrival_min_rise]"
+  }
+  close $f
+}
+proc dump_ep {path} {
+  set f [open $path w]
+  foreach p [concat [all_registers -data_pins] [all_outputs]] {
+    puts $f "[get_full_name $p] [get_property $p slack_max] [get_property $p slack_min]"
   }
   close $f
 }
@@ -111,8 +118,9 @@ def main():
         if dev == 'cuda':
             torch.cuda.synchronize()
         sec = time.time() - t
+        r0 = d.timing(crpr=False)
+        ours_ep = r0.endpoint_slacks()
         r = d.timing()
-        ours_ep = r.endpoint_slacks()
         ours_ck = {k: (v[0], v[2]) for k, v in r.clock_arrivals().items()}
         pw = d.power()
         def_path = os.path.join(out, 'attar_cts.def')
@@ -125,12 +133,22 @@ def main():
         tcl = [REPORT_TCL] + ['read_lef %s' % w(l) for l in lefs] + ['read_liberty %s' % w(l) for l in libs] + [
             'read_def %s' % w(def_path)] + (['set_routing_layers -signal %s-%s' % tuple(routing)] if routing else []) + [
             'read_sdc %s' % w(sdc), 'source %s' % w(rc), 'estimate_parasitics -placement', 'metrics crpr_on',
+            'dump_ep %s' % w(os.path.join(out, 'ep_crpr.tsv')),
             'report_clock_skew -setup -digits 4', 'report_power -digits 6',
             'sta::set_crpr_enabled 0', 'metrics crpr_off', 'dump_all %s' % w(out)]
         log = openroad('\n'.join(tcl), 'cts_eng_%s' % design)
         ref = _metrics(log, tu)
         ref_ep, ref_ck = _read(out, tu)
         cr, *_ = VS.compare(ours_ep, ref_ep)
+        ref_crpr = {}
+        for line in open(os.path.join(out, 'ep_crpr.tsv')):
+            t = line.split()
+            if len(t) == 3:
+                try:
+                    ref_crpr[t[0].replace('\\', '')] = (float(t[1]) * tu, float(t[2]) * tu)
+                except ValueError:
+                    pass
+        cc, *_ = VS.compare(r.endpoint_slacks(), ref_crpr)
         common = [k for k in ref_ck if k in ours_ck]
         cke = np.abs(np.array([ours_ck[k] for k in common]) - np.array([ref_ck[k] for k in common]))
         # -- TritonCTS baseline -----------------------------------------------------------------------------------
@@ -161,6 +179,8 @@ def main():
                          'power_clock': pw.groups['Clock'], 'power_total': pw.total},
                'agreement': {'opensta': ref, 'endpoints': cr['matched'], 'setup_mae': cr['setup_mae'],
                              'hold_mae': cr['hold_mae'], 'ck_pins': len(common),
+                             'crpr': {k: cc[k] for k in ('matched', 'setup_mae', 'setup_maxe', 'hold_mae', 'hold_maxe',
+                                                         'worst_ours', 'worst_ref', 'tns_ours', 'tns_ref')},
                              'ck_mae': float(cke.mean()) if len(cke) else None,
                              'ck_max': float(cke.max()) if len(cke) else None},
                'triton': dict(bm, latency=float(bl.max()), spread=float(bl.max() - bl.min()))}
@@ -175,6 +195,9 @@ def main():
                  cr['hold_mae'] or 0, len(common), row['agreement']['ck_mae'] or 0, row['agreement']['ck_max'] or 0,
                  g['crpr_on']['wns'], g['crpr_on']['tns'], g.get('skew_setup', float('nan')),
                  g.get('power_clock')))
+        print('           CRPR on: WNS %.2f vs %.2f TNS %.1f vs %.1f | setup MAE %.4f max %.4f, hold MAE %.4f max %.4f'
+              % (min(cc['worst_ours'], 0), min(cc['worst_ref'], 0), cc['tns_ours'], cc['tns_ref'], cc['setup_mae'],
+                 cc['setup_maxe'], cc['hold_mae'] or 0, cc['hold_maxe'] or 0))
         print('           TritonCTS: %s bufs, latency %.1f spread %.1f, CRPR on: WNS %.2f TNS %.1f WHS %.2f, skew %.2f, '
               'clock power %s, %.1fs' % (b['buffers'], row['triton']['latency'], row['triton']['spread'],
                                         b['crpr_on']['wns'], b['crpr_on']['tns'], b['crpr_on']['whs'],

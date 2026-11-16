@@ -59,24 +59,26 @@ Residual slew errors (a few ps on a handful of pins) sit on adder cells whose in
 | nangate45 | tinyRocket | 4.5468e-02 / 4.5468e-02 | 0.00% | 0.0000 | 0.91 | 4.15 |
 | nangate45 | tpu | 3.2959e-02 / 3.2958e-02 | 0.00% | 0.0000 | 0.94 | 3.02 |
 
-## Propagated clocks
+## Propagated clocks and CRPR
 
-ORFS's own clock trees (TritonCTS, the 4_cts stage, `tools/orfs_run_cts.sh`) timed with `set_propagated_clock` (`tools/validate_cts.py`). Attar does not remove clock reconvergence pessimism (CRPR) yet: the comparison is against OpenSTA with `sta::set_crpr_enabled 0`; OpenSTA's default (CRPR on) is listed for scale.
+ORFS's own clock trees (TritonCTS, the 4_cts stage, `tools/orfs_run_cts.sh`) timed with `set_propagated_clock` (`tools/validate_cts.py`): `d.timing()` against OpenSTA's default (clock reconvergence pessimism removal on, `attar.timing.crpr`) and `d.timing(crpr=False)` against `sta::set_crpr_enabled 0`. Errors are per endpoint (ps); WNS / TNS Attar / OpenSTA; time is one re-time with CRPR (without).
 
-| design | clock pins | arrival err max (ps) | endpoints | setup MAE (ps) | hold MAE (ps) | WNS Attar / OpenSTA (CRPR off) | WNS OpenSTA CRPR on |
-| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
-| gcd | 34 | 0.0000 | 52 | 0.0002 | 0.0000 | -39.31 / -39.31 | -39.31 |
-| aes | 530 | 0.0001 | 659 | 0.0009 | 0.0002 | -2.90 / -2.90 | 0.32 |
-| riscv32i | 1060 | 0.0004 | 1323 | 0.0291 | 0.0069 | 0.00 / 0.00 | 0.39 |
-| jpeg | 4766 | 0.2317 | 4766 | 0.0013 | 0.0007 | -75.72 / -75.72 | -74.09 |
+| design | clock pins | arrival err max | endpoints | CRPR on: setup MAE / max | hold MAE / max | WNS | TNS | CRPR off: setup MAE / max | WNS | Attar ms |
+| --- | ---: | ---: | ---: | --- | --- | --- | --- | --- | --- | ---: |
+| gcd | 34 | 0.0000 | 52 | 0.0002 / 0.001 | 0.0000 / 0.000 | -39.31 / -39.31 | -76.5 / -76.5 | 0.0002 / 0.001 | -39.31 / -39.31 | 43 (10) |
+| aes | 530 | 0.0001 | 659 | 0.0009 / 0.021 | 0.0002 / 0.017 | 0.32 / 0.32 | 0.0 / 0.0 | 0.0009 / 0.021 | -2.90 / -2.90 | 71 (30) |
+| riscv32i | 1060 | 0.0004 | 1323 | 0.0291 / 0.428 | 0.0069 / 0.378 | 0.42 / 0.39 | 0.0 / 0.0 | 0.0291 / 0.428 | 0.00 / 0.00 | 165 (62) |
+| jpeg | 4766 | 0.2317 | 4766 | 0.0013 / 0.103 | 0.0008 / 0.244 | -74.09 / -74.09 | -17406.7 / -17407.7 | 0.0013 / 0.103 | -75.72 / -75.72 | 154 (88) |
+
+WNS here is the worst endpoint slack (positive when every endpoint meets timing). CRPR keeps, per data pin, the arrivals of every launch clock pin that can still be worst (OpenSTA's pruning) and credits each register check at the launch and capture clock paths' last common pin; nothing is truncated, so the errors with CRPR are those of the timer without it.
 
 ## Clock tree synthesis (`attar.naive.cts`)
 
-From ORFS's 3_5 placement (`tools/validate_cts_engine.py`). Agreement: OpenROAD reads the DEF Attar exports and times it (CRPR off). Quality: TritonCTS on the same placement, through ORFS's CTS steps without repair_timing; both measured by OpenSTA with CRPR on. Latency and spread: the latest register clock pin's arrival and the spread of all of them (ps); power in mW.
+From ORFS's 3_5 placement (`tools/validate_cts_engine.py`). Agreement: OpenROAD reads the DEF Attar exports and times it (CRPR off and on). Quality: TritonCTS on the same placement, through ORFS's CTS steps without repair_timing; both measured by OpenSTA with CRPR on. Latency and spread: the latest register clock pin's arrival and the spread of all of them (ps); power in mW.
 
-| design | clock arrival err max | endpoint setup MAE | Attar bufs / latency / spread / WNS / TNS / clock power | TritonCTS bufs / latency / spread / WNS / TNS / clock power |
+| design | clock arrival err max | endpoint setup MAE (CRPR off / on) | Attar bufs / latency / spread / WNS / TNS / clock power | TritonCTS bufs / latency / spread / WNS / TNS / clock power |
 | --- | ---: | ---: | --- | --- |
-| gcd | 0.0000 | 0.0002 | 3 / 45.4 / 1.1 / -50.32 / -118.4 / 0.064 | 5 / 39.1 / 1.5 / -47.29 / -108.4 / 0.156 |
-| riscv32i | 0.0000 | 0.0226 | 61 / 110.2 / 14.3 / -23.91 / -5634.0 / 0.717 | 61 / 111.7 / 18.3 / -28.66 / -9705.6 / 1.771 |
-| jpeg | 0.0000 | 0.0012 | 274 / 176.3 / 22.8 / -104.94 / -23065.5 / 5.111 | 562 / 163.1 / 21.5 / -98.40 / -22523.5 / 20.354 |
-| aes | 0.1102 | 0.0388 | 32 / 94.5 / 10.3 / -9.72 / -45.9 / 0.814 | 31 / 78.4 / 7.2 / -5.44 / -15.9 / 2.197 |
+| gcd | 0.0000 | 0.0002 / 0.0002 | 3 / 45.4 / 1.1 / -50.32 / -118.4 / 0.064 | 5 / 39.1 / 1.5 / -47.29 / -108.4 / 0.156 |
+| aes | 0.1102 | 0.0388 / 0.0392 | 32 / 94.5 / 10.3 / -9.72 / -45.9 / 0.814 | 31 / 78.4 / 7.2 / -5.44 / -15.9 / 2.197 |
+| riscv32i | 0.0000 | 0.0226 / 0.0226 | 61 / 110.2 / 14.3 / -23.91 / -5634.0 / 0.717 | 61 / 111.7 / 18.3 / -28.66 / -9705.6 / 1.771 |
+| jpeg | 0.0000 | 0.0012 / 0.0012 | 274 / 176.3 / 22.8 / -104.94 / -23065.5 / 5.111 | 562 / 163.1 / 21.5 / -98.40 / -22523.5 / 20.354 |
