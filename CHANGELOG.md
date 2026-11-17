@@ -48,6 +48,14 @@ Global routing
   design; `capacity(adjustment={layer: share})` still overrides.
 - `attar.timing.steiner_big.pd_edges`: the edges of OpenROAD's Prim-Dijkstra tree for nets of any size.
 
+Timing speed (results unchanged, bitwise)
+- Timer build: SDC `set_load` ports are looked up per pin instead of one mask per port over all pins
+  (superblue7: 97 s -> 10 s, superblue18: 20 s -> 4 s, on the CPU and the GPU alike).
+- CPU timing: the delay calculation's Newton and root-finding loops stop once every element has converged or
+  failed and step only the live ones (`attar.timing.dmp.HOST_EARLY_EXIT`; the GPU keeps its fixed-count,
+  graph-capturable loops), and every net with a driver gets its exact host tree instead of the batched PyTorch
+  buckets. ORFS aes 59 s -> 4.4 s, nangate45 jpeg 149 s -> 8.9 s, superblue18 over an hour -> 82 s per run.
+
 Readers
 - DEF: component and pin locations written as decimals (`7214680.000000`) are read; a fractional database unit is
   refused instead of the component silently reading as unplaced.
