@@ -78,6 +78,8 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 | **Timing after sizing** | `d.resize` + `d.timing()` | OpenROAD `replace_cell` + OpenSTA, 20% of the cells swapped at random; 16 designs | WNS error at most **0.23%**, TNS at most 0.37% |
 | **Timing after netlist edits** | `d.edit()`, `d.debuffer()` + `d.timing()` | OpenSTA on the DEF Attar exports: after 1,548 buffers and 443 clones inserted (10 NS3K designs up to 163k cells), and after `d.debuffer()` removed 45,991 buffers and 83 inverters (10 ORFS designs) | setup Pearson at least **0.9997**, WNS error at most **0.04%** after debuffer and **1.18%** after the NS3K edits; hold MAE at most 0.36 ps |
 | **Global routing OVF** | `d.gr_overflow()` | OpenROAD's gcell capacities and global route; 13 ORFS designs | capacities exact without macros, within **0.16%** with them; ranks designs as OpenROAD does (Spearman **0.97**); a pre-route estimate: reads mild congestion high and heavy congestion low |
+| **Global-routing parasitics** | `d.timing(routes=...)` | OpenSTA after `estimate_parasitics -global_routing` on OpenROAD's own routes; 14 ORFS designs (ASAP7, Nangate45) | every net's wire R and C equal OpenROAD's SPEF; WNS error at most **0.08%**, setup slack MAE at most **0.02 ps** (one latch pin aside) ([table](https://github.com/RayChang987/Attar/blob/main/docs/validation/global_routing.md)) |
+| **Global routing** | `d.global_route()` | OpenROAD's `global_route` on the same placement; 14 designs, and 7 placements each of 7 | wirelength **0.5-3.6%** below OpenROAD's, per net Pearson at least 0.998; orders placements as OpenROAD's routed wirelength does in **100%** of pairs 1% or more apart (HPWL: 74-88%), 91% below 1%; 16-41x faster from jpeg up; leaves some overflow OpenROAD does not ([table](https://github.com/RayChang987/Attar/blob/main/docs/validation/global_routing.md)) |
 | **Steiner wirelength, RUDY, density overflow** | `ev.steiner_wirelength`, `ev.rudy`, `ev.density_overflow` |  | |
 
 ### Naive Engine
@@ -90,6 +92,7 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 | **Placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the source flow's own target density; `routability=True`: DREAMPlace's cell inflation |
 | **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal; incremental on a placement to repair (`cells=`: only those move; a legal input comes out unchanged) |
 | **PDN-aware refinement** | `after_fp` | inside `naive.legalize` | row DP and repair that keep cells clear of the PDN |
+| **Global router** | `after_fp` | `d.global_route()` | on OpenROAD's gcell grid and capacities: Prim-Dijkstra trees, negotiated Z / L pattern routing, chunked layer assignment; time on its routes with `d.timing(routes=...)` |
 | **Detailed placement** | `after_fp` | `naive.detailed_place` | OpenROAD dpo's global swap, vertical swap, local reordering and cell flipping, batched on the GPU; keeps the placement legal |
 
 `d.floorplan(utilization=...)` sizes the die (`naive.make_die`), then places the IO pins and the macros;

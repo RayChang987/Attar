@@ -186,9 +186,39 @@ def _layer_rules(lef_paths, layers, tech, dbu):
     return [q(ext.get(n, 0.0)) for n in layers], [q(via_w.get(n, 0.0)) for n in layers]
 
 
-def attach(ir_dir, lef_paths, layers=None, adjustment=None):
+def cut_resistance(lef_paths, layer_names):
+    """{routing level l (1-based, as layer_names): the LEF RESISTANCE (per cut, in kohm) of the cut layer between l and
+    l + 1}: what OpenROAD's estimate_parasitics uses for vias when set_layer_rc gives no -via (Nangate45)."""
+    res, order, cur, typ = {}, [], None, None
+    for p in lef_paths:
+        for line in open(p, errors='replace'):
+            t = line.split()
+            if not t:
+                continue
+            if t[0] == 'LAYER' and len(t) > 1:
+                cur, typ = t[1], None
+            elif t[0] == 'TYPE' and cur:
+                typ = t[1].rstrip(';')
+                order.append((cur, typ))
+            elif t[0] == 'RESISTANCE' and typ == 'CUT' and cur:
+                res[cur] = float(t[1].rstrip(';')) / 1000.0
+            elif t[0] == 'END' and len(t) > 1 and t[1] == cur:
+                cur = None
+    lv = {n: i + 1 for i, n in enumerate(layer_names)}
+    out, last = {}, None
+    for name, typ in order:                         # a cut layer sits between the routing layers around it
+        if typ == 'ROUTING':
+            last = lv.get(name)
+        elif typ == 'CUT' and last is not None and name in res:
+            out[last] = res[name]
+    return out
+
+
+def attach(ir_dir, lef_paths, layers=None, adjustment=None, layer_adjustments=None):
     """Distill the 'routing' fact into the IR at ir_dir from its LEF files (see the module doc). layers (lowest,
-    highest routing layer name) and adjustment default to the manifest's 'routing' entry (ORFS designs have one)."""
+    highest routing layer name) and adjustment default to the manifest's 'routing' entry (ORFS designs have one).
+    layer_adjustments: {layer: share} where the flow holds back a different share per layer (Nangate45's
+    fastroute.tcl); recorded with the cut layers' LEF resistance ('cut_res', kohm per cut, by routing level)."""
     from ..io.lef import read_lef
     with gzip.open(os.path.join(ir_dir, 'names.json.gz'), 'rt') as f:
         names = json.load(f)
@@ -230,6 +260,13 @@ def attach(ir_dir, lef_paths, layers=None, adjustment=None):
         r['layers'] = list(layers)
     if adjustment is not None:
         r['adjustment'] = float(adjustment)
+    if layer_adjustments:
+        r['layer_adjustments'] = {k: float(v) for k, v in layer_adjustments.items()}
+    cr = cut_resistance(lef_paths, names['layers'])
+    if cr:
+        r['cut_res'] = {str(k): v for k, v in sorted(cr.items())}
+    else:
+        r.pop('cut_res', None)
     r.setdefault('adjustment', 0.0)
     r.setdefault('source', 'default')
     m['routing'] = r
@@ -271,12 +308,21 @@ def grid(d):
 def capacity(d, adjustment=None, layers=None, pos=None):
     """Per layer, the capacity of every gcell edge as OpenROAD computes it: (g, h3 [L][ny][nx-1], v3 [L][ny-1][nx])
     (layer L = names['layers'][L]; outside the routing range 0). adjustment / layers override the manifest's; pos:
-    the placement whose instance pins and OBS block (default the design's)."""
+    the placement whose instance pins and OBS block (default the design's). adjustment: one share for every layer, or
+    {layer name: share} (set_global_routing_layer_adjustment per layer range, as Nangate45's fastroute.tcl: metal2-3
+    0.5, metal4 and up 0.25); the manifest's 'layer_adjustments' when it has them, else its 'adjustment'."""
     a, names = d.raw, d.names
     r = d.manifest.get('routing') or {}
     lay = layers or r.get('layers') or [names['layers'][1], names['layers'][-1]]
-    adj = float(r.get('adjustment', 0.0) if adjustment is None else adjustment)
+    if adjustment is None:
+        adjustment = r.get('layer_adjustments') or r.get('adjustment', 0.0)
     lid = {n: i for i, n in enumerate(names['layers'])}
+    if isinstance(adjustment, dict):
+        per = {lid[k]: float(v) for k, v in adjustment.items() if k in lid}
+        adj = None
+    else:
+        adj = float(adjustment)
+        per = {}
     lo, hi = lid[lay[0]], lid[lay[1]]
     g = grid(d)
     tile, nx, ny = g['tile'], g['nx'], g['ny']
@@ -315,14 +361,17 @@ def capacity(d, adjustment=None, layers=None, pos=None):
     hint, vint = _apply_obstructions(rects, h3, v3, g, horiz, pitch)
     _transition_layers(t, macro_obs, h3, v3, g, horiz, pitch, hi)
     _blocked_intervals(hint, vint, h3, v3, pitch)
-    if adj != 0.0:
-        for l in range(lo, hi + 1):
-            for c in (h3[l], v3[l]):
-                nc = np.floor(c.astype(np.float32) * np.float32(1 - adj)).astype(np.int64)
-                if adj != 1:
-                    nc = np.where(c > 0, np.maximum(nc, 1), nc)
-                c[...] = nc
-    g.update({'layers': (lo, hi), 'adjustment': adj, 'pitch': pitch})
+    for l in range(lo, hi + 1):
+        al = per.get(l, 0.0) if adj is None else adj
+        if al == 0.0:
+            continue
+        for c in (h3[l], v3[l]):
+            nc = np.floor(c.astype(np.float32) * np.float32(1 - al)).astype(np.int64)
+            if al != 1:
+                nc = np.where(c > 0, np.maximum(nc, 1), nc)
+            c[...] = nc
+    g.update({'layers': (lo, hi), 'adjustment': adj if adj is not None else {names['layers'][k]: v for k, v in per.items()},
+              'pitch': pitch})
     return g, h3, v3
 
 
