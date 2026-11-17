@@ -15,7 +15,9 @@ def floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None, p
     IO pins first go in name order; after a quick placement of the cells (the mixed-size GP of the macro placer, or a
     coarse GP when there are no macros to place) they move next to the cells they connect to. The cells end
     unplaced: the floorplan is the question for attar.naive.place.
-    packing=True: macros by B*-tree packing instead of GP + LP legalization (block-level designs; see place_macros)."""
+    packing=True: macros by B*-tree packing instead of GP + LP legalization (block-level designs; see place_macros).
+    halo: the channel between macros (and to the core edge); default: the source flow's own minimum channel where the
+    design records one (manifest 'macro_channel', e.g. ORFS's RTLMP_MIN_CHANNEL_SIZE), else place_macros' default."""
     from .gp import global_place
     t0 = time.time()
     res = {}
@@ -30,6 +32,8 @@ def floorplan(d, utilization=None, aspect_ratio=1.0, io_pitch=None, halo=None, p
         place_io(d, mode='order', pitch=io_pitch, verbose=False)
     gp_done = False
     if need_mac:
+        if halo is None and d.manifest.get('macro_channel'):    # the channel the source flow keeps for its PDN
+            halo = float(max(d.manifest['macro_channel']))
         res['macros'] = place_macros(d, halo=halo, packing=packing, packing_args=packing_args, verbose=verbose)
         gp_done = res['macros']['macros'] > 0
     if need_io:

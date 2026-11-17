@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """docs/validation/timing_routing.md: Attar against OpenROAD / ORFS, from the JSON results the validation tools wrote.
 
-  timing   tools/validate_sta.py (asap7, nangate45) and tools/validate_sta_ns3k.py: OpenSTA after estimate_parasitics
+  timing   tools/validate_sta.py (asap7, nangate45), tools/validate_sta_ns3k.py and tools/validate_sta_iccad2015.py:
+           OpenSTA after estimate_parasitics
   sizing   tools/validate_sizing.py: random cell swaps, OpenROAD replace_cell then OpenSTA
   routing  tools/validate_gr.py: capacity against OpenROAD's congestion report, GROV against ORFS's global route
-usage: make_validation_md.py [--sta J] [--ng45 J] [--ns3k J] [--sizing-asap7 J] [--sizing-ng45 J] [--gr J] [--out F]"""
+usage: make_validation_md.py [--sta J] [--ng45 J] [--ns3k J] [--iccad2015 J] [--sizing-asap7 J] [--sizing-ng45 J]
+                             [--gr J] [--out F]"""
 import argparse
 import json
 import os
@@ -69,6 +71,7 @@ def main():
     ap.add_argument('--sta', default=os.path.join(R, 'sta', 'v19_pinloc.json'))
     ap.add_argument('--ng45', default=os.path.join(R, 'sta', 'ng45_v5_pinloc.json'))
     ap.add_argument('--ns3k', default=os.path.join(R, 'sta_ns3k', 'v7_pinloc.json'))
+    ap.add_argument('--iccad2015', default=os.path.join(R, 'sta_iccad2015', 'v1.json'))
     ap.add_argument('--sizing-asap7', default=os.path.join(R, 'sizing', 'asap7_v2.json'))
     ap.add_argument('--sizing-ng45', default=os.path.join(R, 'sizing', 'ng45_v2.json'))
     ap.add_argument('--gr', default=os.path.join(R, 'gr', 'v2.json'))
@@ -78,6 +81,7 @@ def main():
     ap.add_argument('--out', default=os.path.join(ROOT, 'docs', 'validation', 'timing_routing.md'))
     a = ap.parse_args()
     sta, ng, ns = json.load(open(a.sta)), json.load(open(a.ng45)), json.load(open(a.ns3k))
+    ic = json.load(open(a.iccad2015))
     sz7, szn, gr = json.load(open(a.sizing_asap7)), json.load(open(a.sizing_ng45)), json.load(open(a.gr))
     ed = json.load(open(a.edit))
     db7, dbn = json.load(open(a.debuffer_asap7)), json.load(open(a.debuffer_ng45))
@@ -91,6 +95,7 @@ def main():
          '| Timing, ORFS asap7 | %d | %s |' % (len(sta), summary(sta).split('; ', 1)[1]),
          '| Timing, ORFS nangate45 | %d | %s |' % (len(ng), summary(ng).split('; ', 1)[1]),
          '| Timing, NS3K (Innovus kit, unbuffered netlists) | %d | %s |' % (len(ns), summary(ns).split('; ', 1)[1]),
+         '| Timing, ICCAD 2015 superblue (Late library) | %d | %s |' % (len(ic), summary(ic).split('; ', 1)[1]),
          '| Sizing (random swaps), asap7 | %d | %s |' % (len(sz7), summary(sz7).split('; ', 1)[1]),
          '| Sizing (random swaps), nangate45 | %d | %s |' % (len(szn), summary(szn).split('; ', 1)[1]),
          '| Netlist edits (buffers, clones), NS3K | %d | %s |' % (len(ed), summary(ed).split('; ', 1)[1]),
@@ -125,6 +130,14 @@ def main():
     L += timing_table(ng, lambda d: 'after_fp/orfs_nangate45/' + d)
     L += ['', '### NS3K', '']
     L += timing_table(ns, lambda d: 'after_fp/ns3k/' + d)
+    L += ['', '### ICCAD 2015 (superblue)', '',
+          'At the contest\'s given placement (`tools/validate_sta_iccad2015.py`): the design\'s Late Liberty, its SDC '
+          '(the DREAMPlace 4.0 copy) and the contest wire RC (2.535 ohm, 0.16 fF per um). Both sides read the Late '
+          'library only, so hold is compared on Late delays; the Early library is not modeled. Endpoints OpenSTA '
+          'reports as unconstrained (infinite slack, up to 4% of them) are not listed by Attar; every constrained '
+          'endpoint matches. The DEF handed to OpenROAD drops the TRACKS on metal7-9, which the superblue LEF does '
+          'not define.', '']
+    L += timing_table(ic, lambda d: 'after_fp/iccad2015/' + d)
     L += ['', '## Sizing', '', 'A seeded random 20% of the cells with alternatives swapped within their equivalence '
           'class (drive strength, threshold voltage): `d.resize` in Attar (masters from the zoo\'s library bundle), '
           '`replace_cell` in OpenROAD, then both time the design (`tools/validate_sizing.py`).', '',

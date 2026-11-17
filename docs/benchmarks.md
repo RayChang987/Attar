@@ -49,8 +49,9 @@ d = attar.load('my_zoo/after_fp/mine/design', device='cuda')
 | --- | --- | --- |
 | ISPD 2005/2015, GSRC placement, ICCAD 2025 | Bookshelf, LEF/DEF | `after_fp/<suite>` |
 | ISPD 2018/2019/2024 routing benchmarks | LEF/DEF | `after_fp/<suite>` |
+| ICCAD 2015 problem C, superblue (the DREAMPlace 4.0 copy, `iccad2015.ot`) | LEF/DEF; the DEF has no NETS, the nets come from the flat Verilog (one instance per statement, named connections) | `after_fp/iccad2015` |
 | MCNC (YAL), GSRC blocks, IBM-HB+ | YAL, GSRC blocks, Bookshelf | `before_fp/<suite>` |
-| ORFS designs (asap7, nangate45; nangate45 designs ported to ASAP7 by `tools/orfs_port_asap7.py`) | LEF/DEF of the run's 3_3 (2_1) stage | `after_fp/orfs_<platform>` (`before_fp/orfs_asap7`) |
+| ORFS designs (asap7, nangate45; nangate45 designs ported to ASAP7 by `tools/orfs_port_asap7.py`) | LEF/DEF of the run's 3_3 (2_1) stage | `after_fp/orfs_<platform>` (`before_fp/orfs_<platform>`) |
 | i3dPDK_NS3K (pa_pdn): Innovus floorplans (rows cut only at the macros, `PG_HALO_STRIP_CUT=macro`), cells and nets from the same design's Xplace input DEF | LEF/DEF | `after_fp/ns3k`, `after_fp/ns3k_{pl,st}_u{60,70,80}` |
 
 The ORFS tools use the docker image `openroad/orfs:26Q4-368-g9ca2a9e76`.
@@ -82,6 +83,7 @@ Rules every reader follows:
 | ispd2015 | 20 | 29k-1.3M | cells unplaced | legal; fences not enforced |
 | ispd2018, ispd2019 | 20 | 8k-900k | placed | re-placed legal; FILLCELLs set aside |
 | ispd2024 | 5 | 120k-715k | placed | re-placed legal |
+| iccad2015 | 8 | 768k-1.93M | placed (Encounter; 1.6k-41k overlapping cells) | re-placed legal, 16-45 s per design, HPWL -11.6% to +3.2% against the given placement; timing attached, against OpenSTA: WNS within 0.33%, TNS within 0.13% ([validation](validation/timing_routing.md#iccad-2015-superblue)) |
 | iccad2025 | 13 | 2k-298k | placed | re-placed legal |
 | gsrc_place | 4 | 0.8k-28k | cells unplaced | legal |
 | ns3k | 14 | 0.3k-170k | cells unplaced | legal. OpenROAD `check_placement` passes and global routing has no overflow on the 6 designs without macros, ariane133, bp_multi_top and riscv32i; on ariane136, black_parrot, swerv_wrapper and tinyRocket `check_placement` crashes (signal 11) on the floorplan DEF itself, with no cells placed |
@@ -94,6 +96,7 @@ Rules every reader follows:
 | suite | designs | cells | starts from | Attar result |
 | --- | ---: | --- | --- | --- |
 | orfs_asap7 | 5 | 9k-52k | ORFS 2_1: die, rows, tracks initialized; IO pins, macros unplaced; no PDN | die for a looser and a tighter utilization than ORFS's, IO pins, macros; handed to ORFS, which draws the PDN: `check_placement` passes, no more DRV than ORFS's own floorplan ([validation](validation/fp_handoff.md)). cva6 and swerv_wrapper are left out: their tight floorplans fail in ORFS |
+| orfs_nangate45 | 8 | 34k-212k, 10-136 macros | ORFS 2_1, as orfs_asap7; the macro-placement benchmarks (ariane133/136, black_parrot, bp_be/fe/multi_top, swerv_wrapper, mempool_group); `macro_channel` = ORFS's `RTLMP_MIN_CHANNEL_SIZE` | handed to ORFS at 0.8x and 1.15x ORFS's utilization: 15 of 16 go through PDN and detailed placement with `check_placement` passing; ariane133 tight fails ORFS's PDN channel repair ([validation](validation/fp_handoff.md#nangate45-macro-designs-before_fporfs_nangate45)) |
 | mcnc | 5 | 9-49 blocks | blocks unplaced, pads placed | floorplan, no overlaps; no cell library: Attar is the end point |
 | gsrc_hard | 6 | 10-300 blocks | no die | die + floorplan, no overlaps |
 | ispd2006_hb | 28 | 81-8.8k | hard + soft blocks | some overlaps remain |
@@ -102,6 +105,12 @@ Rules every reader follows:
 ## Data quirks worth knowing
 
 - ICCAD 2025: 11 of 13 inputs have every cell in N orientation, also in FS rows, so they are rail-illegal as given.
+- ICCAD 2015: the given placements overlap (1.6k-41k cells), the DEF writes coordinates as decimals
+  (`7214680.000000`), the LEF defines metal1-6 while the DEF has TRACKS on metal7-9 (OpenROAD's DEF parser stops
+  on them), some IO pins sit just outside the die, and FIXED pinless blocks and INV_X1 cells that the Verilog never
+  names serve as obstacles. Timing reads the Late library (setup); the Early one (hold) is recorded, not modeled.
+  The Liberty has no `function` attributes, so there are no sizing classes (`d.resize`, buffering need them).
+- superblue (ISPD 2015 and ICCAD 2015): the fixed macros overlap each other as given (2-359 pairs per design).
 - ISPD 2018/2019: the DEFs contain FILLCELLs (`unplace()` sets them aside); ispd19_test3 has placed pads.
 - ISPD 2019 test7-10 run at about 96% utilization; GP raises its target density to the utilization.
 - ORFS 3_3 DEFs have rows cut around macros; the gaps are obstacles (OpenROAD DPL-0004 otherwise).

@@ -18,6 +18,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -140,6 +141,22 @@ def place_density(base):
     return float(v[-1]) if v else None
 
 
+def macro_channel(base):
+    """The minimum channel ORFS's macro placer kept between macros for this design (its 2_2 log: rtl_macro_placer
+    -min_channel_size, the config's RTLMP_MIN_CHANNEL_SIZE): [width, height] in um, or None (no macro placement)."""
+    try:
+        log = os.path.join(flow_dir(base, 'logs'), '2_2_floorplan_macro.log')
+    except FileNotFoundError:
+        return None
+    if not os.path.exists(log):
+        return None
+    for line in open(log, errors='replace'):
+        m = re.search(r'Minimum channel \(Width, Height\): \(([\d.]+), ([\d.]+)\)', line)
+        if m:
+            return [float(m.group(1)), float(m.group(2))]
+    return None
+
+
 def rt_dir(key):
     """orfs_runs/rt/<run key>: the stage DEFs (distillation sources) and the run copies."""
     rt = os.path.join(RUNS, 'rt', key)
@@ -164,6 +181,9 @@ def export_and_distill(key, base, rt, stage, reuse=False):
                       extra={'suite': 'orfs/' + plat, 'orfs_image': IMAGE, 'orfs_stage': stage, 'routing': routing_resources(key),
                              # the placement target density of the flow: Design.place's default for this design
                              'target_density': place_density(base), 'target_density_source': 'orfs 3_3 global_place (GPL-0023)',
+                             # the channel the flow's PDN needs between macros: Design.floorplan's default halo
+                             'macro_channel': macro_channel(base),
+                             'macro_channel_source': 'orfs 2_2 rtl_macro_placer (min_channel_size)',
                              'orfs': {'image': IMAGE, 'design': d, 'design_config': cfg, 'stage': stage,
                                       'platform': plat}})
     return ir, m, lefs
