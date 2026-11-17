@@ -341,6 +341,9 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
             placed[sub] = pk
         if improve:
             cur_x, cur_r = _improve(space, cur_x, cur_r, gxs, gy, k_mv, wg, allowed_rows, stats=stats)
+    elif not bool(placed.all()):
+        # global: cells that did not fit their class go to the nearest free spot anywhere (window grows until found)
+        cur_x, cur_r, placed = _fill(space, cur_x, cur_r, placed, gxs, gy, k_mv, wg, allowed_rows, stats=stats)
     if improve and not incremental:
         for rnd in range(passes):
             cur_x, cur_r = _improve(space, cur_x, cur_r, gxs, gy, k_mv, wg, allowed_rows, stats=stats)
