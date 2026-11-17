@@ -356,8 +356,14 @@ class Timer:
         cap_min = cap.copy()
         if 'mp_cap_min' in t:
             cap_min[ok] = t['mp_cap_min'][p_mpin[ok]]
-        for c, v in info.get('load', {}).items():
-            cap[p_cell == int(c)] = v; cap_min[p_cell == int(c)] = v
+        loads = info.get('load', {})
+        if loads:                                 # one lookup per pin (a mask per port was O(ports x pins))
+            lv = np.full((int(p_cell.max()) + 1, 2), np.nan, np.float32)
+            for c, v in loads.items():
+                if int(c) < len(lv):
+                    lv[int(c)] = v                # a scalar, or (rise, fall)
+            hit = ~np.isnan(lv[p_cell, 0])
+            cap[hit] = lv[p_cell[hit]]; cap_min[hit] = lv[p_cell[hit]]
         self.pin_cap, self.pin_cap_min = T(cap), T(cap_min)
         # macro clock pins: Liberty min / max_clock_tree_path; OpenSTA's ideal-clock capture time is the clock edge minus
         # the min value for setup checks and minus the max value for hold checks (launch unchanged)
@@ -851,12 +857,19 @@ class Timer:
             # nets above the GPU buckets: OpenROAD's tree on the host each run (exact), into static buffers; only
             # those that can carry a data arrival (clock nets are ideal, the rest keep the lumped model: unused)
             ptr, deg = ev.ptr.cpu().numpy(), ev.deg.cpu().numpy()
-            reach = self._reachable()
             if self.exact_trees:
                 bn = np.nonzero((drv_local.cpu().numpy() >= 0) & (deg >= 2))[0]
             else:
                 bn = big.cpu().numpy()
-            bn = bn[reach[self.net_driver[bn]] & ~self.net_clkrc[bn]]      # (clock RC nets: plan_clk)
+            if self.dev.type == 'cpu' and self.exact_trees:
+                # on the host every net with a driver gets its exact tree here (the C++ port is far faster than the
+                # batched PyTorch buckets on a CPU), and the buckets keep none of them
+                bn = bn[~self.net_clkrc[bn]]
+                dl = drv_local.clone(); dl[torch.as_tensor(bn, device=self.dev, dtype=torch.long)] = -1
+                self.plan = tree_plan(ev.ptr, ev.deg, dl)
+            else:
+                reach = self._reachable()
+                bn = bn[reach[self.net_driver[bn]] & ~self.net_clkrc[bn]]      # (clock RC nets: plan_clk)
             big = torch.as_tensor(bn, device=self.dev)
         if big is not None and len(big) and steiner_big.available():
             cnt = deg[bn]

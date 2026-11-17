@@ -207,6 +207,50 @@ def root_step(a, b, root, dx, dx_prev, conv, y, dy, target, w, p3, load: bool):
     return a, b, root, dx, dx_prev, conv, torch.where(act, y2, y), torch.where(act, dy2, dy)
 
 
+# On the host (CPU tensors) the loops stop as soon as every element has converged or failed and step only the live
+# ones: elements that converged or failed are frozen by the steps, so this changes no result (bitwise), only the time.
+# On CUDA the fixed-count loops stay (no host sync: the timer can be a CUDA graph; its Triton kernels stop per block).
+HOST_EARLY_EXIT = True
+
+
+def _take(v, keep, m):
+    """The elements `keep` of a per-element tensor (first dimension m), recursively through tuples; anything else as is."""
+    if isinstance(v, tuple):
+        return tuple(_take(u, keep, m) for u in v)
+    if torch.is_tensor(v) and v.dim() > 0 and v.shape[0] == m:
+        return v[keep]
+    return v
+
+
+def _iterate(step, state, consts, iters, live):
+    """Run `step(*state, *consts) -> state` `iters` times. live(state): the elements a step can still change (the
+    others are frozen). On the host: stop when none is live, and step only the live ones (compacting the working set
+    when it halves); results equal the fixed-count loop's."""
+    if not HOST_EARLY_EXIT or state[0].device.type != 'cpu':
+        for _ in range(iters):
+            state = step(*state, *consts)
+        return state
+    full, idx = list(state), None
+    ws, wc = tuple(state), tuple(consts)
+
+    def flush(full):
+        return list(ws) if idx is None else [f.index_copy(0, idx, w) for f, w in zip(full, ws)]
+
+    for _ in range(iters):
+        lv = live(ws)
+        k = int(lv.sum())
+        if k == 0:
+            break
+        m = len(lv)
+        if k <= m // 2:                                 # compact: the dropped elements are frozen, keep their values
+            full = flush(full)
+            keep = torch.nonzero(lv).flatten()
+            ws, wc = _take(ws, keep, m), _take(wc, keep, m)
+            idx = keep if idx is None else idx[keep]
+        ws = tuple(step(*ws, *wc))
+    return tuple(flush(full))
+
+
 class Steps:
     """The single steps, compiled (torch.compile) or eager."""
 
@@ -223,8 +267,9 @@ EAGER = Steps()
 def find_root(x1, x2, target, w, p3, load, steps=EAGER):
     """FindRoot.cc findRoot for the waveform crossing wave(t) = target in [x1, x2]. Returns (root, failed)."""
     a, b, root, dx, dx_prev, conv, bad, y, dy = steps.root_init(x1, x2, target, w, p3, load)
-    for _ in range(min(ROOT_ITER, FIND_ROOT_MAX_ITER)):
-        a, b, root, dx, dx_prev, conv, y, dy = steps.root_step(a, b, root, dx, dx_prev, conv, y, dy, target, w, p3, load)
+    a, b, root, dx, dx_prev, conv, y, dy = _iterate(steps.root_step, (a, b, root, dx, dx_prev, conv, y, dy),
+                                                    (target, w, p3, load), min(ROOT_ITER, FIND_ROOT_MAX_ITER),
+                                                    lambda st: ~st[5])
     return root, bad | ~conv
 
 
@@ -275,8 +320,9 @@ def gate(tab, slew_in, ctot, c2, rpi, c1, vth, vl, vh, derate, steps=EAGER):
         t0 = tv + torch.log(1.0 - vth2) * rd2 * ceff0 - vth2 * dt
         x = torch.stack([t0, dt, ceff0], 1)
         conv = torch.zeros_like(ceff0, dtype=torch.bool); fail = torch.zeros_like(conv)
-        for _ in range(NEWTON_ITER):
-            x, conv, fail = steps.newton(x, conv, fail, order3, tb, sl_, rd2, ct2, vth2, vl2, vh2, de2, A2, B2, D2, p12, p22)
+        x, conv, fail = _iterate(steps.newton, (x, conv, fail),
+                                 (order3, tb, sl_, rd2, ct2, vth2, vl2, vh2, de2, A2, B2, D2, p12, p22), NEWTON_ITER,
+                                 lambda st: ~(st[1] | st[2]))
         t0, dt, ce = x[:, 0], x[:, 1], x[:, 2]
         fail = fail | ~conv | (dt <= 0) | (ce < 0) | (ce > ct2 + 1e-6)
         return t0, dt, ce, fail
