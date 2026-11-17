@@ -30,7 +30,7 @@ d = attar.load('after_fp/orfs_asap7/aes', device='cuda')   # downloaded from the
 ```
 
 Python 3.8 or newer, with PyTorch (a CUDA GPU for the speed; everything also runs on the CPU). The designs come from
-the [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) on the Hugging Face Hub (246 designs, 731 MB
+the [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) on the Hugging Face Hub (262 designs, 1.1 GB
 in all); `attar.zoo(remote=True)` lists them. The latest code: `pip install git+https://github.com/RayChang987/Attar`.
 
 - The first timing run on a GPU machine compiles the timer's Triton kernels (about two minutes, once); later runs
@@ -62,7 +62,7 @@ in all); `attar.zoo(remote=True)` lists them. The latest code: `pip install git+
 
 ## Roadmap
 
-<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement) and placement (placer, legalizer, PDN-aware refinement), all done. Right, Evaluation: HPWL, global routing OVF and timing done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2015, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs), Nangate45 (8 placement, 8 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement), placement (placer, legalizer, PDN-aware refinement, detailed placement) and routing (global router), all done. Right, Evaluation: HPWL, global routing OVF, timing and GR parasitics done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
 
 ### Evaluation
 
@@ -132,7 +132,7 @@ with the PDN its flow drew.
 | the answer | target utilization (the die), IO pin placement, macro placement | standard-cell placement; then timing optimization and global routing on the same floorplan |
 | one call | `d.floorplan(utilization=0.6)` | `d.place()` |
 | goes out as | a DEF: your flow draws the PDN and places | a DEF: your flow routes and times |
-| in the zoo | 55 designs, 6 suites | 191 designs, 16 suites |
+| in the zoo | 63 designs, 7 suites | 199 designs, 17 suites |
 
 Attar measures wirelength, congestion (RUDY, GROV), density, legality and timing; see the [roadmap](#roadmap).
 
