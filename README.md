@@ -88,8 +88,9 @@ Each evaluator against OpenROAD on the same netlist and placement; full tables i
 | **Macro placement** | `before_fp` | `naive.place_macros` | mixed-size global placement, then macros legalized on their routing tracks with a halo |
 | **IO placement** | `before_fp` | `naive.place_io` | IO pins on the die boundary, net-aware once cells are placed |
 | **Placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the source flow's own target density; `routability=True`: DREAMPlace's cell inflation |
-| **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal |
+| **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal; incremental on a placement to repair (`cells=`: only those move; a legal input comes out unchanged) |
 | **PDN-aware refinement** | `after_fp` | inside `naive.legalize` | row DP and repair that keep cells clear of the PDN |
+| **Detailed placement** | `after_fp` | `naive.detailed_place` | OpenROAD dpo's global swap, vertical swap, local reordering and cell flipping, batched on the GPU; keeps the placement legal |
 
 `d.floorplan(utilization=...)` sizes the die (`naive.make_die`), then places the IO pins and the macros;
 `d.place()` is global placement plus legalization.

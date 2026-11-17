@@ -4,7 +4,8 @@ The Evaluator is the second main object next to Design. Each metric declares the
 follows from what the design has, as for capabilities. Implemented:
   hpwl, star_wirelength, steiner_wirelength (RSMT estimate, see attar/metrics.py), rudy (congestion map),
   density_overflow (ePlace overflow), legality (rows, sites, overlaps; multi-row aware), timing (attar.timing.sta: WNS,
-  TNS, hold, on placement parasitics), gr_overflow (GROV: RUDY demand against OpenROAD's gcell capacities).
+  TNS, hold, on placement parasitics), gr_overflow (GROV: RUDY demand against OpenROAD's gcell capacities),
+  displacement (between two placements, as OpenROAD dpl reports it).
 Listed for later: global-route wirelength and overflow, pin access, thermal.
 
 Speed: one HPWL call is ~0.15 ms up to ~1M pins (launch-bound). Exact speed-ups:
@@ -28,6 +29,7 @@ METRICS = {
     'rudy': (WL | {'floorplan.die'}, True),
     'density_overflow': ({'cell_geometry', 'placement', 'floorplan.die'}, True),
     'legality': ({'cell_geometry', 'placement', 'rows'}, True),
+    'displacement': ({'placement'}, True),
     'gr_wirelength': (WL | {'routing'}, False),
     'gr_overflow': (WL | {'routing', 'tracks', 'floorplan.die'}, True),
     'timing': (WL | {'pin_direction', 'timing'}, True),
@@ -220,9 +222,12 @@ class Evaluator:
             self._rows = (hb.item(), ys, x0, x1, sw)
         return self._rows
 
-    def legality(self, pos=None, tol=1e-3):
+    def legality(self, pos=None, tol=1e-3, per_cell=False, ignore=None):
         """Placement legality of the movable standard cells: on a row, on the site grid, inside the rows, no overlap
-        with any other cell or fixed object. Multi-row cells occupy k = height / row height consecutive rows."""
+        with any other cell or fixed object. Multi-row cells occupy k = height / row height consecutive rows.
+        per_cell: also 'illegal', a bool mask over the cells (the movable standard cells that break any of the rules;
+        with the design's positions, cells not placed yet count as illegal). ignore: cells (bool mask) left out as
+        obstacles: nothing counts as overlapping them (e.g. the cells about to be placed again)."""
         self._require('legality', pos)
         d = self.d
         p = d.pos if pos is None else pos
@@ -241,6 +246,8 @@ class Evaluator:
         # overlap: every placed object appears in each base row it spans; sort by (row, x); compare with the running
         # maximum right edge of the earlier objects in the same row
         obj = (~((d.flags & (TERMINAL | ASIDE)) != 0)) & (d.placed if pos is None else torch.ones_like(d.placed))
+        if ignore is not None:
+            obj = obj & ~ignore
         y0 = p[:, 1]; y1 = p[:, 1] + d.size[:, 1]
         from .rules.rails import rows_spanned
         rlo, rhi = rows_spanned(ys, hb, y0, y1)                           # every row the object overlaps
@@ -295,7 +302,32 @@ class Evaluator:
             res['pdn_blocked'] = int((pdn.conflicts(self.d, pos=p) & mv).sum())
         res['legal'] = res['off_row'] == res['outside_rows'] == res['off_site'] == res['overlapping'] == res['wrong_rail'] \
             == res.get('pdn_blocked', 0) == 0
+        if per_cell:
+            ill = ~inside | ~on_site | bad | wrong_rail
+            if pos is None:
+                ill = ill | ~d.placed
+            if 'pdn' in self.d.facts:
+                from .rules import pdn
+                ill = ill | pdn.conflicts(self.d, pos=p)
+            res['illegal'] = mv & ill
         return res
+
+    def displacement(self, pos, ref=None, cells=None):
+        """Displacement between two placements, as OpenROAD's detailed placer reports it (dpl Opendp::disp,
+        findDisplacementStats): per cell the Manhattan distance of its lower-left corner, |dx| + |dy| (um).
+        pos: the placement to measure; ref: the one it is measured from (default: the design's current positions);
+        cells: the cells counted (bool mask or indices; default: the movable cells). Returns {'total', 'mean', 'max',
+        'cells', 'moved'} in um (Python floats)."""
+        self._require('displacement', None)
+        d = self.d
+        ref = d.pos if ref is None else ref
+        sel = d.movable if cells is None else cells
+        if sel.dtype == torch.bool:
+            sel = torch.nonzero(sel).flatten()
+        dd = (pos[sel].double() - ref[sel].double()).abs().sum(1)
+        n = len(sel)
+        return {'total': float(dd.sum()), 'mean': float(dd.mean()) if n else 0.0, 'max': float(dd.max()) if n else 0.0,
+                'cells': n, 'moved': int((dd > 0).sum())}
 
     # -- report -------------------------------------------------------------------------------------------------------
     # metric -> its value in a report (plain Python numbers and dicts; maps left out)
@@ -306,6 +338,8 @@ class Evaluator:
         'rudy': lambda ev, pos: {k: v for k, v in ev.rudy(pos).items() if k != 'map'},
         'density_overflow': lambda ev, pos: ev.density_overflow(pos),
         'legality': lambda ev, pos: ev.legality(pos),
+        'displacement': lambda ev, pos: ev.displacement(pos) if pos is not None else {'total': 0.0, 'mean': 0.0,
+                                                                                         'max': 0.0},
         'timing': lambda ev, pos: ev.d.timing(pos).summary(),
         'gr_overflow': lambda ev, pos: ev.d.gr_overflow(pos),
     }

@@ -165,8 +165,21 @@ def _solve_class(gx, gy, w, NB, band_y, band_h, roff, seg_row, s0, s1, sw, col_c
 
 
 def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, verbose=True, snapshot='naive_lg',
-             macro_halo=0.0):
-    """Legalize the movable standard cells of d in place (d.pos, d.orient). Returns statistics."""
+             macro_halo=0.0, cells=None, incremental=None):
+    """Legalize the movable standard cells of d in place (d.pos, d.orient). Returns statistics.
+
+    Two modes (stats['mode']):
+      global       every movable cell is placed again from its current (e.g. global placement) position: bands,
+                   column balancing, segment spill, isotonic packing, fill, improve (the module docstring).
+      incremental  as OpenROAD's detailed placer with its initial cells kept (dpl -incremental, diamondDPL): every
+                   movable cell that is legal where it stands, and not named in `cells`, keeps its place and orientation;
+                   the others go to the nearest free spot their rails allow (tallest first, conflicts to the nearest),
+                   then move nearer to where they were while a free spot is closer (only they move). An input that
+                   is already legal comes out unchanged.
+    cells: movable cells to legalize again even if legal (bool mask over the cells or indices), e.g. the cells an
+    optimizer moved or resized; giving it selects the incremental mode unless incremental=False.
+    incremental: None (default) chooses: incremental when `cells` is given or when at least half of the movable cells
+    are legal where they stand (a placement to repair, not to make); True / False force a mode."""
     d.require('legalize')
     t0 = time.time()
     dev = d.device
@@ -185,6 +198,28 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
     pos = d.pos.clone()
     obst = torch.nonzero(~d.movable & ((flags & (TERMINAL | ASIDE)) == 0)).flatten()
     stats = {'classes': {}}
+    # which mode: the cells to place again (move) and the ones kept where they stand
+    move = torch.ones(len(mv), dtype=torch.bool, device=dev)
+    if incremental is not False and bool(d.placed[mv].any()):
+        from ..evaluator import Evaluator
+        want = torch.zeros(len(d.pos), dtype=torch.bool, device=dev)
+        if cells is not None:
+            cm = torch.as_tensor(cells, device=dev)
+            if cm.dtype == torch.bool:
+                want |= cm
+            else:
+                want[cm.long()] = True
+        # a cell overlapping only cells named in `cells` keeps its place (those move); without `cells`, both cells of
+        # an overlapping pair are placed again (OpenDP setInitialGridCells)
+        ill = Evaluator(d).legality(per_cell=True, ignore=want if cells is not None else None)['illegal'][mv]
+        move = ill | want[mv]
+        if incremental is None:
+            incremental = cells is not None or int(move.sum()) * 2 <= len(mv)
+    incremental = bool(incremental)
+    stats['mode'] = 'incremental' if incremental else 'global'
+    if not incremental:
+        move[:] = True
+    stats['moved_cells'] = int(move.sum())
 
     # gaps between row segments (rows cut around macros) block like obstacles
     g_r, g_x0, g_x1 = RL.row_gaps(d, ys)
@@ -221,7 +256,7 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
     keep_ok = torch.zeros(len(mv), dtype=torch.bool, device=dev)
     flip_ok = torch.zeros(len(mv), dtype=torch.bool, device=dev)
     placed = torch.ones(len(mv), dtype=torch.bool, device=dev)
-    for k, cb, ct in groups:
+    for k, cb, ct in (groups if not incremental else []):
         sel = (k_mv == k) & (sig_b == cb) & (sig_t == ct)
         cls = mv[sel]
         kk = torch.tensor([k], device=dev)
@@ -284,10 +319,29 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
     gy = pos0[mv, 1]
     cur_x = ((pos[mv, 0] - gx0) / sw).round().long()
     cur_r = torch.searchsorted(ys, pos[mv, 1] - 0.25 * hb).clamp(max=R - 1)
-    # cells that did not fit their class: nearest free spot anywhere (window grows until found)
-    if not bool(placed.all()):
-        cur_x, cur_r, placed = _fill(space, cur_x, cur_r, placed, gxs, gy, k_mv, wg, allowed_rows, stats=stats)
-    if improve:
+    if incremental:
+        if not bool(move.any()):
+            stats.update({'seconds': time.time() - t0, 'mean_disp': 0.0, 'max_disp': 0.0, 'cells': len(mv),
+                          'overfull_segments': 0})
+            d.snapshot(snapshot)
+            if verbose:
+                print('  lg: incremental, all %d cells legal where they stand: unchanged, %.2fs' % (len(mv), stats['seconds']))
+            return stats
+        # the kept cells are placed; the others go, tallest class first (OpenDP: multi-row cells first), to the
+        # nearest free spot their rails allow, then nearer to where they were (the kept cells are at their targets,
+        # so only the moved ones move)
+        placed = ~move
+        for kk in sorted(set(k_mv[move].tolist()), reverse=True):
+            todo_k = move & (k_mv == kk)
+            sub = torch.nonzero(placed | todo_k).flatten()      # the classes not done yet are not there yet
+            cx, cr, pk = cur_x[sub].clone(), cur_r[sub].clone(), placed[sub].clone()
+            al = (allowed_rows[0], allowed_rows[1][sub])
+            cx, cr, pk = _fill(space, cx, cr, pk, gxs[sub], gy[sub], k_mv[sub], wg[sub], al, stats=stats)
+            cur_x[sub], cur_r[sub] = cx, cr
+            placed[sub] = pk
+        if improve:
+            cur_x, cur_r = _improve(space, cur_x, cur_r, gxs, gy, k_mv, wg, allowed_rows, stats=stats)
+    if improve and not incremental:
         for rnd in range(passes):
             cur_x, cur_r = _improve(space, cur_x, cur_r, gxs, gy, k_mv, wg, allowed_rows, stats=stats)
             if rnd == passes - 1:
@@ -321,12 +375,14 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
         row_o = rorient[start_row]
         o = torch.where(keep_ok & ~flip_ok, torch.zeros_like(row_o), row_o)
         o = torch.where(flip_ok & ~keep_ok, torch.full_like(row_o, 5), o)
-        orient[mv] = o if RI['known'] else torch.where(k_mv % 2 == 1, row_o, orient[mv])
+        o = o if RI['known'] else torch.where(k_mv % 2 == 1, row_o, orient[mv])
+        orient[mv] = torch.where(move, o, orient[mv])      # incremental: the kept cells keep their orientation
     d.pos = pos
     d.orient = orient
     d.update_orient()
     if 'pdn' in d.facts:            # signal pins clear of the PDN's via metal (fact 'pdn'): a GPU row DP, then the few left
-        stats['pdn_dp'] = _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw)
+        if not incremental:         # incremental: only the repair, which moves the conflicting cells (and what they push)
+            stats['pdn_dp'] = _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw)
         stats['pdn'] = _pdn_repair(d, space, mv, cur_x, cur_r, k_mv, wg, allowed_rows, rorient, ys, gx0, sw, placed)
     d.snapshot(snapshot)
     pos = d.pos
@@ -339,7 +395,10 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
                            % (len(bad), kinds[:6], [d.names['cells'][i] for i in bad[:3].tolist()]))
     stats.update({'seconds': time.time() - t0, 'mean_disp': disp.mean().item(), 'max_disp': disp.max().item(),
                   'cells': len(mv), 'overfull_segments': sum(c.get('overfull_segments', 0) for c in stats['classes'].values())})
-    if verbose:
+    if verbose and incremental:
+        print('  lg: incremental, %d of %d cells placed again, mean displacement %.3f, max %.3f, %.2fs'
+              % (stats['moved_cells'], len(mv), stats['mean_disp'], stats['max_disp'], stats['seconds']))
+    elif verbose:
         print('  lg: %d cells in height classes %s, mean displacement %.3f, max %.3f, %.2fs'
               % (len(mv), {k: v['cells'] for k, v in stats['classes'].items()}, stats['mean_disp'], stats['max_disp'],
                  stats['seconds']))
