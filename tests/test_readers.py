@@ -42,6 +42,36 @@ class LefDefTest(unittest.TestCase):
         self.assertTrue(attar.Evaluator(need('after_fp/iccad2025/des')).legality()['legal'])
 
 
+class DecimalCoordinateTest(unittest.TestCase):
+    """Encounter writes component locations as decimals ("( 7214680.000000 1402200.000000 )", ICCAD 2015)."""
+
+    def _def(self, x, y):
+        import os
+        import tempfile
+        text = ('VERSION 5.8 ;\nDESIGN t ;\nUNITS DISTANCE MICRONS 2000 ;\nDIEAREA ( 0 0 ) ( 100000 100000 ) ;\n'
+                'COMPONENTS 1 ;\n- u1 INV_X1\n   + PLACED ( %s %s ) N ;\nEND COMPONENTS\nEND DESIGN\n' % (x, y))
+        fd, path = tempfile.mkstemp(suffix='.def')
+        with os.fdopen(fd, 'w') as f:
+            f.write(text)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def test_whole_decimals_are_placed(self):
+        from attar.io.deffile import read_def
+        c = read_def(self._def('7214680.000000', '1402200.000000'))['comps']
+        self.assertEqual(c[0][2:5], ('PLACED', 7214680, 1402200))
+
+    def test_fractional_coordinates_are_refused(self):
+        from attar.io.deffile import read_def
+        with self.assertRaises(ValueError):
+            read_def(self._def('10.5', '20'))
+
+    def test_iccad2015_given_placement_is_kept(self):
+        d = need('after_fp/iccad2015/superblue16')
+        self.assertTrue(bool(d.placed[d.movable].all()))
+        self.assertEqual(d.manifest['netlist_from']['nets'], 999902)
+
+
 class PinDirectionTest(unittest.TestCase):
     def test_lef_def_every_net_has_one_driver(self):
         import torch

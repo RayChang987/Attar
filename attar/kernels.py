@@ -121,14 +121,15 @@ def default_bins(n_objects, lo=16, hi=1024):
 
 
 # -- boxes against boxes (macros) -------------------------------------------------------------------------------------
-def overlapping_pairs(p, size, halo=0.0, chunk=2048):
-    """The number of overlapping pairs (boxes grown by halo / 2 on each side), in blocks of rows: memory O(chunk n)."""
+def overlapping_pairs(p, size, halo=0.0, chunk=2048, tol=1e-6):
+    """The number of overlapping pairs (boxes grown by halo / 2 on each side; an overlap must exceed tol in both
+    directions), in blocks of rows: memory O(chunk n)."""
     c = p + size / 2
     n = len(p)
     total = 0
     for i in range(0, n, chunk):
         ci, si = c[i:i + chunk], size[i:i + chunk]
-        ov = ((si[:, None] + size[None]) / 2 + halo - (ci[:, None] - c[None]).abs() > 1e-6).all(2)
+        ov = ((si[:, None] + size[None]) / 2 + halo - (ci[:, None] - c[None]).abs() > tol).all(2)
         j = torch.arange(n, device=p.device)
         ov &= j[None] > torch.arange(i, i + len(ci), device=p.device)[:, None]       # each pair once
         total += int(ov.sum())

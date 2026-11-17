@@ -262,9 +262,13 @@ class Design:
                 if bool(o.any()):
                     k = int(o.sum()); problems.append('%d macro%s outside the %s' % (k, 's' * (k > 1), 'core' if ours else 'die'))
                 ov = 0
+                # float32 positions on a large die are coarse (superblue, 5.6 mm: 0.0005 um steps): macros that only
+                # touch must not count, so an overlap has to exceed two float32 steps at the die's extent
+                ext = float(self.die_box[:, 2:].abs().max())
+                tol = max(1e-6, 2 * float(np.spacing(np.float32(ext))))
                 for die in torch.unique(self.cell_die[mac]).tolist():
                     m = self.cell_die[mac] == die
-                    ov += overlapping_pairs(q[m], s[m])
+                    ov += overlapping_pairs(q[m], s[m], tol=tol)
                 if ov:
                     problems.append('%d overlapping macro pair%s' % (ov, 's' * (ov > 1)))
         if self.io is not None and len(self.io):

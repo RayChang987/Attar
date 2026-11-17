@@ -8,7 +8,18 @@ import re
 ORIENTS = ['N', 'S', 'W', 'E', 'FN', 'FS', 'FW', 'FE']
 ORIENT_ID = {o: i for i, o in enumerate(ORIENTS)}
 
-_PLACE = re.compile(r'\+\s*(PLACED|FIXED|COVER)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*(\w+)')
+# coordinates may be written as decimals (Encounter: "( 7214680.000000 1402200.000000 )"); they must be whole numbers
+_PLACE = re.compile(r'\+\s*(PLACED|FIXED|COVER)\s*\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)\s*(\w+)')
+
+
+def _int(v):
+    """A DEF coordinate (an integer, possibly written as a decimal with a zero fraction) as an int."""
+    f = float(v)
+    if f != int(f):
+        raise ValueError('DEF coordinate %s is not a whole number of database units' % v)
+    return int(f)
+
+
 _UNPLACED = re.compile(r'\+\s*UNPLACED')
 
 
@@ -63,7 +74,7 @@ def read_def(path):
                 for s in _statements(f, 'END COMPONENTS'):
                     t = s.split()
                     m = _PLACE.search(s)
-                    st, x, y, o = (m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)) if m else ('UNPLACED', 0, 0, 'N')
+                    st, x, y, o = (m.group(1), _int(m.group(2)), _int(m.group(3)), m.group(4)) if m else ('UNPLACED', 0, 0, 'N')
                     d['comps'].append((t[1], t[2], st, x, y, o))
             elif line.startswith('PINS'):
                 for s in _statements(f, 'END PINS'):
@@ -72,7 +83,7 @@ def read_def(path):
                     m = _PLACE.search(s)
                     x = y = 0; st = 'UNPLACED'
                     if m:
-                        st, x, y, o = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
+                        st, x, y, o = m.group(1), _int(m.group(2)), _int(m.group(3)), m.group(4)
                         r = re.search(r'\+\s*LAYER\s+\S+\s*(?:MASK\s+\d+\s*)?\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)', s)
                         if r:
                             a, b, c, e = (int(v) for v in r.groups())
