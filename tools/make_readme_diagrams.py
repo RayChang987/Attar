@@ -126,15 +126,18 @@ def roadmap():
     PL, FP = K['cream'], K['brick']                       # placement / floorplan benchmarks
     DATA, NAIVE, EVAL = K['cream'], K['orange'], K['gold']
     data = [('Contest benchmarks', [('ISPD 2005', 8, PL), ('ISPD 2015', 20, PL), ('ISPD 2018', 10, PL),
-                                    ('ISPD 2019', 10, PL), ('ISPD 2024', 5, PL), ('ICCAD 2025', 13, PL),
-                                    ('GSRC placement', 4, PL), ('MCNC', 10, FP), ('GSRC blocks', 12, FP),
-                                    ('IBM-HB+ (ISPD 2006)', 28, FP)]),
+                                    ('ISPD 2019', 10, PL), ('ISPD 2024', 5, PL), ('ICCAD 2015', 8, PL),
+                                    ('ICCAD 2025', 13, PL), ('GSRC placement', 4, PL), ('MCNC', 10, FP),
+                                    ('GSRC blocks', 12, FP), ('IBM-HB+ (ISPD 2006)', 28, FP)]),
             ('ASAP7', [(15, PL), (5, FP)]),                  # stops here: design counts only
+            ('Nangate45', [(8, PL), (8, FP)]),
             ('NS3K', [(99, PL)])]
     naive = [('Floorplan', [('Packing', 'Done'), ('Macro placement', 'Done'), ('IO placement', 'Done')]),
-             ('Placement', [('Placer', 'Done'), ('Legalizer', 'Done'), ('PDN-aware refinement', 'Done')])]
-    ev = [('HPWL', 'Done'), ('Global routing OVF', 'Done'), ('Timing', 'Done'), ('Blocked pin checking', 'Not yet'),
-          ('Detailed routing', "Won't have"), ('DRV checks', "Won't have")]
+             ('Placement', [('Placer', 'Done'), ('Legalizer', 'Done'), ('PDN-aware refinement', 'Done'),
+                            ('Detailed placement', 'Done')]),
+             ('Routing', [('Global router', 'Done')])]
+    ev = [('HPWL', 'Done'), ('Global routing OVF', 'Done'), ('Timing', 'Done'), ('GR parasitics', 'Done'),
+          ('Blocked pin checking', 'Not yet'), ('Detailed routing', "Won't have"), ('DRV checks', "Won't have")]
 
     FL, FM, FC = 23, 23, 27                               # font: leaf, middle, category
     PITCH, LH, GAP = 58, 46, 30
@@ -151,7 +154,8 @@ def roadmap():
     W = x_nleaf + LW + 50
     top = 50
     h_left = (len(data[0][1]) + len(data) - 2) * PITCH + GAP
-    h_right = 11 * PITCH + 2 * GAP
+    n_right = sum(len(k) for _, k in naive) + len(ev)       # leaf rows on the right: naive groups, then evaluation
+    h_right = (n_right - 1) * PITCH + len(naive) * GAP
     Ht = max(h_left, h_right)
     cy = top + LH / 2 + Ht / 2
     H = int(top + LH + Ht + 160)
@@ -251,18 +255,20 @@ def roadmap():
     # ---- right: Naive Engine, then Evaluation
     y0 = cy - h_right / 2
     mids = []
+    row = 0
     for g, (_gname, kids) in enumerate(naive):
-        ys = [y0 + (g * 3 + i) * PITCH + g * GAP for i in range(3)]
-        my = ys[1]
+        ys = [y0 + (row + i) * PITCH + g * GAP for i in range(len(kids))]
+        row += len(kids)
+        my = (ys[0] + ys[-1]) / 2
         mids.append(my)
         for yy, (label, st) in zip(ys, kids):
             link(x_rmid + MW_R, my, x_nleaf, yy, NAIVE, 2.2)
             leaf(x_nleaf, yy, LW, label, NAIVE, st)
-    ny = (mids[0] + mids[1]) / 2
+    ny = (mids[0] + mids[-1]) / 2
     for g, (gname, _) in enumerate(naive):
         link(x_rcat + CW_R, ny, x_rmid, mids[g], NAIVE, 2.8)
         ring(x_rmid, mids[g], MW_R, 50, gname, NAIVE, FM)
-    eys = [y0 + (6 + i) * PITCH + 2 * GAP for i in range(6)]
+    eys = [y0 + (row + i) * PITCH + len(naive) * GAP for i in range(len(ev))]
     ey = (eys[0] + eys[-1]) / 2
     for yy, (label, st) in zip(eys, ev):
         link(x_rcat + CW_R, ey, x_eleaf, yy, EVAL, 2.2)

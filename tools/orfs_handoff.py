@@ -9,7 +9,8 @@ skips ORFS's macro placer. place_pin leaves the pins FIXED, so ORFS's place_pins
 -place_ios (3_3) find nothing to place; kept() checks the final DEF. ORFS continues with tapcells, PDN, global
 placement, resizing, CTS and routing; Attar's cell placement, if any, is not used.
 
-usage: orfs_handoff.py <design> <run dir under orfs_runs/, e.g. riscv32i_base> <exported DEF | baseline> [tag]
+usage: orfs_handoff.py <design | platform/design> <run dir under orfs_runs/, e.g. riscv32i_base or
+                       nangate45/ariane133_base> <exported DEF | baseline> [tag]
                        [--cores 5] [--make-args "LEC_CHECK=0"] [--keep] [--until 3_5_place_dp]
        baseline: no Attar floorplan, ORFS makes its own (the reference to compare with).
        --until: stop at a make target and check the result there (check_placement, max slew / cap / fanout
@@ -29,10 +30,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 from attar.io.deffile import read_def  # noqa: E402
-from orfs_roundtrip import RUNS, design_config, metrics, openroad, orfs, w  # noqa: E402
+from orfs_roundtrip import PLATFORMS, RUNS, design_config, flow_dir, metrics, openroad, orfs, rt_dir, split, w  # noqa: E402
 
-PLATFORM = '/OpenROAD-flow-scripts/flow/platforms/asap7'
-SITE = 'asap7sc7p5t'
+# the platform's track script (container path): asap7 keeps it under openRoad/
+MAKE_TRACKS = {'asap7': 'asap7/openRoad/make_tracks.tcl'}
 ORIENT = {'N': 'R0', 'S': 'R180', 'W': 'R90', 'E': 'R270', 'FN': 'MY', 'FS': 'MX', 'FW': 'MYR90', 'FE': 'MXR90'}
 
 
@@ -61,7 +62,15 @@ def def_pins(path):
     return out
 
 
-def apply_tcl(src_def, out_def, odb_in, odb_out):
+def row_site(def_path):
+    """The site name of the DEF's rows (the first ROW statement)."""
+    for line in open(def_path, errors='replace'):
+        if line.startswith('ROW '):
+            return line.split()[2]
+    raise ValueError('%s has no rows' % def_path)
+
+
+def apply_tcl(src_def, out_def, odb_in, odb_out, platform='asap7'):
     """OpenROAD script applying the floorplan of out_def (vs the 2_1 source DEF src_def) to odb_in."""
     s, o = read_def(src_def), read_def(out_def)
     dbu = o['dbu']
@@ -73,8 +82,8 @@ def apply_tcl(src_def, out_def, odb_in, odb_out):
         site_h = (sorted({r[2] for r in o['rows']})[1] - sorted({r[2] for r in o['rows']})[0]) if len(o['rows']) > 1 else 0
         ry1 = max(r[2] for r in o['rows']) + site_h
         L.append('initialize_floorplan -die_area {%s} -core_area {%s} -site %s' % (
-            ' '.join(um(v) for v in o['die']), ' '.join(um(v) for v in (rx0, ry0, rx1, ry1)), SITE))
-        L.append('source %s/openRoad/make_tracks.tcl' % PLATFORM)
+            ' '.join(um(v) for v in o['die']), ' '.join(um(v) for v in (rx0, ry0, rx1, ry1)), row_site(src_def)))
+        L.append('source %s%s' % (PLATFORMS, MAKE_TRACKS.get(platform, platform + '/make_tracks.tcl')))
     pins = def_pins(out_def)
     for name, (layer, (x0, y0, x1, y1)) in sorted(pins.items()):
         L.append('place_pin -pin_name {%s} -layer %s -location {%s %s} -pin_size {%s %s}' % (
@@ -96,20 +105,24 @@ def prepare(d, base, out_def, tag):
     work = os.path.join(RUNS, 'rt', '%s_fp' % d, tag)
     shutil.rmtree(work, ignore_errors=True)
     shutil.copytree(base, work, symlinks=True)
-    res = os.path.join(work, 'results/asap7', d, 'base')
+    res = flow_dir(work)
     for sub in ('results', 'logs', 'reports', 'objects'):
-        for f in glob.glob(os.path.join(work, sub, 'asap7', d, 'base', '*')):
+        try:
+            sub_dir = flow_dir(work, sub)
+        except FileNotFoundError:                     # a run may have no objects/ or reports/ of its own
+            continue
+        for f in glob.glob(os.path.join(sub_dir, '*')):
             b = os.path.basename(f)
             if b[:1] in '3456' or b.startswith(('2_2', '2_3', '2_4', '2_floorplan', 'route', 'final', 'cts', 'drt', 'congestion', 'rtlmp')):
                 os.remove(f) if os.path.isfile(f) or os.path.islink(f) else shutil.rmtree(f)
     if out_def is None:
         return work, {'baseline': True}
-    src_def = os.path.join(RUNS, 'rt', d, '2_1_floorplan.def')
+    src_def = os.path.join(rt_dir(d), '2_1_floorplan.def')
     od = os.path.join(work, 'attar_floorplan.def'); shutil.copy(out_def, od)
-    tcl, info = apply_tcl(src_def, od, w(os.path.join(base, 'results/asap7', d, 'base', '2_1_floorplan.odb')),
-                          w(os.path.join(res, '2_1_floorplan.odb')))
+    tcl, info = apply_tcl(src_def, od, w(os.path.join(flow_dir(base), '2_1_floorplan.odb')),
+                          w(os.path.join(res, '2_1_floorplan.odb')), platform=split(d)[0])
     open(os.path.join(work, 'attar_apply.tcl'), 'w').write(tcl)
-    log = openroad(tcl, '%s_%s_apply' % (d, tag))
+    log = openroad(tcl, '%s_%s_apply' % (d.replace('/', '_'), tag))
     info['openroad'] = [l for l in log.splitlines() if l.startswith('attar:') or 'ERROR' in l or 'WARNING' in l][:20]
     shutil.copy(os.path.join(res, '2_1_floorplan.odb'), os.path.join(res, '2_2_floorplan_macro.odb'))
     open(os.path.join(res, '2_2_floorplan_macro.tcl'), 'w').write('# macros placed by Attar (attar_apply.tcl)\n')
@@ -145,7 +158,7 @@ def checks(d, work, stage, make_args=''):
     """Check the run at `stage` (an .odb in its results) in the flow's own environment (Liberty, SDC, RC):
     check_placement, max slew / capacitance / fanout violations (estimated parasitics), and the ERROR and WARNING
     messages of every stage log (by code)."""
-    res = os.path.join(work, 'results/asap7', d, 'base')
+    res = flow_dir(work)
     sdc = next((f for f in ('3_place.sdc', '2_floorplan.sdc', '2_1_floorplan.sdc') if os.path.exists(os.path.join(res, f))), None)
     script = os.path.join(work, 'attar_check.tcl')
     open(script, 'w').write(CHECK_TCL % {'odb': stage + '.odb', 'sdc': sdc})
@@ -162,7 +175,7 @@ def checks(d, work, stage, make_args=''):
     if not out['check_placement']:
         out['check_log'] = [l for l in log.splitlines() if 'ATTAR_CHECK' in l or 'DPL-' in l][:10]
     msgs = {}
-    for f in sorted(glob.glob(os.path.join(work, 'logs/asap7', d, 'base', '[23]_*.log'))):
+    for f in sorted(glob.glob(os.path.join(flow_dir(work, 'logs'), '[23]_*.log'))):
         for line in open(f, errors='replace'):
             m = re.match(r'\[(ERROR|WARNING) (\w+-\d+)\]', line)
             if m:
@@ -174,9 +187,9 @@ def checks(d, work, stage, make_args=''):
 
 def kept(d, work, out_def):
     """Did ORFS keep Attar's macros and IO pins? Compare the final DEF (or the checked stage's) with the hand-off DEF."""
-    fin = os.path.join(work, 'results/asap7', d, 'base', '6_final.def')
+    fin = os.path.join(flow_dir(work), '6_final.def')
     if not os.path.exists(fin):
-        fin = os.path.join(work, 'results/asap7', d, 'base', 'attar_check.def')
+        fin = os.path.join(flow_dir(work), 'attar_check.def')
     if not os.path.exists(fin):
         return None
     f, o = read_def(fin), read_def(out_def)
@@ -190,7 +203,7 @@ def kept(d, work, out_def):
 
 
 def gpl_hpwl(work, d):
-    log = os.path.join(work, 'logs/asap7', d, 'base', '3_3_place_gp.log')
+    log = os.path.join(flow_dir(work, 'logs'), '3_3_place_gp.log')
     if os.path.exists(log):
         for line in open(log):
             if 'Final HPWL' in line:

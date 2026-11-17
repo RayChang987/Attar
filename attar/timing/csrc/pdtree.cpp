@@ -387,4 +387,51 @@ int attar_pd_rc(int n_nets, const int64_t* ptr, const int64_t* drv, const int32_
   return 0;
 }
 
+// Per net (CSR ptr over points): the Prim-Dijkstra tree's edges (steinerized, alpha) between the points and its
+// Steiner points, as (x0, y0, x1, y1), from the first point outward. Pass 1 (out == nullptr): counts per net into
+// cnt; pass 2: writes the edges at the offsets the caller made from cnt. Zero-length edges are dropped.
+int attar_pd_edges(int n_nets, const int64_t* ptr, const int32_t* x, const int32_t* y, float alpha, int64_t* cnt,
+                   const int64_t* off, int32_t* out, int threads) {
+#pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+  for (int k = 0; k < n_nets; ++k) {
+    const int64_t b = ptr[k];
+    const int n = (int)(ptr[k + 1] - b);
+    if (n < 2) { if (!out) cnt[k] = 0; continue; }
+    vector<int> ord(n);
+    std::iota(ord.begin(), ord.end(), 0);
+    std::stable_sort(ord.begin(), ord.end(), [&](int i, int j) {
+      return std::make_pair(x[b + i], y[b + i]) < std::make_pair(x[b + j], y[b + j]);
+    });
+    vector<int> X(n), Y(n);
+    int root = 0;
+    for (int i = 0; i < n; ++i) {
+      X[i] = x[b + ord[i]]; Y[i] = y[b + ord[i]];
+      if (ord[i] == 0) root = i;
+    }
+    Graph g;
+    vector<int> PX, PY;
+    pd_tree(X, Y, root, alpha, g, PX, PY);
+    const int N = g.nodes.size();
+    vector<char> seen(N, 0);
+    vector<int> order;
+    order.reserve(N);
+    order.push_back(root); seen[root] = 1;
+    int64_t m = 0;
+    int32_t* o = out ? out + 4 * off[k] : nullptr;
+    for (size_t h = 0; h < order.size(); ++h) {
+      const int u = order[h];
+      for (int a = g.nodes[u].first_out; a != -1; a = g.arcs[a].next_out) {
+        const int w = g.running(a);
+        if (seen[w]) continue;
+        seen[w] = 1; order.push_back(w);
+        if (PX[w] == PX[u] && PY[w] == PY[u]) continue;
+        if (o) { o[4 * m] = PX[u]; o[4 * m + 1] = PY[u]; o[4 * m + 2] = PX[w]; o[4 * m + 3] = PY[w]; }
+        ++m;
+      }
+    }
+    if (!out) cnt[k] = m;
+  }
+  return 0;
+}
+
 }  // extern "C"

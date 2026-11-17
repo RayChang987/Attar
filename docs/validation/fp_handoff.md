@@ -52,3 +52,60 @@ swerv_wrapper are left out of `before_fp` until the floorplan engines handle the
 
 Reproduce: `tools/orfs_handoff.py <design> <design>_base <exported DEF | baseline> <tag> --until 3_5_place_dp
 --make-args LEC_CHECK=0`; each run writes `orfs_runs/results/<design>/handoff_<tag>_3_5_place_dp.json`.
+
+## nangate45 macro designs (`before_fp/orfs_nangate45`)
+
+The macro-heavy ORFS nangate45 designs (the macro-placement benchmarks of MaskPlace, ChiPFormer, ReMap and their
+successors), distilled at ORFS 2_1 and checked the same way (`tools/fp_handoff_sweep.py`). Their ORFS floorplans
+are sparse (19-30% utilization); in `before_fp` the utilization is the user's choice. The macro halo is each
+design's own minimum channel, which ORFS's macro placer reads from `RTLMP_MIN_CHANNEL_SIZE` and the zoo records as
+`macro_channel` (`d.floorplan()` uses it by default). With Attar's default 2.8 um halo, ORFS's PDN fails
+(PDN-0179) on the first design tried, ariane133, because the channels between macros are too narrow for the
+power grid.
+
+| design | floorplan | utilization | die (um) | halo (um) | PDN | check_placement | DRV slew / cap / fanout | macros, pins moved |
+| --- | --- | ---: | --- | ---: | :---: | :---: | --- | --- |
+| ariane133 | ORFS | 0.297 | | | ok | pass | 20 / 2 / 0 | |
+| ariane133 | Attar loose | 0.237 | 1302.3 x 1303.9 | 16 | ok | pass | 20 / 5 / 0 | 0, 0 |
+| ariane133 | Attar tight | 0.341 | 1145.1 x 1147.2 | 16 | **PDN-0179** | not reached | | |
+| ariane136 | ORFS | 0.186 | | | ok | pass | 10 / 1 / 0 | |
+| ariane136 | Attar loose | 0.148 | 1634.7 x 1638.6 | 24 | ok | pass | 10 / 0 / 0 | 0, 0 |
+| ariane136 | Attar tight | 0.213 | 1422.7 x 1425.8 | 24 | ok | pass | 10 / 3 / 0 | 0, 0 |
+| black_parrot | ORFS | 0.223 | | | ok | pass | 6 / 1 / 0 | |
+| black_parrot | Attar loose | 0.178 | 1449.6 x 1451.2 | 30 | ok | pass | 6 / 0 / 0 | 0, 0 |
+| black_parrot | Attar tight | 0.256 | 1253.7 x 1255.2 | 30 | ok | pass | 6 / 0 / 0 | 0, 0 |
+| bp_be_top | ORFS | 0.248 | | | ok | pass | 0 / 1 / 0 | |
+| bp_be_top | Attar loose | 0.198 | 810.6 x 813.4 | 20 | ok | pass | 0 / 0 / 0 | 0, 0 |
+| bp_be_top | Attar tight | 0.285 | 711.8 x 714.0 | 20 | ok | pass | 0 / 4 / 0 | 0, 0 |
+| bp_fe_top | ORFS | 0.202 | | | ok | pass | 0 / 2 / 0 | |
+| bp_fe_top | Attar loose | 0.161 | 704.4 x 706.5 | 20 | ok | pass | 0 / 2 / 0 | 0, 0 |
+| bp_fe_top | Attar tight | 0.231 | 628.4 x 630.9 | 20 | ok | pass | 0 / 25 / 0 | 0, 0 |
+| bp_multi_top | ORFS | 0.191 | | | ok | pass | 0 / 1 / 0 | |
+| bp_multi_top | Attar loose | 0.152 | 1192.5 x 1193.8 | 40 | ok | pass | 0 / 2 / 0 | 0, 0 |
+| bp_multi_top | Attar tight | 0.219 | 1048.5 x 1049.6 | 40 | ok | pass | 0 / 0 / 0 | 0, 0 |
+| swerv_wrapper | ORFS | 0.253 | | | ok | pass | 0 / 2 / 0 | |
+| swerv_wrapper | Attar loose | 0.202 | 1117.3 x 1119.0 | 24 | ok | pass | 0 / 1 / 0 | 0, 0 |
+| swerv_wrapper | Attar tight | 0.290 | 1010.5 x 1012.6 | 24 | ok | pass | 0 / 19 / 0 | 0, 0 |
+| mempool_group | ORFS | 0.247 | | | ok | pass | 0 / 0 / 0 | |
+| mempool_group | Attar loose | 0.197 | 1215.9 x 1219.0 | 20 | ok | pass | 0 / 1 / 0 | 0, 0 |
+| mempool_group | Attar tight | 0.283 | 1032.7 x 1037.0 | 20 | ok | pass | 0 / 2 / 0 | 0, 0 |
+
+**15 of 16 Attar floorplans** go through PDN, global and detailed placement and pass `check_placement`; ORFS keeps
+every macro and IO pin where Attar put them. 7 of the 15 have no more max-slew / cap / fanout violations than ORFS's
+own floorplan; the others add max-capacitance violations (estimated parasitics after detailed placement, before
+ORFS's later repair), most on the tight bp_fe_top (25 vs 2) and swerv_wrapper (19 vs 2). One floorplan went
+through the whole flow: ariane133 on ORFS's own die with the 16 um channel routes with 0 DRC (WNS -0.21 ns).
+
+**ariane133, tight:** ORFS's PDN cannot repair two channels between rows of SRAM macros. The macros keep the
+16.1 um channel, but the PDN's macro grids take 2 um on each side, and a core metal7 stripe (30 um pitch) runs
+through the remaining 11.6 um, which leaves 8.5 um where no repair strap fits (`set_debug_level PDN Channel 2`:
+every width and spacing fails to find an offset). An equally narrow channel with no stripe in it is repaired. So
+whether a channel is repairable depends on where the power grid's stripes fall, which Attar's macro legalizer
+does not know.
+
+**In the zoo:** all eight. ariane133 stays although its tight floorplan fails: the failure is a limit of the naive
+macro legalizer, not of the problem, and ariane133 is the most used macro-placement benchmark.
+
+Reproduce: `tools/fp_handoff_sweep.py nangate45/<design> ... --lanes 3 --cores 4`; floorplans and DEFs in
+`orfs_runs/handoff_sweep/nangate45/<design>/`, results in
+`orfs_runs/results/nangate45/<design>/handoff_<tag>_3_5_place_dp.json`.

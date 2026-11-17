@@ -69,6 +69,7 @@ class Design:
             self.manifest = json.load(f)
         self._names = None
         self._timer = None                    # attar.timing.sta.Timer, built by the first timing()
+        self._gr_timer = None                 # (routes, Timer) of the last timing(routes=...)
         self._cell_id = None                  # instance name -> index, built by the first lookup by name
         self.dropped = {}                     # facts an engine made stale: {fact: why}
         self.dbu = self.manifest['dbu']; self.scale = 1.0 / self.dbu
@@ -262,9 +263,13 @@ class Design:
                 if bool(o.any()):
                     k = int(o.sum()); problems.append('%d macro%s outside the %s' % (k, 's' * (k > 1), 'core' if ours else 'die'))
                 ov = 0
+                # float32 positions on a large die are coarse (superblue, 5.6 mm: 0.0005 um steps): macros that only
+                # touch must not count, so an overlap has to exceed two float32 steps at the die's extent
+                ext = float(self.die_box[:, 2:].abs().max())
+                tol = max(1e-6, 2 * float(np.spacing(np.float32(ext))))
                 for die in torch.unique(self.cell_die[mac]).tolist():
                     m = self.cell_die[mac] == die
-                    ov += overlapping_pairs(q[m], s[m])
+                    ov += overlapping_pairs(q[m], s[m], tol=tol)
                 if ov:
                     problems.append('%d overlapping macro pair%s' % (ov, 's' * (ov > 1)))
         if self.io is not None and len(self.io):
@@ -584,16 +589,32 @@ class Design:
         return torch.where(self.n_mask, w, torch.zeros_like(w)).sum()
 
     # -- timing and routing congestion --------------------------------------------------------------------------------
-    def timing(self, pos=None, crpr=True):
+    def timing(self, pos=None, crpr=True, routes=None):
         """Static timing at pos (default: the current placement): an attar.timing.sta.TimingResult with per-endpoint setup /
         hold slack, WNS / TNS. Needs the 'timing' fact (attar.timing.ir.attach). The timer is built once per design and
         kept; on CUDA a re-time is a CUDA-graph replay. crpr: with propagated clocks, remove clock reconvergence
-        pessimism (OpenSTA's default; False: sta::set_crpr_enabled 0)."""
+        pessimism (OpenSTA's default; False: sta::set_crpr_enabled 0).
+        routes: an attar.route.GlobalRoutes (d.global_route(), or OpenROAD's read with attar.route.read_segments): wire
+        parasitics from the routes, as OpenROAD's estimate_parasitics -global_routing (attar.timing.grpar), instead of
+        the placement's Steiner trees; one timer is kept for the last routes given."""
         self.require('sta')
         from .timing.sta import Timer
+        if routes is not None:
+            if getattr(self, '_gr_timer', None) is None or self._gr_timer[0] is not routes:
+                self._gr_timer = (routes, Timer(self, parasitics='global_routing', routes=routes))
+            return self._gr_timer[1].run(pos, crpr=crpr)
         if self._timer is None:
             self._timer = Timer(self)
         return self._timer.run(pos, crpr=crpr)
+
+    def global_route(self, pos=None, verbose=True, **kw):
+        """Global routing at pos (default: the current placement) on OpenROAD's gcell grid and capacities: attar.route.
+        global_route (pattern routing with negotiated rip-up and reroute, then layer assignment). Returns (routes, stats):
+        an attar.route.GlobalRoutes (wirelength as grt reports it: routes.wirelength(stats['tile'])) and the run's
+        wirelength, overflow, vias and times. Time the design on the routes with d.timing(routes=routes)."""
+        self.require('global_route', ignore=('placement',) if pos is not None else ())
+        from .route import global_route
+        return global_route(self, pos=pos, verbose=verbose, **kw)
 
     def propagate_clocks(self, clocks=None):
         """Time the clocks given (names; default: every clock with a source pin) as propagated, through their clock
@@ -690,6 +711,9 @@ class Design:
         if self._timer is not None:
             self._timer.release(why)
         self._timer = None
+        if getattr(self, '_gr_timer', None) is not None:     # its routes are stale too: route again
+            self._gr_timer[1].release(why)
+        self._gr_timer = None
 
     # -- names ----------------------------------------------------------------------------------------------------
     @property

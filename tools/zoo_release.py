@@ -33,6 +33,10 @@ SUITES = {
                  'ISPD 2019 contest (LEF/DEF)', 'academic benchmark'),
     'after_fp/ispd2024': ('ISPD 2024 GPU/ML-enhanced global routing contest, the smaller designs (ariane133_51/68, nvdla, '
                  'mempool_tile, bsg_chip) on Nangate45', 'ISPD 2024 contest (LEF/DEF)', 'academic benchmark'),
+    'after_fp/iccad2015': ('ICCAD 2015 CAD Contest problem C (incremental timing-driven placement), the 8 superblue '
+                  'designs at the contest placement, with timing (Late library, contest wire RC); nets from the '
+                  'contest Verilog', 'ICCAD 2015 contest, the DREAMPlace 4.0 copy (LEF/DEF, Verilog, Liberty, SDC)',
+                  'academic benchmark'),
     'after_fp/iccad2025': ('ICCAD 2025 CAD Contest problem C (incremental placement on ASAP7), public and hidden cases',
                   'ICCAD 2025 contest (LEF/DEF)', 'academic benchmark'),
     'after_fp/gsrc_place': ('GSRC Bookshelf placement examples (ibm05, p1Unit)', 'vlsicad.ucsd.edu GSRC Bookshelf',
@@ -51,6 +55,10 @@ SUITES = {
                        'Nangate45 (ORFS platform): Apache-2.0; designs: their ORFS licenses'),
     'before_fp/orfs_asap7': ('ORFS designs on ASAP7 at the floorplan stage (2_1): the die, IO pins and macros are the '
                              'answer; d.export writes the floorplan as a DEF for a flow that draws the PDN and goes on', 'ORFS runs', 'ASAP7: BSD-3-Clause; designs: their ORFS licenses'),
+    'before_fp/orfs_nangate45': ('ORFS\'s macro-placement designs on Nangate45 (ariane133/136, black_parrot, '
+                                 'bp_be/fe/multi_top, swerv_wrapper, mempool_group) at the floorplan stage (2_1); '
+                                 'macro_channel: ORFS\'s minimum macro channel', 'ORFS runs',
+                                 'Nangate45 (ORFS platform): Apache-2.0; designs: their ORFS licenses'),
     'after_fp/ns3k': ('Open designs placed on the i3dPDK_NS3K v1.1 generic GAAFET kit (Innovus enablement)',
              'i3dPDK_NS3K (github.com/i3dknu1/i3dPDK_NS3K)', 'CC BY-NC-SA 4.0 (i3dPDK_NS3K)'),
     **{'after_fp/ns3k_%s_u%d' % (p, u): (
@@ -111,7 +119,7 @@ not export. `d.status()` shows what a design can do.
 
 ## Timing and cell libraries
 
-{n_timing} designs (the ORFS, NS3K and ICCAD 2025 suites) carry timing: Liberty arcs, pin capacitances, the SDC's
+{n_timing} designs (the ORFS, NS3K, ICCAD 2015 and ICCAD 2025 suites) carry timing: Liberty arcs, pin capacitances, the SDC's
 clocks and I/O delays, and wire RC, distilled, so `d.timing()` / `d.timing_report()` run with no .lib or .sdc at hand.
 Their cells come from a shared cell library in `libraries/<name>/` (every cell of the platform corner: all drive
 strengths and threshold-voltage flavors, Liberty tables, LEF geometry, equivalence classes, buffers and inverters, for

@@ -8,14 +8,16 @@ Each engine requires facts, works on the tensors, and writes its answer back int
   place_macros   mixed-size GP + macro legalization on the pin-track grid: sweep line or parallel push
                  (attar/naive/floorplan.py)
   global_place   ePlace-style electrostatic placement (attar/naive/gp.py)
-  legalize       multi-row-height and rail aware, tensorized (attar/naive/lg.py)
+  legalize       multi-row-height and rail aware, tensorized; incremental on a placement to repair (attar/naive/lg.py)
+  detailed_place wirelength improvement of a legal placement: batched ports of OpenROAD dpo's global swap and local
+                 reordering (attar/naive/dp.py)
   cts            buffered clock trees, balanced on the propagated-clock timer (attar/naive/cts.py)
-Detailed placement is not part of Naive yet.
 """
 from .floorplan import make_die, place_io, place_macros
 from .flow import floorplan, place
 from .gp import global_place
 from .lg import legalize
+from .dp import detailed_place
 from .cts import cts
 
-__all__ = ['floorplan', 'make_die', 'place', 'place_io', 'place_macros', 'global_place', 'legalize', 'cts']
+__all__ = ['floorplan', 'make_die', 'place', 'place_io', 'place_macros', 'global_place', 'legalize', 'detailed_place', 'cts']

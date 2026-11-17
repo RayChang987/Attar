@@ -87,9 +87,10 @@ class _Space:
                 br[c] = torch.where(better, rc.reshape(m, -1).gather(1, bi[:, None]).squeeze(1), br[c])
         return bc, bx, br
 
-    def resolve(self, x, r, k, w, gain):
+    def resolve(self, x, r, k, w, gain, prio=None):
         """Accept a set of mutually non-overlapping proposals: in every row, overlapping proposals form a cluster
-        and only its largest gain survives; a multi-row proposal must survive in all its rows."""
+        and only its largest gain survives; a multi-row proposal must survive in all its rows. prio: among equal
+        gains, the larger wins (then the lower index)."""
         dev = self.dev
         n = len(x)
         if n == 0:
@@ -102,8 +103,15 @@ class _Space:
         newc = torch.ones_like(rows, dtype=torch.bool)
         newc[1:] = (rows[1:] != rows[:-1]) | (a[1:].double() >= run[:-1])
         cl = torch.cumsum(newc.long(), 0) - 1
-        score = gain[rep] * 1e6 - rep.double() * 1e-6
-        cmax = torch.full((int(cl[-1]) + 1,), -float('inf'), device=dev, dtype=torch.float64).scatter_reduce(0, cl, score, 'amax')
+        # an exact order of the proposals: larger gain, then larger prio, then lower index (stable sorts, last key
+        # first); each cluster keeps its first
+        order = torch.arange(n, device=dev)
+        if prio is not None:
+            order = order[torch.argsort(-prio[order].double(), stable=True)]
+        order = order[torch.argsort(-gain[order].double(), stable=True)]
+        rank = torch.empty(n, dtype=torch.long, device=dev); rank[order] = torch.arange(n, device=dev)
+        score = -rank[rep]
+        cmax = torch.full((int(cl[-1]) + 1,), -n - 1, device=dev, dtype=torch.long).scatter_reduce(0, cl, score, 'amax')
         lost = torch.zeros(n, dtype=torch.bool, device=dev)
         lost[rep[score < cmax[cl]]] = True
         return ~lost
@@ -135,7 +143,9 @@ def _fill(space, cur_x, cur_r, placed, gx, gy, k, w, allowed, stats=None, max_ro
                                        None, None, dr, dx)
         del P
         found = torch.isfinite(cost)
-        acc = space.resolve(bx[found], br[found], k[todo][found], w[todo][found], -cost[found])
+        # equal distance: the taller, then the wider cell first (OpenDP CellPlaceOrderLess: multi-row, then area)
+        kt, wt = k[todo][found], w[todo][found]
+        acc = space.resolve(bx[found], br[found], kt, wt, -cost[found], prio=kt * (int(w.max()) + 1) + wt)
         idx = todo[found][acc]
         cur_x[idx] = bx[found][acc]; cur_r[idx] = br[found][acc]; placed[idx] = True
         whole = dr >= space.R and dx >= space.S

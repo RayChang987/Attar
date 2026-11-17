@@ -311,8 +311,12 @@ class Timer:
             raise RuntimeError('this timing result is stale: %s since; time the design again (d.timing())' % stale)
         raise AttributeError(name)
 
-    def __init__(self, d, parasitics='placement', exact_trees=True, precision='double'):
-        """exact_trees: every net that can carry a data arrival gets OpenROAD's tree on the host (attar.timing.steiner_big,
+    def __init__(self, d, parasitics='placement', exact_trees=True, precision='double', routes=None, via_res=None):
+        """parasitics: 'placement' (estimate_parasitics -placement: Steiner trees at the placement) or
+        'global_routing' (estimate_parasitics -global_routing on `routes`, an attar.route.GlobalRoutes; attar.timing.grpar;
+        via_res: per routing level l the cut resistance between l and l + 1 in kohm, where timing.json's set_layer_rc
+        has no -via for it: OpenROAD then reads the LEF cut layer's; default: the routing fact's 'cut_res').
+        exact_trees: every net that can carry a data arrival gets OpenROAD's tree on the host (attar.timing.steiner_big,
         an exact port including its tie-breaks); False: the GPU kernel for nets up to 256 pins (faster; its ties
         differ from OpenROAD's on a few nets in 10^4), the host for larger ones.
         precision: the GPU delay model's, 'double' (OpenSTA's; float32 fails or drifts on strongly resistive nets),
@@ -323,6 +327,11 @@ class Timer:
         self.precision = precision
         self.dev = dev = d.device
         self.parasitics = parasitics
+        if parasitics not in ('placement', 'global_routing'):
+            raise ValueError("parasitics: 'placement' or 'global_routing', not %r" % (parasitics,))
+        if parasitics == 'global_routing' and routes is None:
+            raise ValueError("parasitics='global_routing' needs routes= (attar.route.GlobalRoutes)")
+        self.routes, self.via_res = routes, via_res
         with open(os.path.join(d.path, 'timing.json')) as f:
             self.info = info = json.load(f)
         for k in (getattr(d, '_propagated', None) or ()):     # Design.propagate_clocks (after a clock tree is built)
@@ -547,6 +556,8 @@ class Timer:
         self.drv_nets = torch.nonzero(drv_t >= 0).flatten(); self.drv_pins = drv_t[self.drv_nets]
         self._prepare_static()
         self._wire_setup()
+        if parasitics == 'global_routing':
+            self._gr_setup()
         self._graph = None
         self._warming = False
         self.use_graph = self.dev.type == 'cuda'
@@ -869,6 +880,51 @@ class Timer:
             tot = SegSum(self.d.p_net, ev.E)(torch.cat([self.pin_cap, self.pin_cap_min], 1))     # (E, 4)
             self._iclk_pi = torch.stack([tot, torch.zeros_like(tot), torch.zeros_like(tot)], -1)
 
+    def _gr_setup(self):
+        """Global-routing parasitics: the networks of the routes (attar.timing.grpar.build), static buffers for their
+        reduction (filled on the host before each run, _gr_update), the lumped pin capacitance for unrouted nets."""
+        from . import grpar
+        rc = self.info.get('rc') or {}
+        via_res = self.via_res
+        if via_res is None:                          # the cut layers' LEF resistance (routing fact), as OpenROAD falls back to
+            cr = (self.d.manifest.get('routing') or {}).get('cut_res')
+            via_res = {int(k): v for k, v in cr.items()} if cr else None
+        self._gr_net = grpar.build(self.d, self.routes, rc, via_res)
+        E, P = len(self.d.raw['n_ptr']) - 1, len(self.d.raw['p_cell'])
+        dev = self.dev
+        self._gr_cw = torch.as_tensor(self._gr_net['wire_cap'], device=dev, dtype=torch.float32)
+        self._gr_elm = torch.zeros(P, 4, device=dev); self._gr_pi = torch.zeros(E, 4, 3, device=dev)
+        self._gr_key = None
+        self.gr_loops = 0
+
+    def _gr_update(self):
+        """Reduce the routes' networks at the pins' present capacitances, into the static buffers."""
+        caps_t = torch.cat([self.pin_cap, self.pin_cap_min], 1)
+        key = (caps_t.data_ptr(), float(caps_t.sum()))
+        if key == self._gr_key:
+            return
+        self._gr_key = key
+        from . import grpar
+        caps = caps_t.double().cpu().numpy()
+        elm, pi, self.gr_loops = grpar.reduce(self._gr_net, np.asarray(self.net_driver), caps)
+        E = pi.shape[0]
+        tot = np.zeros((E, caps.shape[1])); np.add.at(tot, np.asarray(self.d.p_net.cpu().numpy()), caps)
+        miss = np.isnan(pi[:, 0, 0])
+        pi[miss] = np.stack([tot[miss], np.zeros_like(tot[miss]), np.zeros_like(tot[miss])], -1)
+        self._gr_elm.copy_(torch.from_numpy(elm).float()); self._gr_pi.copy_(torch.from_numpy(pi).float())
+
+    def wires_gr(self):
+        """Global-routing parasitics (the buffers _gr_update filled): per net the wire capacitance, per net arc the
+        Elmore delay (ps). Ideal clock nets as in wires(): lumped pins, no wire."""
+        pi, elm_pin, cw = self._gr_pi, self._gr_elm, self._gr_cw
+        if self._iclk_pi is not None:
+            ni = self.net_iclk_t
+            elm_pin = torch.where(ni[self.pin_net][:, None], torch.zeros_like(elm_pin), elm_pin)
+            pi = torch.where(ni[:, None, None], self._iclk_pi, pi)
+            cw = torch.where(ni, torch.zeros_like(cw), cw)
+        self.pi = pi
+        return cw, elm_pin[self.n_to]
+
     def _pin_setup(self):
         """Where estimate_parasitics puts each pin: OpenROAD's dbNetwork::location, dbITerm::getAvgXY, the mean of the
         centers of the pin's LEF rectangles (not the center of their bounding box, the Evaluator's pin offset: they
@@ -924,7 +980,7 @@ class Timer:
 
     def _big_update(self, pos):
         """The large nets' parasitics at pos, on the host (attar.timing.steiner_big), into plan['big_buf']."""
-        if self._big is None:
+        if self._big is None or self.parasitics != 'placement':
             return
         from . import steiner_big
         b = self._big
@@ -1189,6 +1245,8 @@ class Timer:
         attar.timing.crpr; after the replay, eager); False: as OpenSTA's sta::set_crpr_enabled 0."""
         pos = self.d.pos if pos is None else pos
         self._sync_pins()
+        if self.parasitics == 'global_routing':
+            self._gr_update()
         if not self.use_graph:
             return self._result(*self._run_core(pos), crpr=crpr)
         with torch.cuda.device(self.dev):
@@ -1227,7 +1285,7 @@ class Timer:
 
     def _run_core(self, pos):
         dev, P, NT = self.dev, self.P, self.NT
-        cw, elm = self.wires(pos) if self.parasitics == 'placement' else (None, None)
+        cw, elm = self.wires(pos) if self.parasitics == 'placement' else self.wires_gr()
         if elm is None:
             elm = torch.zeros(len(self.n_fr), 4, device=dev)
         self._elm = elm                                       # the run's wire delays, for required()

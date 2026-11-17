@@ -36,6 +36,9 @@ def _build():
         f.argtypes = [ctypes.c_int, P, P, P, P, ctypes.c_int, P, P, ctypes.c_double, ctypes.c_double, ctypes.c_double,
                       ctypes.c_float, P, P, P, ctypes.c_int]
         f.restype = ctypes.c_int
+        f = lib.attar_pd_edges
+        f.argtypes = [ctypes.c_int, P, P, P, ctypes.c_float, P, P, P, ctypes.c_int]
+        f.restype = ctypes.c_int
         _LIB = lib
     except Exception as e:  # noqa: BLE001  (no compiler: the caller falls back)
         _ERR = '%s: %s' % (type(e).__name__, getattr(e, 'stderr', '') or e)
@@ -67,3 +70,23 @@ def pd_rc(x, y, ptr, drv, cap, rv, r, c, dbu, alpha=0.3, threads=None):
     lib.attar_pd_rc(E, p(ptr), p(drv), p(x), p(y), V, p(cap), p(rv), float(r), float(c), float(dbu), float(alpha),
                     p(elm), p(pi), p(length), int(threads or os.cpu_count() or 1))
     return elm, pi, length
+
+
+def pd_edges(x, y, ptr, alpha=0.0, threads=None):
+    """Per net (CSR ptr over points, x / y int): the edges of OpenROAD's Prim-Dijkstra tree over its points
+    (steinerized; alpha 0: a rectilinear minimum spanning tree, steinerized), zero-length ones dropped. Returns
+    (edges (K, 4) int32 as x0, y0, x1, y1, net (K,) int64)."""
+    lib = _build()
+    if lib is None:
+        raise RuntimeError('attar.timing.steiner_big unavailable: %s' % _ERR)
+    x = np.ascontiguousarray(x, np.int32); y = np.ascontiguousarray(y, np.int32)
+    ptr = np.ascontiguousarray(ptr, np.int64)
+    E = len(ptr) - 1
+    cnt = np.zeros(E, np.int64)
+    p = lambda a: a.ctypes.data_as(ctypes.c_void_p)  # noqa: E731
+    th = int(threads or os.cpu_count() or 1)
+    lib.attar_pd_edges(E, p(ptr), p(x), p(y), float(alpha), p(cnt), None, None, th)
+    off = np.concatenate([[0], np.cumsum(cnt)]).astype(np.int64)
+    out = np.zeros((int(off[-1]), 4), np.int32)
+    lib.attar_pd_edges(E, p(ptr), p(x), p(y), float(alpha), p(cnt), p(off), p(out), th)
+    return out, np.repeat(np.arange(E, dtype=np.int64), cnt)
