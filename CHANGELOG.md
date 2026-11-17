@@ -56,6 +56,11 @@ Timing speed (results unchanged, bitwise)
   graph-capturable loops), and every net with a driver gets its exact host tree instead of the batched PyTorch
   buckets. ORFS aes 59 s -> 4.4 s, nangate45 jpeg 149 s -> 8.9 s, superblue18 over an hour -> 82 s per run.
 
+- `d.resize()` updates the timer in place (`Timer.resized`): the graph, its levels and the CUDA graph stay; each
+  instance arc points to its new master's Liberty arc and the pins take the new master pins' data. Only a master the
+  design had no tables for yet (or arcs that do not line up) builds a new timer. Results equal a new timer's
+  (bitwise); jpeg_x20, 10.5k cells resized: resize + timing 3.3 s, was 9.6 s.
+
 Readers
 - DEF: component and pin locations written as decimals (`7214680.000000`) are read; a fractional database unit is
   refused instead of the component silently reading as unplaced.

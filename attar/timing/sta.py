@@ -129,6 +129,14 @@ def load_eval(state, elmore, rise, lthr, steps=None):
 _NOTICED = False
 
 
+def _default_thresholds(info):
+    """(rise, fall) x (input, slew lower, slew upper, slew derate) of the first library read (ports, missing data)."""
+    dt_ = info.get('default_thresholds') or {'input': (.5, .5), 'slew_lower': (.2, .2), 'slew_upper': (.8, .8),
+                                              'slew_derate': 1.0}
+    return np.array([[dt_['input'][i], dt_['slew_lower'][i], dt_['slew_upper'][i], dt_['slew_derate']] for i in (0, 1)],
+                    np.float32)
+
+
 def _first_compile_notice():
     """Say so when the GPU timer's Triton kernels are not compiled on this machine yet: the first run compiles them
     (about two minutes on an RTX 3080 Ti) into Triton's cache, and later runs, in any process, reuse them."""
@@ -305,6 +313,102 @@ class Timer:
         self.__dict__.clear()
         self._stale = why
 
+    def resized(self, cells):
+        """Update the timer in place after Design.resize swapped `cells` to other masters (attar.timing.sizing): the
+        graph, its levels and the CUDA graph stay; each instance arc points to its new master's Liberty arc and every
+        pin takes its new master pin's data (capacitance, thresholds, clock-tree path, via resistance, location).
+        Returns False, leaving the timer unchanged, where that is not enough and a new timer must be built: a master
+        the design had no tables for yet (the tables grow), or new masters whose arcs do not line up one to one with
+        the old ones (pins, type, sense, when, which tables exist)."""
+        if self.parasitics != 'placement' or getattr(self, '_sel', None) is None:
+            return False
+        d = self.d
+        a = d.raw
+        t, functions, arc_when = timing_mod.arrays(d)
+        if len(t['a_master']) != self.t_n.shape[0]:
+            return False                                # new masters: their tables are not on the device
+        lib_id, fr, to, atype, asense_lib = self._arcs_all
+        cells = np.unique(np.asarray(cells, np.int64))
+        p_cell = self.p_cell_np
+        is_cell = np.zeros(int(p_cell.max()) + 1, bool); is_cell[cells] = True
+        pos = np.nonzero(is_cell[self._arc_cell])[0]
+        p_mpin = a['p_mpin'].astype(np.int64)
+        c_master = a['c_master'].astype(np.int64)
+        am = t['a_master'].astype(np.int64)
+        a_from, a_to = t['a_from'].astype(np.int64), t['a_to'].astype(np.int64)
+        when = lambda lid: arc_when.get(str(int(lid)), '')        # noqa: E731
+        tab = lambda lid: tuple((t['a_n'][lid] > 0).ravel().tolist())   # noqa: E731
+        # the new masters' arcs on each cell's pins, as the build makes them
+        pins = np.nonzero(is_cell[p_cell] & (p_mpin >= 0))[0]
+        pin_at = {(int(p_cell[p]), int(p_mpin[p])): int(p) for p in pins}
+        lib_order = np.argsort(am, kind='stable')
+        lib_start = np.searchsorted(am[lib_order], np.arange(int(am.max(initial=-1)) + 2))
+        new = {}
+        for c in cells.tolist():
+            m = int(c_master[c])
+            for lid in lib_order[lib_start[m]:lib_start[m + 1]].tolist():
+                f, g = pin_at.get((c, int(a_from[lid]))), pin_at.get((c, int(a_to[lid])))
+                if f is None or g is None:
+                    continue
+                key = (f, g, int(t['a_type'][lid]), int(t['a_sense'][lid]), when(lid), tab(lid))
+                new.setdefault(key, []).append(lid)
+        old = {}
+        for i in pos.tolist():
+            key = (int(fr[i]), int(to[i]), int(atype[i]), int(asense_lib[i]), when(lib_id[i]), tab(lib_id[i]))
+            old.setdefault(key, []).append(i)
+        if {k: len(v) for k, v in old.items()} != {k: len(v) for k, v in new.items()}:
+            return False                                # the arcs do not line up: the graph would change
+        lib_new = lib_id.copy()
+        for k, ii in old.items():
+            lib_new[ii] = new[k]
+        changed = np.zeros(len(lib_id), bool)
+        changed[pos[lib_new[pos] != lib_id[pos]]] = True
+        # every device copy of an instance arc's Liberty arc, in place (the CUDA graph keeps reading the same tensors)
+        inst = {s: self._sel[s] for s in ('c', 'l', 'k')}
+
+        def write(tensor, src):                         # tensor[i] = new Liberty arc of instance arc src[i]
+            hit = np.nonzero(changed[src])[0]
+            if len(hit):
+                tensor[torch.as_tensor(hit, device=self.dev)] = torch.as_tensor(lib_new[src[hit]], device=self.dev,
+                                                                                 dtype=tensor.dtype)
+        write(self.c_lib, inst['c']); write(self.l_lib, inst['l']); write(self.k_lib, inst['k'])
+        if self.lc is not None:
+            write(self.lc[0], inst['l'][self._lc_src])
+        for cb, src in zip(self.cb_lev, self._cb_src):
+            if cb is not None:
+                write(cb[0], inst['c'][src])
+        for lv, (s, src) in zip(getattr(self, 'tri_lev', ()), getattr(self, '_tri_src', ())):
+            write(lv[0], inst[s][src])
+        self._arcs_all = (lib_new, fr, to, atype, asense_lib)
+        self.info['functions'], self.info['arc_when'] = functions, arc_when
+        # the pins' Liberty data, via resistance and location
+        info = self.info
+        cap, cap_min, ctp, sthr = self._pin_library(t, info, p_cell, p_mpin)
+        dev = self.dev
+        self.pin_cap.copy_(torch.as_tensor(cap, device=dev)); self.pin_cap_min.copy_(torch.as_tensor(cap_min, device=dev))
+        self.pin_ctp.copy_(torch.as_tensor(ctp, device=dev)); self.sink_thr.copy_(torch.as_tensor(sthr, device=dev))
+        if len(self.k_lib):
+            self.k_ctp_min.copy_(self.pin_ctp[self.k_fr, 0, self.k_crf]); self.k_ctp_max.copy_(self.pin_ctp[self.k_fr, 1, self.k_crf])
+        rc = info.get('rc') or {}
+        io_mask = np.isin(p_cell, a['io_cell']) if 'io_cell' in a else np.zeros(len(p_cell), bool)
+        rv = self._pin_vias(d, info, rc, p_cell, p_mpin, io_mask)
+        if self.net_clkrc.any() and rc.get('clock_layers'):
+            rv_clk = self._pin_vias(d, info, rc, p_cell, p_mpin, io_mask, layers=rc['clock_layers'])
+            rv = np.where(self.net_clkrc[d.p_net.cpu().numpy()], rv_clk, rv)
+        self.pin_rvia.copy_(torch.as_tensor(rv, device=dev, dtype=self.pin_rvia.dtype))
+        if self._iclk_pi is not None:
+            from .drv import SegSum
+            tot = SegSum(d.p_net, self.ev.E)(torch.cat([self.pin_cap, self.pin_cap_min], 1))
+            self._iclk_pi.copy_(torch.stack([tot, torch.zeros_like(tot), torch.zeros_like(tot)], -1))
+        b = getattr(self, '_big', None)
+        if b is not None:
+            pins_b = b['pins'].cpu().numpy()
+            b['cap'] = np.concatenate([cap, cap_min], 1)[pins_b]
+            b['rv'] = self.pin_rvia.cpu().numpy()[pins_b]
+        self._pin_setup()                               # locations (the master's pin rectangles), into ev.off in place
+        self._mp_names = None; self._sink_drv = None
+        return True
+
     def __getattr__(self, name):
         stale = self.__dict__.get('_stale')
         if stale is not None:
@@ -349,27 +453,9 @@ class Timer:
         c_master = a['c_master'].astype(np.int64)
         m_ptr = a['m_pin_ptr'].astype(np.int64)
 
-        # pin capacitance (rise, fall): Liberty for cell pins, set_load for output ports
-        cap = np.zeros((P, 2), np.float32)
         ok = p_mpin >= 0
-        cap[ok] = t['mp_cap'][p_mpin[ok]]
-        cap_min = cap.copy()
-        if 'mp_cap_min' in t:
-            cap_min[ok] = t['mp_cap_min'][p_mpin[ok]]
-        loads = info.get('load', {})
-        if loads:                                 # one lookup per pin (a mask per port was O(ports x pins))
-            lv = np.full((int(p_cell.max()) + 1, 2), np.nan, np.float32)
-            for c, v in loads.items():
-                if int(c) < len(lv):
-                    lv[int(c)] = v                # a scalar, or (rise, fall)
-            hit = ~np.isnan(lv[p_cell, 0])
-            cap[hit] = lv[p_cell[hit]]; cap_min[hit] = lv[p_cell[hit]]
+        cap, cap_min, ctp, sthr = self._pin_library(t, info, p_cell, p_mpin)
         self.pin_cap, self.pin_cap_min = T(cap), T(cap_min)
-        # macro clock pins: Liberty min / max_clock_tree_path; OpenSTA's ideal-clock capture time is the clock edge minus
-        # the min value for setup checks and minus the max value for hold checks (launch unchanged)
-        ctp = np.zeros((P, 2, 2), np.float32)
-        if 'mp_ctp' in t:
-            ctp[ok] = t['mp_ctp'][p_mpin[ok]]
         self.pin_ctp = T(ctp)
 
         # cell arcs: one per Liberty arc and instance of its master
@@ -399,6 +485,7 @@ class Timer:
         off, asense = self._constants(d, info, t, p_cell, p_mpin, pdir, p_net, n_ptr, c_master, fr, to, atype, lib_id,
                                       asense)
         self._arcs_all = (lib_id, fr, to, atype, asense_lib)            # every instance arc (attar.timing.power)
+        self._arc_cell = p_cell[fr]                                      # its instance (resized())
 
         # nets: one driver, its sinks
         drv = np.full(len(n_ptr) - 1, -1, np.int64)
@@ -480,6 +567,8 @@ class Timer:
         self.l_lib, self.l_fr, self.l_to, self.l_sense, self.l_type = sel(launch)
         chk = np.isin(atype, (T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F)) & (clk_of[fr] >= 0) & ~off
         self.k_lib, self.k_fr, self.k_to, self.k_sense, self.k_type = sel(chk)
+        # each selection's instance arcs (resized() writes new Liberty arcs through these)
+        self._sel = {'c': np.nonzero(ck)[0], 'l': np.nonzero(launch)[0], 'k': np.nonzero(chk)[0]}
 
         # levels (Kahn) over net + combinational arcs (and the slew-only arcs)
         g_fr = np.concatenate([n_fr[nk], fr[ck]]); g_to = np.concatenate([n_to[nk], to[ck]])
@@ -500,14 +589,8 @@ class Timer:
         # library tables on the device
         self.t_ix1, self.t_ix2 = T(t['a_ix1']), T(t['a_ix2'])
         # thresholds: drivers per arc and output transition; loads per pin (ports: the first library read)
-        dt_ = info.get('default_thresholds') or {'input': (.5, .5), 'slew_lower': (.2, .2), 'slew_upper': (.8, .8),
-                                                  'slew_derate': 1.0}
-        dflt = np.array([[dt_['input'][i], dt_['slew_lower'][i], dt_['slew_upper'][i], dt_['slew_derate']] for i in (0, 1)],
-                        np.float32)
+        dflt = _default_thresholds(info)
         self.t_thr = T(t['a_thr']) if 'a_thr' in t else T(np.tile(dflt, (len(t['a_master']), 1, 1)))
-        sthr = np.tile(dflt, (P, 1, 1))
-        if 'mp_thr' in t:
-            sthr[ok] = t['mp_thr'][p_mpin[ok]]
         self.sink_thr = T(sthr)
         self.t_val, self.t_n = T(t['a_val']), T(t['a_n'].astype(np.int64))
 
@@ -594,6 +677,38 @@ class Timer:
         has_reg = np.zeros(E, bool)
         has_reg[p_net[regclk]] = True
         return ((a['n_flags'] & N_CLOCK) > 0) & ~has_reg
+
+    @staticmethod
+    def _pin_library(t, info, p_cell, p_mpin):
+        """Per pin, from its master pin's Liberty data: capacitance (rise, fall; max and min analysis), the macro
+        clock-tree path (min / max_clock_tree_path) and the input thresholds; set_load for output ports.
+        Returns numpy (cap (P, 2), cap_min (P, 2), ctp (P, 2, 2), thresholds (P, 2, 4))."""
+        P = len(p_cell)
+        ok = p_mpin >= 0
+        # pin capacitance (rise, fall): Liberty for cell pins, set_load for output ports
+        cap = np.zeros((P, 2), np.float32)
+        cap[ok] = t['mp_cap'][p_mpin[ok]]
+        cap_min = cap.copy()
+        if 'mp_cap_min' in t:
+            cap_min[ok] = t['mp_cap_min'][p_mpin[ok]]
+        loads = info.get('load', {})
+        if loads:                                 # one lookup per pin (a mask per port was O(ports x pins))
+            lv = np.full((int(p_cell.max()) + 1, 2), np.nan, np.float32)
+            for c, v in loads.items():
+                if int(c) < len(lv):
+                    lv[int(c)] = v                # a scalar, or (rise, fall)
+            hit = ~np.isnan(lv[p_cell, 0])
+            cap[hit] = lv[p_cell[hit]]; cap_min[hit] = lv[p_cell[hit]]
+        # macro clock pins: Liberty min / max_clock_tree_path; OpenSTA's ideal-clock capture time is the clock edge minus
+        # the min value for setup checks and minus the max value for hold checks (launch unchanged)
+        ctp = np.zeros((P, 2, 2), np.float32)
+        if 'mp_ctp' in t:
+            ctp[ok] = t['mp_ctp'][p_mpin[ok]]
+        # thresholds of loads per pin (ports: the first library read)
+        sthr = np.tile(_default_thresholds(info), (P, 1, 1))
+        if 'mp_thr' in t:
+            sthr[ok] = t['mp_thr'][p_mpin[ok]]
+        return cap, cap_min, ctp, sthr
 
     def _pin_vias(self, d, info, rc, p_cell, p_mpin, io_mask, layers=None):
         """Per pin, the resistance between it and its net's estimated tree (EstimateParasitics::
@@ -1118,13 +1233,16 @@ class Timer:
             edge = (self.l_type[a_i] == T_FALL_EDGE).long() ^ par[self.l_fr[a_i]]
             cks = self.ctr[ck, (self.l_type[a_i] == T_FALL_EDGE).long()]     # the clock pin's slew
             lc = [(self.l_lib[a_i], self.l_to[a_i], o_i, 2 * ck + edge, self.wf[ck, edge] + self.lat[ck], cks)]
+            lsrc = [a_i.cpu().numpy()]
             lcell = cell_of[self.l_fr[a_i].cpu().numpy()]
             for i, e in enumerate(self.ex):
                 m = T(np.nonzero(np.isin(lcell, list(ex_from[i])))[0])
                 if len(m):
                     t0 = self.wf[ck[m], edge[m]] + (0.0 if e['ignore_clock_latency'] else self.lat[ck[m]])
                     lc.append((self.l_lib[a_i][m], self.l_to[a_i][m], o_i[m], torch.full_like(m, 2 * C + i), t0, cks[m]))
+                    lsrc.append(lsrc[0][m.cpu().numpy()])
             self.lc = tuple(torch.cat([x[j] for x in lc]) for j in range(6))
+            self._lc_src = np.concatenate(lsrc)                 # l-selection index of each launch entry
         else:
             self.lc = None
         # data net arcs grouped by driver: a driver's arcs expand to its loads (OpenSTA: gate delay + wire delay per arc)
@@ -1160,8 +1278,10 @@ class Timer:
         o = np.argsort(clev[cb[:, 0]], kind='stable'); cb = cb[o]
         b = np.searchsorted(clev[cb[:, 0]], np.arange(self.max_level + 2))
         self.cb_lev = []
+        self._cb_src = []                                        # c-selection index of each entry, per level
         for k in range(self.max_level + 1):
             x = cb[b[k]:b[k + 1]]
+            self._cb_src.append(x[:, 0] if len(x) else None)
             if len(x):
                 a_ = T(x[:, 0])
                 ea, en = expand(cto[x[:, 0]])
@@ -1236,15 +1356,18 @@ class Timer:
             return (i32(lib), i32(fi), i32(t), i32(orf), i32(self.pin_net[t]), t0.float().contiguous(), i32(tag),
                     i32(ea), i32(en), s0.float().contiguous(), i32(arr))
         self.tri_lev = []
+        self._tri_src = []                                       # ('l' | 'c', selection index of each entry)
         if self.lc is not None:
             lib, to, orf, tag, t0, cks = self.lc
             self.tri_lev.append(lev(lib, torch.full_like(lib, -1), to, orf, t0, tag, *self.lc_ex, cks,
                                     torch.ones_like(lib)))
-        for cb in self.cb_lev:
+            self._tri_src.append(('l', self._lc_src))
+        for cb, src in zip(self.cb_lev, self._cb_src):
             if cb is not None:
                 lib, f, t_, orf, irf, ea, en, arr = cb
                 z = torch.zeros(len(lib), device=dev)
                 self.tri_lev.append(lev(lib, f * 2 + irf, t_, orf, z, torch.zeros_like(lib), ea, en, z, arr))
+                self._tri_src.append(('c', src))
         self.tri_tables = (self.t_ix1.contiguous(), self.t_ix2.contiguous(), self.t_val.contiguous(), self.t_n32,
                            self.t_thr.contiguous())
         self.tri_sthr = self.sink_thr.contiguous()

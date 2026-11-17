@@ -674,7 +674,8 @@ class Design:
         """Swap cells (indices or names) to other masters (one name, or one per cell): sizing and threshold-voltage
         swaps. check: each new master must be in its cell's equivalence class (d.equivalents). Masters the design
         does not have yet come from its cell library. The cells keep their position and orientation (as OpenROAD's
-        replace_cell); size and pin offsets follow the new master. The timer is rebuilt on the next timing().
+        replace_cell); size and pin offsets follow the new master. The timer is updated in place (no rebuild), unless a
+        new master's tables or arcs need a new one.
         Returns the previous master names."""
         return _sizing.resize(self, cells, masters, check)
 
@@ -704,6 +705,16 @@ class Design:
         Returns counts."""
         from .netlist import debuffer
         return debuffer(self, buffers=buffers, inverters=inverters)
+
+    def _masters_changed(self, cells, why):
+        """Cells swapped to other masters (resize): the timer is updated in place where it can be (Timer.resized: the
+        same graph), else released like a netlist change; a global-routing timer is released (route again)."""
+        if self._timer is not None and not self._timer.resized(cells):
+            self._timer.release(why)
+            self._timer = None
+        if getattr(self, '_gr_timer', None) is not None:
+            self._gr_timer[1].release(why)
+        self._gr_timer = None
 
     def _netlist_changed(self, why):
         """The netlist or a master changed: the timer is released (its GPU memory freed before the next one is built;
