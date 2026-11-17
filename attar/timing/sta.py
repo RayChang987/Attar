@@ -653,6 +653,12 @@ class Timer:
         from . import dmp
         self.steps = dmp.EAGER
         self.triton = None
+        self.host = None                        # on the CPU: the delay calculation in C++ (attar.timing.dmp_host)
+        if self.dev.type == 'cpu':
+            from . import dmp_host
+            if dmp_host.available():
+                self.host = dmp_host
+                self.host_tables = dmp_host.Tables(self.t_ix1, self.t_ix2, self.t_val, self.t_n)
         self.fused = True                       # with Triton: one gate + one load kernel per level (False: per-op path)
         if self.dev.type == 'cuda':
             try:
@@ -1476,6 +1482,8 @@ class Timer:
                     torch.cat([px[:, 2], pn[:, 2]]), torch.cat([px[:, 1], pn[:, 1]]), torch.cat([thr, thr]))
             if self.triton is not None:
                 dd, ds, stt = self.triton.gate(self.t_ix1, self.t_ix2, self.t_val, self.t_n32, *args)
+            elif self.host is not None:
+                dd, ds, stt = self.host.gate(self.host_tables, *args)
             else:
                 dd, ds, stt = arc_eval(self.t_ix1, self.t_ix2, self.t_val, self.t_n, *args, self.steps)
             dmax, dmin, dsmax, dsmin, stx, stn = dd[:n], dd[n:], ds[:n], ds[n:], stt[:n], stt[n:]
@@ -1497,7 +1505,12 @@ class Timer:
                 m = len(ea)
                 oe = orf[ea]
                 largs = (torch.cat([stx[ea], stn[ea]]), torch.cat([elm[en, oe], elm[en, 2 + oe]]), rise.repeat(2), lt.repeat(2, 1))
-                w_, l_ = self.triton.load(*largs) if self.triton is not None else load_eval(*largs, self.steps)
+                if self.triton is not None:
+                    w_, l_ = self.triton.load(*largs)
+                elif self.host is not None:
+                    w_, l_ = self.host.load(*largs)
+                else:
+                    w_, l_ = load_eval(*largs, self.steps)
                 wx, wn, lsx, lsn = w_[:m], w_[m:], l_[:m], l_[m:]
                 si = sk * 2 + orf[ea]
                 amax.index_reduce_(0, si, ax[ea] + wx[:, None], 'amax')

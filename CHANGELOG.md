@@ -55,6 +55,12 @@ Timing speed (results unchanged, bitwise)
   failed and step only the live ones (`attar.timing.dmp.HOST_EARLY_EXIT`; the GPU keeps its fixed-count,
   graph-capturable loops), and every net with a driver gets its exact host tree instead of the batched PyTorch
   buckets. ORFS aes 59 s -> 4.4 s, nangate45 jpeg 149 s -> 8.9 s, superblue18 over an hour -> 82 s per run.
+- CPU timing: the delay calculation in C++ (`attar.timing.dmp_host`, attar/timing/csrc/dmp.cpp, built with g++ on first
+  use like the Steiner trees): OpenSTA's dmp_ceff per element in double precision, each loop stopping when its
+  element converges or fails, OpenMP; results equal the PyTorch reference bitwise (ORFS asap7 / nangate45, NS3K,
+  ICCAD 2025). Per run on 10 CPU threads: superblue18 12-26 s, jpeg_x20 13 s (was 317 s), superblue7 21-30 s with a
+  9.5 s build (OpenROAD, 10 threads: 23 s per re-timing after 15 s of reading). Without a compiler the timer keeps
+  the PyTorch path.
 
 - `d.resize()` updates the timer in place (`Timer.resized`): the graph, its levels and the CUDA graph stay; each
   instance arc points to its new master's Liberty arc and the pins take the new master pins' data. Only a master the

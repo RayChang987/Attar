@@ -86,3 +86,21 @@ class ResizedInPlaceTest(unittest.TestCase):
                 self.assertIsNone(d._timer)
                 return
         self.skipTest('no master outside the design')
+
+
+class HostDelayCalcTest(unittest.TestCase):
+    def test_cpp_equals_the_pytorch_reference(self):
+        from attar.timing import dmp_host
+        if not dmp_host.available():
+            self.skipTest('no C++ delay calculation: %s' % dmp_host.error())
+        d = _cpu('after_fp/orfs_asap7/aes')
+        T = Timer(d)
+        self.assertIsNotNone(T.host)
+        host, T.host = T.host, None
+        r0 = T.run()
+        ref = [t.clone() for t in (T.amax, T.amin, T.smax, T.smin)]
+        T.host = host
+        r1 = T.run()
+        for a, b in zip(ref, (T.amax, T.amin, T.smax, T.smin)):
+            self.assertTrue(torch.equal(a, b))
+        self.assertEqual(r0.endpoint_slacks(), r1.endpoint_slacks())
