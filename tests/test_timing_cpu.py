@@ -48,3 +48,41 @@ class HostEarlyExitTest(unittest.TestCase):
             fixed = step(*fixed, 2.0)
         early = dmp._iterate(step, (x0, done0), (2.0,), 20, lambda st: ~st[1])
         self.assertTrue(torch.equal(fixed[0], early[0]) and torch.equal(fixed[1], early[1]))
+
+
+class ResizedInPlaceTest(unittest.TestCase):
+    def test_in_place_update_equals_a_new_timer(self):
+        import numpy as np
+        d = _cpu('after_fp/orfs_asap7/aes')
+        d.timing()
+        have = set(d.names['masters'])
+        cells, masters = [], []
+        for c in np.random.default_rng(3).permutation(len(d.names['cells'])).tolist():
+            if not d.movable[c]:
+                continue
+            cur = d.names['masters'][int(d.raw['c_master'][c])]
+            eq = [m for m in d.equivalents(c, dont_use=True) if m in have and m != cur]
+            if eq:
+                cells.append(c); masters.append(eq[0])
+            if len(cells) >= 200:
+                break
+        T0 = d._timer
+        d.resize(cells, masters)
+        self.assertIs(d._timer, T0)                       # updated, not released
+        r1 = d.timing()
+        F = Timer(d); r2 = F.run()
+        for name in ('amax', 'amin', 'smax', 'smin', 'pin_cap', 'pin_cap_min', 'sink_thr', 'pin_ctp', 'pin_rvia'):
+            self.assertTrue(torch.equal(getattr(T0, name), getattr(F, name)), name)
+        self.assertEqual(r1.endpoint_slacks(), r2.endpoint_slacks())
+
+    def test_a_new_master_releases_the_timer(self):
+        d = _cpu('after_fp/orfs_asap7/aes')
+        d.timing()
+        have = set(d.names['masters'])
+        for c in range(len(d.names['cells'])):
+            eq = [m for m in d.equivalents(c, dont_use=True) if m not in have]
+            if eq:
+                d.resize([c], [eq[0]])
+                self.assertIsNone(d._timer)
+                return
+        self.skipTest('no master outside the design')

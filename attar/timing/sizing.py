@@ -71,7 +71,8 @@ def add_master(d, name):
 def resize(d, cells, masters, check=True):
     """Swap cells (indices or names) to other masters (one name, or one per cell). check: each new master must be in
     its cell's equivalence class. The cells keep their position and orientation; size and pin offsets follow the new
-    master; the timer is rebuilt on the next timing(). Returns the previous master names."""
+    master; the timer is updated in place (Timer.resized), or rebuilt on the next timing() where it cannot be (a master
+    the design had no tables for yet). Returns the previous master names."""
     d.require('resize')
     cells = [cells] if isinstance(cells, (str, int, np.integer)) else list(cells)
     idx = [cell_index(d, c) for c in cells]
@@ -116,5 +117,5 @@ def resize(d, cells, masters, check=True):
         ctr = np.stack([(box[:, 0] + box[:, 2]) / 2, (box[:, 1] + box[:, 3]) / 2], -1)
         d._p_ctr_n[torch.as_tensor(tp, device=d.device)] = torch.as_tensor(ctr, dtype=torch.float32, device=d.device)
     d.update_orient()
-    d._netlist_changed('cells were resized')
+    d._masters_changed(idx, 'cells were resized')
     return old_names
