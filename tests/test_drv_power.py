@@ -51,6 +51,15 @@ class LibertyTest(unittest.TestCase):
         self.assertEqual(g['tables']['fall'][2][1][0], 7.0)                   # fJ
 
 
+def _has_tkinter():
+    try:
+        import tkinter  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@unittest.skipUnless(_has_tkinter(), 'reading an SDC needs tkinter (distill only; apt install python3-tk)')
 class SdcTest(unittest.TestCase):
     def test_limits_and_propagated(self):
         r = sdc.read('create_clock -name clk -period 100 [get_ports clk]\nset_max_fanout 8 [current_design]\n'

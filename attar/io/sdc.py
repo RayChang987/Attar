@@ -41,7 +41,11 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
     'path_delays': [{'kind': 'max'|'min', 'value', 'from', 'to': [(kind, name)] or None, 'ignore_clock_latency'}],
     'unsupported': {command: count}} with times and capacitances in the SDC's units (OpenSTA: the first Liberty
     file's units; attar.timing.ir.attach converts them to ps / fF)."""
-    import tkinter
+    try:
+        import tkinter
+    except ImportError as e:
+        raise ImportError('reading an SDC needs tkinter (its Tcl interpreter); it is only used when distilling a design '
+                          'that has an SDC (attar.distill), not by attar.load. Linux: apt install python3-tk') from e
     tcl = tkinter.Tcl()
     ports = list(ports_in) + list(ports_out)
     port_set = set(ports)
