@@ -74,15 +74,22 @@ license_name: mixed-academic-benchmarks
 pretty_name: Attar zoo
 tags:
 - eda
+- vlsi
 - physical-design
+- chip-design
 - placement
 - floorplanning
-- vlsi
+- static-timing-analysis
+- global-routing
+- benchmark
+- pytorch
 size_categories:
 - n<1K
 ---
 
 # Attar zoo
+
+**Code:** [github.com/RayChang987/Attar](https://github.com/RayChang987/Attar) &nbsp;·&nbsp; **Package:** [pypi.org/project/attar](https://pypi.org/project/attar/) &nbsp;·&nbsp; **Docs:** [engines and evaluators](https://github.com/RayChang987/Attar/blob/main/docs/features.md)
 
 {n} chip designs from {k} public physical-design benchmark suites, distilled into the
 [Attar](https://github.com/RayChang987/Attar) IR: netlist, cell and macro geometry, pin offsets, die, rows and IO pins
