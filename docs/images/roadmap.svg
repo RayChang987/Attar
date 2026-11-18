@@ -1,193 +1,142 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2150 1158" width="2150" height="1158">
-<defs><radialGradient id="bg" cx="0.5" cy="0.42" r="0.75"><stop offset="0" stop-color="#34201a"/><stop offset="1" stop-color="#1d110c"/></radialGradient><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-opacity="0.028" stroke-width="1"/></pattern><linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffc95a"/><stop offset="0.55" stop-color="#ff9a3c"/><stop offset="1" stop-color="#f26446"/></linearGradient><radialGradient id="glow" r="0.5"><stop offset="0.35" stop-color="#ff9a3c" stop-opacity="0.35"/><stop offset="1" stop-color="#ff9a3c" stop-opacity="0"/></radialGradient><filter id="soft" x="-20%" y="-40%" width="140%" height="180%"><feGaussianBlur in="SourceAlpha" stdDeviation="5"/><feOffset dy="4"/><feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-<rect width="2150" height="1158" rx="28" fill="url(#bg)"/>
-<rect width="2150" height="1158" rx="28" fill="url(#grid)"/>
-<path d="M 446 422 C 427 422 427 132 408 132" fill="none" stroke="#ffe3a8" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 190 408 190" fill="none" stroke="#ffe3a8" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 248 408 248" fill="none" stroke="#ffe3a8" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 306 408 306" fill="none" stroke="#ffe3a8" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 364 408 364" fill="none" stroke="#ffe3a8" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 422 408 422" fill="none" stroke="#ffe3a8" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 480 408 480" fill="none" stroke="#ffe3a8" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 538 408 538" fill="none" stroke="#ffe3a8" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 596 408 596" fill="none" stroke="#ec6a4f" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 654 408 654" fill="none" stroke="#ec6a4f" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 446 422 C 427 422 427 712 408 712" fill="none" stroke="#ec6a4f" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 772 524 C 754 524 754 422 736 422" fill="none" stroke="#ffe3a8" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 772 524 C 754 524 754 800 736 800" fill="none" stroke="#ffe3a8" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 772 524 C 754 524 754 858 736 858" fill="none" stroke="#ffe3a8" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 772 524 C 754 524 754 916 736 916" fill="none" stroke="#ffe3a8" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1000 524 C 982 524 982 524 964 524" fill="none" stroke="#ffe3a8" stroke-width="4.5" stroke-linecap="round" stroke-opacity="0.75"/>
-<path d="M 1678 131 C 1697 131 1697 73 1716 73" fill="none" stroke="#ff9a3c" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1678 131 C 1697 131 1697 131 1716 131" fill="none" stroke="#ff9a3c" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1678 131 C 1697 131 1697 189 1716 189" fill="none" stroke="#ff9a3c" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1678 364 C 1697 364 1697 277 1716 277" fill="none" stroke="#ff9a3c" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1678 364 C 1697 364 1697 335 1716 335" fill="none" stroke="#ff9a3c" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1678 364 C 1697 364 1697 393 1716 393" fill="none" stroke="#ff9a3c" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1678 364 C 1697 364 1697 451 1716 451" fill="none" stroke="#ff9a3c" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1678 539 C 1697 539 1697 539 1716 539" fill="none" stroke="#ff9a3c" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 335 C 1491 335 1491 131 1510 131" fill="none" stroke="#ff9a3c" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 335 C 1491 335 1491 364 1510 364" fill="none" stroke="#ff9a3c" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 335 C 1491 335 1491 539 1510 539" fill="none" stroke="#ff9a3c" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 801 C 1491 801 1491 627 1510 627" fill="none" stroke="#d9b05a" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 801 C 1491 801 1491 685 1510 685" fill="none" stroke="#d9b05a" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 801 C 1491 801 1491 743 1510 743" fill="none" stroke="#d9b05a" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 801 C 1491 801 1491 801 1510 801" fill="none" stroke="#d9b05a" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 801 C 1491 801 1491 859 1510 859" fill="none" stroke="#d9b05a" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 801 C 1491 801 1491 917 1510 917" fill="none" stroke="#d9b05a" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1472 801 C 1491 801 1491 975 1510 975" fill="none" stroke="#d9b05a" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.6"/>
-<path d="M 1196 524 C 1216 524 1216 335 1236 335" fill="none" stroke="#ff9a3c" stroke-width="4.5" stroke-linecap="round" stroke-opacity="0.75"/>
-<path d="M 1196 524 C 1216 524 1216 801 1236 801" fill="none" stroke="#d9b05a" stroke-width="4.5" stroke-linecap="round" stroke-opacity="0.75"/>
-<rect x="40" y="109" width="368" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="140.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">ISPD 2005</text>
-<circle cx="380" cy="132" r="17" fill="#ffe3a8"/>
-<text x="380" y="137.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">8</text>
-<rect x="40" y="167" width="368" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="198.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">ISPD 2015</text>
-<circle cx="380" cy="190" r="17" fill="#ffe3a8"/>
-<text x="380" y="195.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">20</text>
-<rect x="40" y="225" width="368" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="256.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">ISPD 2018</text>
-<circle cx="380" cy="248" r="17" fill="#ffe3a8"/>
-<text x="380" y="253.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">10</text>
-<rect x="40" y="283" width="368" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="314.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">ISPD 2019</text>
-<circle cx="380" cy="306" r="17" fill="#ffe3a8"/>
-<text x="380" y="311.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">10</text>
-<rect x="40" y="341" width="368" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="372.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">ISPD 2024</text>
-<circle cx="380" cy="364" r="17" fill="#ffe3a8"/>
-<text x="380" y="369.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">5</text>
-<rect x="40" y="399" width="368" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="430.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">ICCAD 2015</text>
-<circle cx="380" cy="422" r="17" fill="#ffe3a8"/>
-<text x="380" y="427.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">8</text>
-<rect x="40" y="457" width="368" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="488.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">ICCAD 2025</text>
-<circle cx="380" cy="480" r="17" fill="#ffe3a8"/>
-<text x="380" y="485.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">13</text>
-<rect x="40" y="515" width="368" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="546.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">GSRC placement</text>
-<circle cx="380" cy="538" r="17" fill="#ffe3a8"/>
-<text x="380" y="543.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">4</text>
-<rect x="40" y="573" width="368" height="46" rx="23" fill="#ec6a4f" fill-opacity="0.13" stroke="#ec6a4f" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="604.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">MCNC</text>
-<circle cx="380" cy="596" r="17" fill="#ec6a4f"/>
-<text x="380" y="601.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">10</text>
-<rect x="40" y="631" width="368" height="46" rx="23" fill="#ec6a4f" fill-opacity="0.13" stroke="#ec6a4f" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="662.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">GSRC blocks</text>
-<circle cx="380" cy="654" r="17" fill="#ec6a4f"/>
-<text x="380" y="659.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">12</text>
-<rect x="40" y="689" width="368" height="46" rx="23" fill="#ec6a4f" fill-opacity="0.13" stroke="#ec6a4f" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="62" y="720.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">IBM-HB+ (ISPD 2006)</text>
-<circle cx="380" cy="712" r="17" fill="#ec6a4f"/>
-<text x="380" y="717.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">28</text>
-<rect x="446" y="397" width="290" height="50" rx="25" fill="#ffe3a8" fill-opacity="0.10" stroke="#ffe3a8" stroke-width="2"/>
-<text x="591" y="430.28" font-size="23" fill="#ffe3a8" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Contest benchmarks</text>
-<rect x="446" y="777" width="290" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="468" y="808.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">ASAP7</text>
-<circle cx="708" cy="800" r="17" fill="#ec6a4f"/>
-<text x="708" y="805.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">5</text>
-<circle cx="668" cy="800" r="17" fill="#ffe3a8"/>
-<text x="668" y="805.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">15</text>
-<rect x="446" y="835" width="290" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="468" y="866.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Nangate45</text>
-<circle cx="708" cy="858" r="17" fill="#ec6a4f"/>
-<text x="708" y="863.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">8</text>
-<circle cx="668" cy="858" r="17" fill="#ffe3a8"/>
-<text x="668" y="863.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">8</text>
-<rect x="446" y="893" width="290" height="46" rx="23" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="468" y="924.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">NS3K</text>
-<circle cx="708" cy="916" r="17" fill="#ffe3a8"/>
-<text x="708" y="921.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">99</text>
-<rect x="772" y="478" width="192" height="92" rx="30" fill="#ffe3a8" filter="url(#soft)"/>
-<text x="868" y="518.195" font-size="27" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Data,</text>
-<text x="868" y="549.245" font-size="27" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">as tensors</text>
-<rect x="1716" y="50" width="384" height="46" rx="23" fill="#ff9a3c" fill-opacity="0.13" stroke="#ff9a3c" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1738" y="81.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Packing</text>
-<rect x="2026.6" y="59" width="64.4" height="28" rx="14" fill="#ff9a3c"/>
-<text x="2058.8" y="78.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1716" y="108" width="384" height="46" rx="23" fill="#ff9a3c" fill-opacity="0.13" stroke="#ff9a3c" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1738" y="139.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Macro placement</text>
-<rect x="2026.6" y="117" width="64.4" height="28" rx="14" fill="#ff9a3c"/>
-<text x="2058.8" y="136.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1716" y="166" width="384" height="46" rx="23" fill="#ff9a3c" fill-opacity="0.13" stroke="#ff9a3c" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1738" y="197.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">IO placement</text>
-<rect x="2026.6" y="175" width="64.4" height="28" rx="14" fill="#ff9a3c"/>
-<text x="2058.8" y="194.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1716" y="254" width="384" height="46" rx="23" fill="#ff9a3c" fill-opacity="0.13" stroke="#ff9a3c" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1738" y="285.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Placer</text>
-<rect x="2026.6" y="263" width="64.4" height="28" rx="14" fill="#ff9a3c"/>
-<text x="2058.8" y="282.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1716" y="312" width="384" height="46" rx="23" fill="#ff9a3c" fill-opacity="0.13" stroke="#ff9a3c" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1738" y="343.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Legalizer</text>
-<rect x="2026.6" y="321" width="64.4" height="28" rx="14" fill="#ff9a3c"/>
-<text x="2058.8" y="340.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1716" y="370" width="384" height="46" rx="23" fill="#ff9a3c" fill-opacity="0.13" stroke="#ff9a3c" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1738" y="401.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">PDN-aware refinement</text>
-<rect x="2026.6" y="379" width="64.4" height="28" rx="14" fill="#ff9a3c"/>
-<text x="2058.8" y="398.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1716" y="428" width="384" height="46" rx="23" fill="#ff9a3c" fill-opacity="0.13" stroke="#ff9a3c" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1738" y="459.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Detailed placement</text>
-<rect x="2026.6" y="437" width="64.4" height="28" rx="14" fill="#ff9a3c"/>
-<text x="2058.8" y="456.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1716" y="516" width="384" height="46" rx="23" fill="#ff9a3c" fill-opacity="0.13" stroke="#ff9a3c" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1738" y="547.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Global router</text>
-<rect x="2026.6" y="525" width="64.4" height="28" rx="14" fill="#ff9a3c"/>
-<text x="2058.8" y="544.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1510" y="106" width="168" height="50" rx="25" fill="#ff9a3c" fill-opacity="0.10" stroke="#ff9a3c" stroke-width="2"/>
-<text x="1594" y="139.28" font-size="23" fill="#ff9a3c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Floorplan</text>
-<rect x="1510" y="339" width="168" height="50" rx="25" fill="#ff9a3c" fill-opacity="0.10" stroke="#ff9a3c" stroke-width="2"/>
-<text x="1594" y="372.28" font-size="23" fill="#ff9a3c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Placement</text>
-<rect x="1510" y="514" width="168" height="50" rx="25" fill="#ff9a3c" fill-opacity="0.10" stroke="#ff9a3c" stroke-width="2"/>
-<text x="1594" y="547.28" font-size="23" fill="#ff9a3c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Routing</text>
-<rect x="1510" y="604" width="420" height="46" rx="23" fill="#d9b05a" fill-opacity="0.13" stroke="#d9b05a" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1532" y="635.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">HPWL</text>
-<rect x="1856.6" y="613" width="64.4" height="28" rx="14" fill="#d9b05a"/>
-<text x="1888.8" y="632.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1510" y="662" width="420" height="46" rx="23" fill="#d9b05a" fill-opacity="0.13" stroke="#d9b05a" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1532" y="693.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Global routing OVF</text>
-<rect x="1856.6" y="671" width="64.4" height="28" rx="14" fill="#d9b05a"/>
-<text x="1888.8" y="690.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1510" y="720" width="420" height="46" rx="23" fill="#d9b05a" fill-opacity="0.13" stroke="#d9b05a" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1532" y="751.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Timing</text>
-<rect x="1856.6" y="729" width="64.4" height="28" rx="14" fill="#d9b05a"/>
-<text x="1888.8" y="748.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1510" y="778" width="420" height="46" rx="23" fill="#d9b05a" fill-opacity="0.13" stroke="#d9b05a" stroke-opacity="0.85" stroke-width="1.6"/>
-<text x="1532" y="809.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">GR parasitics</text>
-<rect x="1856.6" y="787" width="64.4" height="28" rx="14" fill="#d9b05a"/>
-<text x="1888.8" y="806.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
-<rect x="1510" y="836" width="420" height="46" rx="23" fill="none" stroke="#d9b05a" stroke-width="1.8" stroke-dasharray="6 5"/>
-<text x="1532" y="867.28" font-size="23" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Blocked pin checking</text>
-<rect x="1827.8" y="845" width="93.2" height="28" rx="14" fill="none" stroke="#d9b05a" stroke-width="1.6" stroke-dasharray="4 3"/>
-<text x="1874.4" y="864.8" font-size="16" fill="#d9b05a" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Not yet</text>
-<rect x="1510" y="894" width="420" height="46" rx="23" fill="#ffffff" fill-opacity="0.035" stroke="#6f5a4d" stroke-opacity="0.5" stroke-width="1.4"/>
-<text x="1532" y="925.28" font-size="23" fill="#9c8576" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Detailed routing</text>
-<rect x="1799" y="903" width="122" height="28" rx="14" fill="#ffffff" fill-opacity="0.07"/>
-<text x="1860" y="922.8" font-size="16" fill="#9c8576" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Won't have</text>
-<rect x="1510" y="952" width="420" height="46" rx="23" fill="#ffffff" fill-opacity="0.035" stroke="#6f5a4d" stroke-opacity="0.5" stroke-width="1.4"/>
-<text x="1532" y="983.28" font-size="23" fill="#9c8576" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">DRV checks</text>
-<rect x="1799" y="961" width="122" height="28" rx="14" fill="#ffffff" fill-opacity="0.07"/>
-<text x="1860" y="980.8" font-size="16" fill="#9c8576" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Won't have</text>
-<rect x="1236" y="305" width="236" height="60" rx="30" fill="#ff9a3c" filter="url(#soft)"/>
-<text x="1354" y="344.72" font-size="27" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Naive Engine</text>
-<rect x="1236" y="771" width="236" height="60" rx="30" fill="#d9b05a" filter="url(#soft)"/>
-<text x="1354" y="810.72" font-size="27" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Evaluation</text>
-<ellipse cx="1098" cy="524" rx="205.8" ry="135.2" fill="url(#glow)"/>
-<rect x="1000" y="472" width="196" height="104" rx="52" fill="url(#brand)" filter="url(#soft)"/>
-<text x="1098" y="540" font-size="46" fill="#24150f" font-weight="bold" text-anchor="middle" letter-spacing="1" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Attar</text>
-<line x1="50" y1="1058" x2="2100" y2="1058" stroke="#ffffff" stroke-opacity="0.08"/>
-<rect x="50" y="1088" width="40" height="24" rx="12" fill="#ffe3a8" fill-opacity="0.13" stroke="#ffe3a8" stroke-width="1.8"/>
-<text x="104" y="1107" font-size="20" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Placement benchmark (after_fp)</text>
-<rect x="460" y="1088" width="40" height="24" rx="12" fill="#ec6a4f" fill-opacity="0.13" stroke="#ec6a4f" stroke-width="1.8"/>
-<text x="514" y="1107" font-size="20" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Floorplan benchmark (before_fp)</text>
-<circle cx="896.4" cy="1100" r="16" fill="#ffe3a8"/>
-<text x="896.4" y="1105.5" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">n</text>
-<text x="922.4" y="1107" font-size="20" fill="#f6e7cf" font-weight="normal" text-anchor="start" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">designs in the zoo</text>
-<rect x="1978" y="1086" width="122" height="28" rx="14" fill="#ffffff" fill-opacity="0.07"/>
-<text x="2039" y="1105.8" font-size="16" fill="#9c8576" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Won't have</text>
-<rect x="1868.8" y="1086" width="93.2" height="28" rx="14" fill="none" stroke="#f6e7cf" stroke-width="1.6" stroke-dasharray="4 3"/>
-<text x="1915.4" y="1105.8" font-size="16" fill="#f6e7cf" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Not yet</text>
-<rect x="1788.4" y="1086" width="64.4" height="28" rx="14" fill="#f6e7cf"/>
-<text x="1820.6" y="1105.8" font-size="16" fill="#24150f" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">Done</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1114 906" width="1114" height="906">
+<rect width="1114" height="906" rx="18" fill="#fbf8f3"/>
+<rect x="24" y="24" width="400" height="826" rx="12" fill="#fffdf9" stroke="#b9a993" stroke-width="1.4"/>
+<text x="44" y="66" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Data</text>
+<text x="44" y="92" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">262 designs in the zoo, loaded as tensors</text>
+<text x="44" y="131.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Contest benchmarks</text>
+<text x="288" y="131" font-size="14" fill="#a39486" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Placement</text>
+<text x="374" y="131" font-size="14" fill="#a39486" font-weight="normal" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Floorplan</text>
+<text x="44" y="167" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ISPD 2005</text>
+<text x="288" y="167" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">8</text>
+<text x="44" y="201" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ISPD 2015</text>
+<text x="288" y="201" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">20</text>
+<text x="44" y="235" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ISPD 2018</text>
+<text x="288" y="235" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">10</text>
+<text x="44" y="269" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ISPD 2019</text>
+<text x="288" y="269" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">10</text>
+<text x="44" y="303" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ISPD 2024</text>
+<text x="288" y="303" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">5</text>
+<text x="44" y="337" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ICCAD 2015</text>
+<text x="288" y="337" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">8</text>
+<text x="44" y="371" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ICCAD 2025</text>
+<text x="288" y="371" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">13</text>
+<text x="44" y="405" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">GSRC placement</text>
+<text x="288" y="405" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">4</text>
+<text x="44" y="439" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">MCNC</text>
+<text x="374" y="439" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">10</text>
+<text x="44" y="473" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">GSRC blocks</text>
+<text x="374" y="473" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">12</text>
+<text x="44" y="507" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">IBM-HB+ (ISPD 2006)</text>
+<text x="374" y="507" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">28</text>
+<text x="44" y="557.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ORFS and NS3K designs</text>
+<text x="44" y="593" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">ASAP7</text>
+<text x="288" y="593" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">15</text>
+<text x="374" y="593" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">5</text>
+<text x="44" y="627" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Nangate45</text>
+<text x="288" y="627" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">8</text>
+<text x="374" y="627" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">8</text>
+<text x="44" y="661" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">NS3K</text>
+<text x="288" y="661" font-size="20" fill="#2b211c" font-weight="bold" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif">98</text>
+<rect x="442" y="24" width="310" height="826" rx="12" fill="#fffdf9" stroke="#b9a993" stroke-width="1.4"/>
+<text x="462" y="66" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Engines</text>
+<text x="462" y="92" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="start" font-family="'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace">attar.naive, d.edit()</text>
+<text x="462" y="131.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Floorplan</text>
+<circle cx="473" cy="160" r="9" fill="#d9622b"/>
+<path d="M 468.4 160.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="167" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Die sizing</text>
+<circle cx="473" cy="194" r="9" fill="#d9622b"/>
+<path d="M 468.4 194.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="201" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Packing</text>
+<circle cx="473" cy="228" r="9" fill="#d9622b"/>
+<path d="M 468.4 228.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="235" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Macro placement</text>
+<circle cx="473" cy="262" r="9" fill="#d9622b"/>
+<path d="M 468.4 262.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="269" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">IO placement</text>
+<text x="462" y="319.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Placement</text>
+<circle cx="473" cy="348" r="9" fill="#d9622b"/>
+<path d="M 468.4 348.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="355" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Global placer</text>
+<circle cx="473" cy="382" r="9" fill="#d9622b"/>
+<path d="M 468.4 382.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="389" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Legalizer</text>
+<circle cx="473" cy="416" r="9" fill="#d9622b"/>
+<path d="M 468.4 416.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="423" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">PDN-aware refinement</text>
+<circle cx="473" cy="450" r="9" fill="#d9622b"/>
+<path d="M 468.4 450.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="457" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Detailed placement</text>
+<text x="462" y="507.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Clock tree</text>
+<circle cx="473" cy="536" r="9" fill="#d9622b"/>
+<path d="M 468.4 536.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="543" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Clock tree synthesis</text>
+<circle cx="473" cy="570" r="8" fill="none" stroke="#d9622b" stroke-width="2"/>
+<text x="494" y="577" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Delay-balanced trees</text>
+<text x="462" y="627.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Routing</text>
+<circle cx="473" cy="656" r="9" fill="#d9622b"/>
+<path d="M 468.4 656.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="663" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Global router</text>
+<text x="462" y="713.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Netlist edits</text>
+<circle cx="473" cy="742" r="9" fill="#d9622b"/>
+<path d="M 468.4 742.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="749" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Gate sizing</text>
+<circle cx="473" cy="776" r="9" fill="#d9622b"/>
+<path d="M 468.4 776.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="783" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Buffering and cloning</text>
+<circle cx="473" cy="810" r="9" fill="#d9622b"/>
+<path d="M 468.4 810.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="494" y="817" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Debuffering</text>
+<rect x="770" y="24" width="320" height="826" rx="12" fill="#fffdf9" stroke="#b9a993" stroke-width="1.4"/>
+<text x="790" y="66" font-size="24" fill="#2b211c" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Evaluation</text>
+<text x="790" y="92" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">What Attar measures</text>
+<text x="790" y="131.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Wirelength</text>
+<circle cx="801" cy="160" r="9" fill="#d99a1e"/>
+<path d="M 796.4 160.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="167" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">HPWL</text>
+<circle cx="801" cy="194" r="9" fill="#d99a1e"/>
+<path d="M 796.4 194.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="201" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Steiner wirelength</text>
+<text x="790" y="251.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Placement</text>
+<circle cx="801" cy="280" r="9" fill="#d99a1e"/>
+<path d="M 796.4 280.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="287" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Legality</text>
+<circle cx="801" cy="314" r="9" fill="#d99a1e"/>
+<path d="M 796.4 314.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="321" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Displacement</text>
+<circle cx="801" cy="348" r="9" fill="#d99a1e"/>
+<path d="M 796.4 348.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="355" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Density overflow</text>
+<text x="790" y="405.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Routability</text>
+<circle cx="801" cy="434" r="9" fill="#d99a1e"/>
+<path d="M 796.4 434.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="441" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">RUDY</text>
+<circle cx="801" cy="468" r="9" fill="#d99a1e"/>
+<path d="M 796.4 468.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="475" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Global routing overflow</text>
+<circle cx="801" cy="502" r="8" fill="none" stroke="#d99a1e" stroke-width="2"/>
+<text x="822" y="509" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Blocked pin checking</text>
+<text x="790" y="559.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Timing and power</text>
+<circle cx="801" cy="588" r="9" fill="#d99a1e"/>
+<path d="M 796.4 588.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="595" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Setup and hold</text>
+<circle cx="801" cy="622" r="9" fill="#d99a1e"/>
+<path d="M 796.4 622.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="629" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">GR parasitics</text>
+<circle cx="801" cy="656" r="9" fill="#d99a1e"/>
+<path d="M 796.4 656.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="663" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Propagated clocks, CRPR</text>
+<circle cx="801" cy="690" r="9" fill="#d99a1e"/>
+<path d="M 796.4 690.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="697" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Slew, cap, fanout (DRV)</text>
+<circle cx="801" cy="724" r="9" fill="#d99a1e"/>
+<path d="M 796.4 724.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="822" y="731" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Power</text>
+<circle cx="36" cy="880" r="9" fill="#6b5d52"/>
+<path d="M 31.4 880.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="54" y="886" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Done</text>
+<circle cx="126" cy="880" r="8" fill="none" stroke="#6b5d52" stroke-width="2"/>
+<text x="144" y="886" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Not yet</text>
+<path d="M 267 880 h 12" stroke="#a39486" stroke-width="2.2" stroke-linecap="round"/>
+<text x="289" y="886" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Left to your P&amp;R tool:</text>
+<text x="499" y="886" font-size="16" fill="#6b5d52" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">PDN synthesis, detailed routing, routing DRC, sign-off</text>
 </svg>
