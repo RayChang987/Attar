@@ -26,19 +26,30 @@ import torch
 from .io.distill import ASIDE, D_IN, D_OUT, FIXED, N_CLOCK, N_REMOVED, PLACED, REMOVED, TERMINAL, pin_dir_counts
 
 
+def _memo(L, kind):
+    """A dict kept on a Library object: what is worked out from its (immutable) tables once, e.g. a master's parsed
+    functions. A library read again (attar.fetch(force=True)) is a new object, so its memo starts empty."""
+    return L.__dict__.setdefault('_netlist_' + kind, {})
+
+
 def _lib_function(d, master):
-    """{output pin: (variables, evaluator)} of a master from the design's library chain ({} when it has none)."""
+    """{output pin: (variables, evaluator)} of a master from the design's library chain ({} when it has none).
+    Parsed once per library and master (the result is shared: do not modify it)."""
     from .io.liberty import parse_function
     from .timing.sizing import lib_cell
     L, _ = lib_cell(d, master)
-    fs = (L.meta['functions'].get(master) or {}) if L is not None else {}
-    out = {}
-    for pn, f in fs.items():
-        try:
-            out[pn] = parse_function(f)
-        except Exception:  # noqa: BLE001  (an unparsable function: not a buffer, not an inverter)
-            pass
-    return out
+    if L is None:
+        return {}
+    memo = _memo(L, 'function')
+    if master not in memo:
+        out = {}
+        for pn, f in (L.meta['functions'].get(master) or {}).items():
+            try:
+                out[pn] = parse_function(f)
+            except Exception:  # noqa: BLE001  (an unparsable function: not a buffer, not an inverter)
+                pass
+        memo[master] = out
+    return memo[master]
 
 
 def _signal_pins(d, master):
@@ -53,7 +64,19 @@ def _signal_pins(d, master):
 
 def _single_input(d, master):
     """(input pin, output pin, inverting) when master is a one-input, one-output cell (two signal pins: not a
-    tri-state buffer with its enable) that passes its input (a buffer) or inverts it (an inverter); None otherwise."""
+    tri-state buffer with its enable) that passes its input (a buffer) or inverts it (an inverter); None otherwise.
+    Worked out once per library and master."""
+    from .timing.sizing import lib_cell
+    L, _ = lib_cell(d, master)
+    if L is None:
+        return _single_input_of(d, master)
+    memo = _memo(L, 'single_input')
+    if master not in memo:
+        memo[master] = _single_input_of(d, master)
+    return memo[master]
+
+
+def _single_input_of(d, master):
     fs = _lib_function(d, master)
     if len(fs) != 1 or _signal_pins(d, master) != 2:
         return None
@@ -75,10 +98,16 @@ def _single_input(d, master):
 
 def library_cells(d, inverting):
     """Buffers (inverting=False) or inverters of the design's library chain with LEF geometry and Liberty data,
-    without dont_use cells and sequential ones, smallest area first."""
+    without dont_use cells and sequential ones, smallest area first. Kept on the design for the library chain it was
+    worked out for (insert_buffer asks for it on every call)."""
     from .timing.sizing import library
+    chain = library(d)
+    key = (bool(inverting), tuple(id(L) for L in chain))
+    hit = getattr(d, '_library_cells', None)
+    if hit is not None and key in hit:
+        return list(hit[key])
     out, seen = [], set()
-    for L in library(d):
+    for L in chain:
         skip = set(L.meta.get('dont_use', [])) | set(L.meta.get('sequentials', {}) or {})
         for c, name in enumerate(L.meta['cells']):
             if name in seen or name in skip or L.a['lc_file'][c] < 0 or not L.a['lc_lef'][c]:
@@ -88,7 +117,11 @@ def library_cells(d, inverting):
             if s is not None and s[2] == inverting:
                 w, h = L.a['lc_size'][c]
                 out.append((float(w) * float(h), name))
-    return [n for _, n in sorted(out)]
+    res = [n for _, n in sorted(out)]
+    if hit is None:
+        hit = d._library_cells = {}
+    hit[key] = res
+    return list(res)
 
 
 class Edit:
@@ -111,6 +144,7 @@ class Edit:
         self._names = set(d.names['cells']); self._net_names = None
         self._joined = {}      # net -> pins that joined it in this edit (some may have left again: checked on use)
         self._clk = None
+        self._default_buffer = None
         self._applied = False
         self._pnet = d.p_net.cpu().numpy(); self._nptr = a['n_ptr'].astype(np.int64)   # host copies for lookups
         self._cpins = None     # cell -> its pins, built on first use
@@ -215,10 +249,12 @@ class Edit:
     def default_buffer(self):
         """The buffer insert_buffer takes by default: the smallest buffer the design already uses (its flow's threshold
         voltage and cell choice), else the library's smallest (d.buffers()[0])."""
-        d = self.d
-        bufs = d.buffers()
-        used = set(d.names['masters'][m] for m in np.unique(d.raw['c_master']) if m >= 0)
-        return next((b for b in bufs if b in used), bufs[0] if bufs else None)
+        if self._default_buffer is None:          # the design does not change inside an edit: worked out once
+            d = self.d
+            bufs = d.buffers()
+            used = set(d.names['masters'][m] for m in np.unique(d.raw['c_master']) if m >= 0)
+            self._default_buffer = (next((b for b in bufs if b in used), bufs[0] if bufs else None),)
+        return self._default_buffer[0]
 
     # -- primitives ---------------------------------------------------------------------------------------------------
     def add_cell(self, master, xy, orient=0, die=0, name=None):

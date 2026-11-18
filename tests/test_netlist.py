@@ -112,6 +112,24 @@ class NetlistEditTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             e.add_net()                                                         # an applied edit is closed
 
+    def test_library_functions_are_parsed_once(self):
+        # insert_buffer used to parse the Liberty functions of the whole library on every call (0.1 s on jpeg)
+        import attar.io.liberty as lib
+        d = need(MEDIUM).restore('reference')
+        e = d.edit()
+        k, drv, loads = _signal_net(d, e)
+        e.insert_buffer(k, loads[:2])                                           # warms the memos
+        real, calls = lib.parse_function, []
+        lib.parse_function = lambda f: calls.append(f) or real(f)
+        try:
+            e.insert_buffer(k, loads[2:4])
+            e.insert_buffer(k, loads[4:6])
+        finally:
+            lib.parse_function = real
+        self.assertEqual(calls, [])
+        e.apply()
+        self.assertEqual(netlist.check(d), [])
+
     def test_names_and_an_empty_edit(self):
         d = need(MEDIUM).restore('reference')
         r0 = d.timing()
