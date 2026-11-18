@@ -1,7 +1,8 @@
 """Make the zoo ready to upload to the Hugging Face Hub: check that no manifest holds a path (sources are recorded by
 name + sha256), pack the upload folder (zoo_hub/ beside the zoo: the arrays and large JSON files zstd-compressed as
 <file>.zst, attar.hub decompresses them on download; everything else hard-linked) and write index.json (what
-attar.zoo(remote=True) reads) and README.md (the dataset card) into both.
+attar.zoo(remote=True) reads), designs.jsonl (the table the Hub's dataset viewer shows) and README.md (the dataset
+card) into both.
 
   python3 tools/zoo_release.py [--zoo DIR] [--hub DIR]     # default: zoo/ and zoo_hub/ in the checkout
   hf upload-large-folder RayChang987/attar-zoo zoo_hub/ --repo-type dataset     # then upload (docs/benchmarks.md)
@@ -85,6 +86,11 @@ tags:
 - pytorch
 size_categories:
 - n<1K
+configs:
+- config_name: default
+  data_files:
+  - split: designs
+    path: designs.jsonl
 ---
 
 # Attar zoo
@@ -105,6 +111,8 @@ d = attar.load('after_fp/ispd2005/adaptec1')  # downloads this design on first u
 attar.zoo(remote=True)                         # every design here
 attar.fetch('after_fp/ispd2015')               # a whole suite
 ```
+
+The viewer above browses `designs.jsonl`: one row per design, with its size, facts, source and the line that loads it.
 
 ## Layout
 
@@ -195,7 +203,7 @@ def pack(zoo, hub, folders):
         for rel, dst in ex.map(one, jobs):
             out[rel] = os.path.getsize(dst)
     keep = {os.path.join(hub, rel + ('.zst' if compressed(os.path.basename(rel)) else '')) for rel in out}
-    keep |= {os.path.join(hub, x) for x in ('index.json', 'README.md')}
+    keep |= {os.path.join(hub, x) for x in ('index.json', 'README.md', 'designs.jsonl')}
     for dirpath, _dirnames, filenames in os.walk(hub, topdown=False):
         if any(part.startswith('.') for part in os.path.relpath(dirpath, hub).split(os.sep)):
             continue                           # .cache/huggingface: hf upload-large-folder's resume state
@@ -206,6 +214,17 @@ def pack(zoo, hub, folders):
         if dirpath != hub and not os.listdir(dirpath):
             os.rmdir(dirpath)
     return out
+
+
+def _catalog_row(key, v):
+    """One row of designs.jsonl, the table the Hub's dataset viewer shows."""
+    mode, suite, _name = key.split('/')
+    about, source, terms = SUITES['%s/%s' % (mode, suite)]
+    return {'name': key, 'mode': mode, 'suite': suite, 'design': v['design'], 'format': v['format'],
+            'cells': v['cells'], 'movable': v['movable'], 'macros': v['macros'], 'nets': v['nets'], 'pins': v['pins'],
+            'timing': 'timing' in v['facts'], 'facts': v['facts'], 'size_mb': round(v['bytes'] / 1e6, 1),
+            'download_mb': round(v['download'] / 1e6, 1), 'suite_about': about, 'source': source, 'terms': terms,
+            'load': "attar.load('%s')" % key}
 
 
 def main(root=None, hub=None):
@@ -264,14 +283,17 @@ def main(root=None, hub=None):
                                                               _mb(v['download'])) for k, v in sorted(libraries.items()))
     n_timing = sum('timing' in v['facts'] for v in designs.values())
     card = CARD.format(n=len(designs), k=len(per), rows=rows, lib_rows=lib_rows, n_timing=n_timing)
+    catalog = ''.join(json.dumps(_catalog_row(k, v)) + '\n' for k, v in sorted(designs.items()))
     for d in (zoo, hub):
+        with open(os.path.join(d, 'designs.jsonl'), 'w') as f:
+            f.write(catalog)
         with open(os.path.join(d, 'index.json'), 'w') as f:
             json.dump({'schema': 'attar-zoo-index/1', 'designs': designs, 'libraries': libraries}, f, indent=1)
         with open(os.path.join(d, 'README.md'), 'w') as f:
             f.write(card)
     total = sum(v['bytes'] for v in list(designs.values()) + list(libraries.values()))
     dl = sum(v['download'] for v in list(designs.values()) + list(libraries.values()))
-    print('%d designs in %d suites, %s (download %s); wrote index.json and README.md in %s, packed %s'
+    print('%d designs in %d suites, %s (download %s); wrote index.json, designs.jsonl and README.md in %s, packed %s'
           % (len(designs), len(per), _mb(total), _mb(dl), zoo, hub))
 
 
