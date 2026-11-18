@@ -123,7 +123,7 @@ Docs: [concepts](https://github.com/RayChang987/Attar/blob/main/docs/concepts.md
 
 ## Acknowledgements
 
-Attar's placer follows ePlace, DREAMPlace and Xplace; its checks follow OpenROAD, its PDN repair pa_pdn. It is
+Attar's placer follows ePlace, DREAMPlace and Xplace; its checks follow OpenROAD. It is
 validated against [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts) on ASAP7
 and Nangate45. Benchmarks are from the ISPD, ICCAD and GSRC contests, MCNC and ORFS.
 
