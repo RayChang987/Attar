@@ -5,12 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "attar"
 dynamic = ["version"]
-description = "The fast loop for physical design: any benchmark as GPU tensors, place and evaluate in seconds, validate in ORFS"
+description = "The fast loop for VLSI physical design: GPU-accelerated placement, floorplanning, static timing analysis and global routing in PyTorch, on 262 ISPD, ICCAD and OpenROAD benchmarks"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [{name = "RayChang987"}]
-keywords = ["eda", "physical design", "placement", "floorplanning", "static timing analysis", "vlsi", "pytorch", "gpu"]
+keywords = ["eda", "electronic design automation", "vlsi", "physical design", "chip design", "placement",
+            "global placement", "legalization", "detailed placement", "floorplanning", "macro placement",
+            "static timing analysis", "global routing", "clock tree synthesis", "openroad", "ispd", "iccad",
+            "benchmark", "pytorch", "gpu", "cuda"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: GPU :: NVIDIA CUDA",

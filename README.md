@@ -1,9 +1,9 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/logo.png" alt="Attar: the fast loop for physical design" width="640">
+<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/logo.png" alt="Attar: GPU-accelerated VLSI physical design in PyTorch" width="640">
 
 Diverse P&R benchmarks, distilled into one plug-and-play PyTorch environment on the GPU.<br>
-Evolve placement and timing-optimization algorithms in minutes, not days.
+Evolve VLSI placement, timing-optimization and routing algorithms in minutes, not days.
 
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
@@ -46,8 +46,9 @@ cva6 WNS -195 → -75 ps, in 2.2 s on an RTX 3080 Ti.</sub>
 
 - **Fast.** Exact HPWL of 8.9M pins in 3 ms; a 2.2M-cell design placed and legalized in 49 s. An idea, from
   your code or an AI agent's, is tested in seconds, not in an overnight P&R run.
-- **One environment.** 262 designs from 24 benchmark suites (LEF/DEF, Bookshelf, YAL, GSRC) load with one call,
-  in one format. An algorithm is a function from tensors to positions: no database API, no TCL.
+- **One environment.** 262 designs from 24 benchmark suites (ISPD 2005-2024, ICCAD 2015 and 2025, MCNC, GSRC,
+  IBM-HB+, OpenROAD-flow-scripts) load with one call, in one format, from LEF/DEF, Bookshelf or YAL. An algorithm
+  is a function from tensors to positions: no database API, no TCL.
 - **Faithful.** Against OpenROAD and OpenSTA on the same placement: HPWL within 0.00002%, timing (WNS) within
   0.34%, power within 0.01%, global-routing wirelength within 3.6%.
 
@@ -55,16 +56,8 @@ cva6 WNS -195 → -75 ps, in 2.2 s on an RTX 3080 Ti.</sub>
 
 <p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="Roadmap in three cards. Data, 262 designs in the zoo: contest benchmarks ISPD 2005 (8), ISPD 2015 (20), ISPD 2018 (10), ISPD 2019 (10), ISPD 2024 (5), ICCAD 2015 (8), ICCAD 2025 (13), GSRC placement (4) for placement; MCNC (10), GSRC blocks (12), IBM-HB+ (28) for floorplan; ASAP7 (15 placement, 5 floorplan), Nangate45 (8 and 8) and NS3K (98 placement). Engines, done: die sizing, packing, macro placement, IO placement, global placer, legalizer, PDN-aware refinement, detailed placement, clock tree synthesis, global router, gate sizing, buffering and cloning, debuffering; not yet: delay-balanced clock trees. Evaluation, done: HPWL, Steiner wirelength, legality, displacement, density overflow, RUDY, global routing overflow, setup and hold timing, GR parasitics, propagated clocks and CRPR, slew, capacitance and fanout limits, power; not yet: blocked pin checking. Left to your P&amp;R tool: PDN synthesis, detailed routing, routing DRC, sign-off" width="100%"></p>
 
-How close to the real tools, on the same netlist and placement
-([every engine and evaluator](https://github.com/RayChang987/Attar/blob/main/docs/features.md)):
-
-| | Compared with | Result |
-| --- | --- | --- |
-| HPWL | OpenROAD, 23 designs up to 1.05M cells | within 0.00002% |
-| Legality | OpenROAD `check_placement`, 85 designs | the same verdict on every one |
-| Timing | OpenSTA, 31 designs up to 1.05M cells | WNS median error 0.00%, max 0.34%; 5-30x faster |
-| Design rules, power | OpenSTA, 20 designs and more | the same violating pins; power within 0.01% |
-| Global routing | OpenROAD `global_route`, 14 designs | wirelength 0.5-3.6% below; 16-41x faster |
+Every engine and evaluator, with its accuracy against OpenROAD and OpenSTA:
+[docs/features.md](https://github.com/RayChang987/Attar/blob/main/docs/features.md).
 
 ## How it works
 
