@@ -48,8 +48,8 @@ cva6 WNS -195 → -75 ps, in 2.2 s on an RTX 3080 Ti.</sub>
   your code or an AI agent's, is tested in seconds, not in an overnight P&R run.
 - **One environment.** 262 designs from 24 benchmark suites (LEF/DEF, Bookshelf, YAL, GSRC) load with one call,
   in one format. An algorithm is a function from tensors to positions: no database API, no TCL.
-- **Faithful.** HPWL, legality, timing, design rules and power match OpenROAD and OpenSTA; Attar's placements route
-  in OpenROAD-flow-scripts with 0 DRC. Nothing a benchmark lacks is made up.
+- **Faithful.** Against OpenROAD and OpenSTA on the same placement: HPWL within 0.00002%, timing (WNS) within
+  0.34%, power within 0.01%, global-routing wirelength within 3.6%.
 
 ## What's inside
 
