@@ -7,18 +7,16 @@ Evolve placement and timing-optimization algorithms in minutes, not days.
 
 [![Python](https://img.shields.io/badge/python-3.8%2B-d9622b?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
-[![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/docs/validation/orfs_check.md)
+[![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/docs/features.md#evaluators)
 [![Tests](https://img.shields.io/badge/tests-107%20passing-5f7f1e?style=flat-square)](https://github.com/RayChang987/Attar/tree/main/tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/LICENSE)
 
-[Install](#install) &nbsp;·&nbsp; [Why Attar](#why-attar) &nbsp;·&nbsp; [Roadmap](#roadmap) &nbsp;·&nbsp; [Two modes](#two-modes) &nbsp;·&nbsp;
+[Quick start](#quick-start) &nbsp;·&nbsp; [Why Attar](#why-attar) &nbsp;·&nbsp; [What's inside](#whats-inside) &nbsp;·&nbsp;
 [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery)
 
 </div>
 
-<br>
-
-## Install
+## Quick start
 
 ```bash
 pip install attar
@@ -26,202 +24,108 @@ pip install attar
 
 ```python
 import attar
-d = attar.load('after_fp/orfs_asap7/aes', device='cuda')   # downloaded from the zoo on first use
+d = attar.load('after_fp/orfs_asap7/aes', device='cuda')   # from the zoo, as tensors on the GPU
+d.place()                                                   # or set d.pos from your own algorithm
+print(attar.Evaluator(d).hpwl(), d.timing().wns)            # HPWL, and WNS as OpenSTA reports it
+d.export('aes.def')                                         # back to OpenROAD, Innovus, ICC2, ...
 ```
 
-Python 3.8 or newer, with PyTorch (a CUDA GPU for the speed; everything also runs on the CPU). The designs come from
-the [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) on the Hugging Face Hub (262 designs, 1.1 GB
-in all); `attar.zoo(remote=True)` lists them. The latest code: `pip install git+https://github.com/RayChang987/Attar`.
+Designs download from the [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) on first use. The first
+timing run on a GPU compiles its kernels (about two minutes, once). No GPU? Everything also runs on the CPU, or try
+the demo in Colab:
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/timing_driven_colab.ipynb)
 
-- The first timing run on a GPU machine compiles the timer's Triton kernels (about two minutes, once); later runs
-  reuse them and take seconds.
-- With `g++` on the path, nets of more than 256 pins get OpenROAD's exact Steiner parasitics (built on first use);
-  without it they fall back to a lumped wire model, with a warning.
-- No GPU at hand: the demo below runs in Colab (free T4, `g++` included):
-  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/timing_driven_colab.ipynb)
+<div align="center">
+<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="Timing-driven placement written in fifteen lines of Python, run on cva6 and swerv: place for wirelength, time it, weight the nets by their slack as OpenROAD's global placement does, place again, time it" width="920">
+
+<sub>Timing-driven placement in 15 lines (<a href="examples/timing_driven.py">examples/timing_driven.py</a>):
+cva6 WNS -195 → -75 ps, in 2.2 s on an RTX 3080 Ti.</sub>
+</div>
 
 ## Why Attar
 
-1. **Speed decides quality.** When AI agents do the research, iteration speed is more than a metric: in our view it
-   decides the quality of results (QoR). An agent that can propose, test and discard an idea in seconds finds what
-   works. When every run takes hours, even the best algorithm starves for feedback.
-2. **Data preparation is painful.** Traditional place-and-route (P&R) tools take minutes to hours per run, and every
-   benchmark suite comes in its own format (LEF/DEF, Bookshelf, YAL, GSRC blocks) with its own gaps. Getting a design
-   ready to experiment on is slow, fragmented work, repeated for every suite.
-3. **Attar is the fast loop.** Attar distills diverse P&R benchmarks into one plug-and-play PyTorch environment:
-   `attar.load` a name, and the design is on the GPU. Each reader hands over only the facts its source has, with
-   their provenance, and nothing missing is made up ([a design is a state](#a-design-is-a-state)). The fast loop
-   stays faithful to the full flows without their overhead: its HPWL equals OpenROAD's to 7 digits,
-   its legality equals `check_placement`, its placements route in OpenROAD-flow-scripts with 0 DRC, and HPWL ranks
-   placements as routed wirelength does in 951 routed Innovus runs, once they differ by 2% or more
-   ([validation](https://github.com/RayChang987/Attar/blob/main/docs/validation/orfs_check.md)).
-4. **GPU-native.** Layouts and design features are tensors on the GPU, so researchers, developers and AI agents
-   train, evaluate and debug in the same few lines of Python: exact HPWL of 8.9M pins in 3 ms, a 2.2M-cell design
-   placed and legalized in 49 s. An algorithm is a function from tensors to positions: no database
-   API, no TCL, no file formats.
+- **Fast.** Exact HPWL of 8.9M pins in 3 ms; a 2.2M-cell design placed and legalized in 49 s. An idea, from
+  your code or an AI agent's, is tested in seconds, not in an overnight P&R run.
+- **One environment.** 262 designs from 24 benchmark suites (LEF/DEF, Bookshelf, YAL, GSRC) load with one call,
+  in one format. An algorithm is a function from tensors to positions: no database API, no TCL.
+- **Faithful.** HPWL, legality, timing, design rules and power match OpenROAD and OpenSTA; Attar's placements route
+  in OpenROAD-flow-scripts with 0 DRC. Nothing a benchmark lacks is made up.
 
-## Roadmap
+## What's inside
 
-<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="Roadmap mind map. Attar in the center. Left, Data, as tensors: contest benchmarks, one per suite (placement: ISPD 2005, 2015, 2018, 2019, 2024, ICCAD 2015, ICCAD 2025, GSRC placement; floorplan: MCNC, GSRC blocks, IBM-HB+), ASAP7 (15 placement, 5 floorplan designs), Nangate45 (8 placement, 8 floorplan designs) and NS3K (99 placement designs). Right, Naive Engine: floorplan (packing, macro placement, IO placement), placement (placer, legalizer, PDN-aware refinement, detailed placement) and routing (global router), all done. Right, Evaluation: HPWL, global routing OVF, timing and GR parasitics done; blocked pin checking not yet; detailed routing and DRV checks will not be built" width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="Roadmap in three cards. Data, 262 designs in the zoo: contest benchmarks ISPD 2005 (8), ISPD 2015 (20), ISPD 2018 (10), ISPD 2019 (10), ISPD 2024 (5), ICCAD 2015 (8), ICCAD 2025 (13), GSRC placement (4) for placement; MCNC (10), GSRC blocks (12), IBM-HB+ (28) for floorplan; ASAP7 (15 placement, 5 floorplan), Nangate45 (8 and 8) and NS3K (98 placement). Engines, done: die sizing, packing, macro placement, IO placement, global placer, legalizer, PDN-aware refinement, detailed placement, clock tree synthesis, global router, gate sizing, buffering and cloning, debuffering; not yet: delay-balanced clock trees. Evaluation, done: HPWL, Steiner wirelength, legality, displacement, density overflow, RUDY, global routing overflow, setup and hold timing, GR parasitics, propagated clocks and CRPR, slew, capacitance and fanout limits, power; not yet: blocked pin checking. Left to your P&amp;R tool: PDN synthesis, detailed routing, routing DRC, sign-off" width="100%"></p>
 
-### Evaluation
+How close to the real tools, on the same netlist and placement
+([every engine and evaluator](https://github.com/RayChang987/Attar/blob/main/docs/features.md)):
 
-Each evaluator against OpenROAD on the same netlist and placement; full tables in
-[docs/validation](https://github.com/RayChang987/Attar/blob/main/docs/validation/timing_routing.md).
-
-| Evaluator | Call | Compared with | Accuracy |
-| --- | --- | --- | --- |
-| **HPWL** | `ev.hpwl` | OpenROAD's HPWL from its database; 23 ORFS designs (ASAP7, Nangate45) up to 1.05M cells | within **0.00002%** on every design ([table](https://github.com/RayChang987/Attar/blob/main/docs/validation/orfs_check.md)) |
-| **Legality** | `ev.legality` | OpenROAD `check_placement` | same verdict on all **23** ORFS designs and the **62** NS3K floorplans OpenROAD can check; placements broken by half a site rejected by both |
-| **Timing** | `d.timing()` | OpenSTA after `estimate_parasitics -placement`; 31 designs (ASAP7, Nangate45, NS3K) up to 1.05M cells | WNS median error **0.00%** (ORFS) and **0.11%** (NS3K), max **0.34%**; hold slack MAE at most 0.36 ps; 5-30x faster than OpenSTA |
-| **Pin and net slack** | `d.timing().pin_slack()`, `.net_slack()` | OpenSTA's `slack_max` of every pin; 8 designs (ASAP7, Nangate45) up to 384k pins | Pearson at least **0.9995**; on the pins with negative slack, MAE at most **1.03 ps**; 7-32 ms after a timing run |
-| **Timing after sizing** | `d.resize` + `d.timing()` | OpenROAD `replace_cell` + OpenSTA, 20% of the cells swapped at random; 16 designs | WNS error at most **0.23%**, TNS at most 0.37% |
-| **Timing after netlist edits** | `d.edit()`, `d.debuffer()` + `d.timing()` | OpenSTA on the DEF Attar exports: after 1,548 buffers and 443 clones inserted (10 NS3K designs up to 163k cells), and after `d.debuffer()` removed 45,991 buffers and 83 inverters (10 ORFS designs) | setup Pearson at least **0.9997**, WNS error at most **0.04%** after debuffer and **1.18%** after the NS3K edits; hold MAE at most 0.36 ps |
-| **Global routing OVF** | `d.gr_overflow()` | OpenROAD's gcell capacities and global route; 13 ORFS designs | capacities exact without macros, within **0.16%** with them; ranks designs as OpenROAD does (Spearman **0.97**); a pre-route estimate: reads mild congestion high and heavy congestion low |
-| **Global-routing parasitics** | `d.timing(routes=...)` | OpenSTA after `estimate_parasitics -global_routing` on OpenROAD's own routes; 14 ORFS designs (ASAP7, Nangate45) | every net's wire R and C equal OpenROAD's SPEF; WNS error at most **0.08%**, setup slack MAE at most **0.02 ps** (one latch pin aside) ([table](https://github.com/RayChang987/Attar/blob/main/docs/validation/global_routing.md)) |
-| **Global routing** | `d.global_route()` | OpenROAD's `global_route` on the same placement; 14 designs, and 7 placements each of 7 | wirelength **0.5-3.6%** below OpenROAD's, per net Pearson at least 0.998; orders placements as OpenROAD's routed wirelength does in **100%** of pairs 1% or more apart (HPWL: 74-88%), 91% below 1%; 16-41x faster from jpeg up; leaves some overflow OpenROAD does not ([table](https://github.com/RayChang987/Attar/blob/main/docs/validation/global_routing.md)) |
-| **Steiner wirelength, RUDY, density overflow** | `ev.steiner_wirelength`, `ev.rudy`, `ev.density_overflow` |  | |
-
-### Naive Engine
-
-| Engine | Mode | Call | What it does |
-| --- | --- | --- | --- |
-| **Packing** | `before_fp` | `naive.place_macros(packing=True)` | block-level designs: B*-tree packing, annealed into the core, then for HPWL |
-| **Macro placement** | `before_fp` | `naive.place_macros` | mixed-size global placement, then macros legalized on their routing tracks with a halo |
-| **IO placement** | `before_fp` | `naive.place_io` | IO pins on the die boundary, net-aware once cells are placed |
-| **Placer** | both | `naive.global_place` | electrostatic (ePlace/DREAMPlace style, Nesterov, CUDA graphs) at the source flow's own target density; `routability=True`: DREAMPlace's cell inflation |
-| **Legalizer** | `after_fp` | `naive.legalize` | multi-row-height cells, power-rail parity, signal pins clear of the PDN's via metal; incremental on a placement to repair (`cells=`: only those move; a legal input comes out unchanged) |
-| **PDN-aware refinement** | `after_fp` | inside `naive.legalize` | row DP and repair that keep cells clear of the PDN |
-| **Global router** | `after_fp` | `d.global_route()` | on OpenROAD's gcell grid and capacities: Prim-Dijkstra trees, negotiated Z / L pattern routing, chunked layer assignment; time on its routes with `d.timing(routes=...)` |
-| **Detailed placement** | `after_fp` | `naive.detailed_place` | OpenROAD dpo's global swap, vertical swap, local reordering and cell flipping, batched on the GPU; keeps the placement legal |
-
-`d.floorplan(utilization=...)` sizes the die (`naive.make_die`), then places the IO pins and the macros;
-`d.place()` is global placement plus legalization.
-
-<div align="center">
-
-<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="Timing-driven placement written in fifteen lines of Python, run on cva6 and swerv: place for wirelength, time it, weight the nets by their slack as OpenROAD's global placement does, place again, time it" width="920">
-
-<sub><b>Your algorithm, in fifteen lines</b> (<a href="examples/timing_driven.py">examples/timing_driven.py</a>;
-<a href="https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/timing_driven_colab.ipynb">run it in Colab</a>). Real
-runs on an RTX 3080 Ti, the same code on two ASAP7 designs: place for wirelength, take every net's slack
-(<code>net_slack()</code>, as OpenSTA's), weight the worst 10% of the nets from 1 to 5 by criticality as OpenROAD's
-timing-driven global placement does, place again. <b>cva6</b> (121k cells, 8 SRAMs): WNS -195 to -75 ps, TNS
--85.7k to -5.1k ps, HPWL +6.7%, in 2.2 s. <b>swerv</b> (103k cells): WNS -205 to -117 ps, TNS -39.5k to -1.2k ps,
-HPWL +1.1%, in 1.9 s. Both legal.</sub>
-
-<img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)" width="920">
-
-<sub><b>Floorplan mode</b> (<code>before_fp</code>). GSRC <b>n100</b>: 100 hard blocks, no die; Attar sizes one for 85%
-block area, places the IO pins and the macros. GP + LP legalization never overlaps macros, but here 5 stick out of
-the core: not legal. <code>packing=True</code> (B*-tree, annealed into the core, then for HPWL) fits them all in
-5.1 s, at 8% more wire. The lines are the strongest connections between macros and IO pins.</sub>
-
-</div>
-
-## Two modes
-
-In production chip design, the power delivery network (PDN) is the dividing line: once the power grid and the macros
-are locked down, the design enters a different phase. Attar splits its problems at that line. It does not synthesize
-a PDN, and it should not: a `before_fp` answer goes to a flow that draws one, and an `after_fp` problem comes
-with the PDN its flow drew.
-
-| | **Before-floorplan** (`before_fp`) | **After-floorplan** (`after_fp`) |
+| | Compared with | Result |
 | --- | --- | --- |
-| given | the netlist (an initial die for ORFS designs) | die, IO pins, macros, rows and PDN: a fixed floorplan |
-| the answer | target utilization (the die), IO pin placement, macro placement | standard-cell placement; then timing optimization and global routing on the same floorplan |
-| one call | `d.floorplan(utilization=0.6)` | `d.place()` |
-| goes out as | a DEF: your flow draws the PDN and places | a DEF: your flow routes and times |
-| in the zoo | 63 designs, 7 suites | 199 designs, 17 suites |
-
-Attar measures wirelength, congestion (RUDY, GROV), density, legality and timing; see the [roadmap](#roadmap).
+| HPWL | OpenROAD, 23 designs up to 1.05M cells | within 0.00002% |
+| Legality | OpenROAD `check_placement`, 85 designs | the same verdict on every one |
+| Timing | OpenSTA, 31 designs up to 1.05M cells | WNS median error 0.00%, max 0.34%; 5-30x faster |
+| Design rules, power | OpenSTA, 20 designs and more | the same violating pins; power within 0.01% |
+| Global routing | OpenROAD `global_route`, 14 designs | wirelength 0.5-3.6% below; 16-41x faster |
 
 ## How it works
 
 <p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/flow.svg" alt="Sources (LEF/DEF, Bookshelf, YAL, GSRC blocks) are distilled into the Attar IR and loaded as a Design on the GPU; attar.naive moves it and adds facts, the Evaluator measures it; export writes a DEF for your own flow (OpenROAD, Innovus, ICC2, ...)" width="100%"></p>
 
-1. **Distill.** A reader turns a benchmark into the Attar IR: integer arrays in a safetensors file, plus a manifest
-   that lists which facts the source provides and where each came from. Readers exist for LEF/DEF, Bookshelf, YAL
-   and GSRC blocks.
-2. **Load.** `attar.load` puts the arrays on the GPU as a `Design`. `d.status()` shows each fact, each capability,
-   and what is left before export.
-3. **Move.** Your algorithm, or the [built-in engines](#roadmap) (`attar.naive`), changes the positions:
-   die, IO pins and macros for `before_fp`, cells for `after_fp`.
-4. **Measure.** `attar.Evaluator` computes HPWL (exact, batched), Steiner wirelength, RUDY, density overflow and
-   legality, on the current placement or on any positions you pass.
-5. **Export.** `d.export(out_def)` writes the design back into its source DEF's frame: the PDN, IO pin shapes and
-   fixed cells as they were, the cells and nets from the IR (a changed die, IO pins and macros included). Your own
-   flow (OpenROAD, Innovus, ICC2, ...) takes it from there.
+Attar splits physical design at the power grid, as production flows do:
 
-More: [concepts](https://github.com/RayChang987/Attar/blob/main/docs/concepts.md) · [benchmarks](https://github.com/RayChang987/Attar/blob/main/docs/benchmarks.md) · [API](https://github.com/RayChang987/Attar/blob/main/docs/api.md) ·
-[validation](https://github.com/RayChang987/Attar/blob/main/docs/validation/timing_routing.md)
+- **`before_fp`**: given a netlist, find the die, IO pins and macros (`d.floorplan()`).
+- **`after_fp`**: given a fixed floorplan with its PDN, place the cells, then size, buffer, route and time them
+  (`d.place()`).
+
+Every design states the facts it has and where each came from, and every engine says which facts it needs:
+
+```text
+>>> d.status()
+  ✅ netlist           def             12268 nets, 42885 pins
+  ✅ cell_geometry     lef             12420 cells (12009 movable, 0 macros), 56 masters
+  ✅ pdn               def             1815 wire and 4785 via shapes on M1, M2, M3
+  ...
+  ❌ placement         12009 movable cells unplaced
+  -> only a placement is missing: place the design, then d.export("out.def")
+```
+
+Docs: [concepts](https://github.com/RayChang987/Attar/blob/main/docs/concepts.md) ·
+[engines and evaluators](https://github.com/RayChang987/Attar/blob/main/docs/features.md) ·
+[benchmarks](https://github.com/RayChang987/Attar/blob/main/docs/benchmarks.md) ·
+[API](https://github.com/RayChang987/Attar/blob/main/docs/api.md) ·
+[validation](https://github.com/RayChang987/Attar/tree/main/docs/validation)
 
 ## Gallery
 
-What the Evaluator sees: each view is `d.plot(tiles=...)` on a real run of `attar.naive`.
-
 <table>
+<tr>
+<td colspan="2"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_floorplan.gif" alt="Floorplan mode: GSRC n100 at 85% block area, floorplanned twice: GP plus LP legalization leaves 5 macros outside the core (not legal), B*-tree packing fits them all (legal)"></td>
+</tr>
+<tr>
+<td colspan="2"><sub><b>Floorplanning</b> GSRC n100: B*-tree packing fits all 100 blocks into the core in 5.1 s.</sub></td>
+</tr>
 <tr>
 <td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_grov.png" alt="cva6 after placement, colored by global-routing load on OpenROAD's gcells"></td>
 <td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_pin_access.png" alt="ariane136 after global placement: cells with a signal pin on the PDN, in stripes along the power grid"></td>
 </tr>
 <tr>
-<td><sub><b>Global-routing overflow</b> (<code>d.gr_overflow()</code>, <code>tiles='gr_overflow'</code>): cva6 (ASAP7)
-placed in 2.4 s, RUDY demand against OpenROAD's gcell capacities. GROV 0.73%: the channel left of the SRAMs and
-the dense logic at the lower right are where the router will struggle.</sub></td>
-<td><sub><b>Pin access</b> (<code>tiles='pin_access'</code>): ariane136 (NS3K, 136 SRAMs) right after global
-placement. 12,165 cells have a signal pin on the PDN's via metal, in stripes along the power grid: NS3K's via
-stacks cross the M1 pin layer.</sub></td>
+<td><sub><b>Routing congestion</b> cva6, placed in 2.4 s.</sub></td>
+<td><sub><b>Pin access</b> ariane136: cells with a signal pin on the PDN's vias.</sub></td>
 </tr>
 <tr>
 <td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_placed.png" alt="ariane136 legalized: legal, rails and PDN included"></td>
 <td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/fp_n300.png" alt="GSRC n300 floorplanned by B*-tree packing, with the strongest connections between blocks and IO pins"></td>
 </tr>
 <tr>
-<td><sub><b>Legality</b> (<code>ev.legality()</code>): the same design legalized in 2.4 s. Rows, sites, overlaps,
-power-rail parity and the PDN all check out: 0 cells left on the PDN.</sub></td>
-<td><sub><b>Floorplan legality and connections</b> (<code>d.floorplan_legal()</code>, <code>nets</code>): GSRC n300,
-300 hard blocks and 569 IO pins, no die given. Attar sizes one for 85% block area and packs the blocks (B*-tree) in
-43 s: legal, HPWL 565k. The lines are the strongest connections between blocks and IO pins.</sub></td>
+<td><sub><b>Legal placement</b> ariane136, rails and PDN included, in 2.4 s.</sub></td>
+<td><sub><b>Floorplan</b> GSRC n300: 300 blocks, 569 IO pins, packed in 43 s.</sub></td>
 </tr>
 </table>
 
-## A design is a state
-
-```text
->>> d = attar.load('after_fp/orfs_asap7/aes'); d.status()
-aes_cipher_top  (orfs/asap7, fidelity F1)
-  placement target density 0.71 (orfs 3_3 global_place (GPL-0023))
-Problem facts
-  ✅ netlist           def             12268 nets, 42885 pins
-  ✅ cell_geometry     lef             12420 cells (12009 movable, 0 macros), 56 masters
-  ✅ floorplan.die     def             1 die(s), 48.71 x 48.71 um
-  ✅ floorplan.io      def             388 IO pins placed
-  ✅ rows              def             164 rows, height 0.27 um
-  ✅ pdn               def             1815 wire and 4785 via shapes on M1, M2, M3
-  ✅ def_frame         def             PDN, pins, fixed cells of the source DEF, kept verbatim (849 kB)
-  ...
-Solution state
-  ❌ placement         12009 movable cells unplaced  (snapshots: reference)
-  ...
-  -> only a placement is missing: place the design (or restore a snapshot), then d.export("out.def")
-```
-
-Every reader states which facts it provides, and every engine and metric states which facts it needs:
-- a Bookshelf design has no cell library, so it does not export to DEF;
-- a design with no special nets on the pin layers has no `pdn` rule to keep;
-- a block floorplan has no rows;
-- a soft-block benchmark has no cell geometry.
-
-Each can do exactly what its facts allow. Engines add facts with provenance (`placement: naive`), so it is always
-clear which part of a design came from where. See [docs/concepts.md](https://github.com/RayChang987/Attar/blob/main/docs/concepts.md).
-
 ## Acknowledgements
 
-Attar's global placement follows ePlace, DREAMPlace and Xplace, and its routability option DREAMPlace's cell
-inflation; its rail and PDN checks follow OpenROAD's detailed placer, and its PDN repair the row DP of pa_pdn.
-Attar is validated against [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts) on
-the ASAP7 and Nangate45 platforms. Benchmarks are from the ISPD, ICCAD and GSRC contests, MCNC and ORFS.
+Attar's placer follows ePlace, DREAMPlace and Xplace; its checks follow OpenROAD, its PDN repair pa_pdn. It is
+validated against [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts) on ASAP7
+and Nangate45. Benchmarks are from the ISPD, ICCAD and GSRC contests, MCNC and ORFS.
 
 ## License
 

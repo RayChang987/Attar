@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""README diagrams as SVG (docs/images): flow.svg (how Attar works) and roadmap.svg (the roadmap as a mind map).
+"""README diagrams as SVG (docs/images): flow.svg (how Attar works) and roadmap.svg (the roadmap as three cards).
 Warm light palette, the same as attar.viz: paper surface, terracotta for Attar, sand for data, amber accents.
 Arrow labels sit on their arrows as pills in the arrow's color; arrowheads take their line's color and stop short
 of the box they point at.
@@ -112,199 +112,110 @@ def flow():
 
 
 def roadmap():
-    """Mind map in the logo's palette (dark roast ground; yellow -> orange -> coral; gold, cream).
-    Attar in the middle; Data to the left (placement and floorplan benchmarks in two colors, with design counts),
-    Naive Engine and Evaluation to the right. Leaves carry a status chip: Done, Not yet (dashed), Won't have (dim)."""
-    K = dict(bg0='#34201a', bg1='#1d110c', text='#f6e7cf', muted='#9c8576', dim='#6f5a4d', yellow='#ffc95a',
-             orange='#ff9a3c', coral='#f26446', gold='#d9b05a', cream='#ffe3a8', brick='#ec6a4f', ink='#24150f')
-    F = "font-family=\"'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif\""
+    """Three flat cards in the flow diagram's palette: Data (design counts per suite), the naive engines, Evaluation.
+    Sized for the README's ~830 px column, so 20 px text shows at about 16 px. Status: a check (done),
+    an open circle (not yet); what Attar leaves to the full flow on the bottom line."""
+    data = [('Contest benchmarks', [('ISPD 2005', 8, None), ('ISPD 2015', 20, None), ('ISPD 2018', 10, None),
+                                    ('ISPD 2019', 10, None), ('ISPD 2024', 5, None), ('ICCAD 2015', 8, None),
+                                    ('ICCAD 2025', 13, None), ('GSRC placement', 4, None), ('MCNC', None, 10),
+                                    ('GSRC blocks', None, 12), ('IBM-HB+ (ISPD 2006)', None, 28)]),
+            ('ORFS and NS3K designs', [('ASAP7', 15, 5), ('Nangate45', 8, 8), ('NS3K', 98, None)])]
+    naive = [('Floorplan', [('Die sizing', 'done'), ('Packing', 'done'), ('Macro placement', 'done'),
+                            ('IO placement', 'done')]),
+             ('Placement', [('Global placer', 'done'), ('Legalizer', 'done'), ('PDN-aware refinement', 'done'),
+                            ('Detailed placement', 'done')]),
+             ('Clock tree', [('Clock tree synthesis', 'done'), ('Delay-balanced trees', 'next')]),
+             ('Routing', [('Global router', 'done')]),
+             ('Netlist edits', [('Gate sizing', 'done'), ('Buffering and cloning', 'done'), ('Debuffering', 'done')])]
+    ev = [('Wirelength', [('HPWL', 'done'), ('Steiner wirelength', 'done')]),
+          ('Placement', [('Legality', 'done'), ('Displacement', 'done'), ('Density overflow', 'done')]),
+          ('Routability', [('RUDY', 'done'), ('Global routing overflow', 'done'), ('Blocked pin checking', 'next')]),
+          ('Timing and power', [('Setup and hold', 'done'), ('GR parasitics', 'done'),
+                                ('Propagated clocks, CRPR', 'done'), ('Slew, cap, fanout (DRV)', 'done'),
+                                ('Power', 'done')])]
+    out = 'PDN synthesis, detailed routing, routing DRC, sign-off'
 
-    def t(x, y, s, size, fill, weight='normal', anchor='middle', ls=None):
-        return ('<text x="%g" y="%g" font-size="%g" fill="%s" font-weight="%s" text-anchor="%s"%s %s>%s</text>'
-                % (x, y, size, fill, weight, anchor, ' letter-spacing="%g"' % ls if ls else '', F, esc(s)))
+    FS, FG, PITCH, GAP = 20, 16, 34, 18                   # row text, group label, row pitch, gap before a group
+    M, G, TOP = 24, 18, 24
+    widths = (400, 310, 320)
+    W = M * 2 + sum(widths) + G * 2
+    xs = [M, M + widths[0] + G, M + widths[0] + widths[1] + 2 * G]
 
-    PL, FP = K['cream'], K['brick']                       # placement / floorplan benchmarks
-    DATA, NAIVE, EVAL = K['cream'], K['orange'], K['gold']
-    data = [('Contest benchmarks', [('ISPD 2005', 8, PL), ('ISPD 2015', 20, PL), ('ISPD 2018', 10, PL),
-                                    ('ISPD 2019', 10, PL), ('ISPD 2024', 5, PL), ('ICCAD 2015', 8, PL),
-                                    ('ICCAD 2025', 13, PL), ('GSRC placement', 4, PL), ('MCNC', 10, FP),
-                                    ('GSRC blocks', 12, FP), ('IBM-HB+ (ISPD 2006)', 28, FP)]),
-            ('ASAP7', [(15, PL), (5, FP)]),                  # stops here: design counts only
-            ('Nangate45', [(8, PL), (8, FP)]),
-            ('NS3K', [(99, PL)])]
-    naive = [('Floorplan', [('Packing', 'Done'), ('Macro placement', 'Done'), ('IO placement', 'Done')]),
-             ('Placement', [('Placer', 'Done'), ('Legalizer', 'Done'), ('PDN-aware refinement', 'Done'),
-                            ('Detailed placement', 'Done')]),
-             ('Routing', [('Global router', 'Done')])]
-    ev = [('HPWL', 'Done'), ('Global routing OVF', 'Done'), ('Timing', 'Done'), ('GR parasitics', 'Done'),
-          ('Blocked pin checking', 'Not yet'), ('Detailed routing', "Won't have"), ('DRV checks', "Won't have")]
-
-    FL, FM, FC = 23, 23, 27                               # font: leaf, middle, category
-    PITCH, LH, GAP = 58, 46, 30
-    LW_D, LW, LW_E = 368, 384, 420
-    MW_D, CW, RX, RY, CW_R, MW_R = 290, 192, 98, 52, 236, 168
-    x_dleaf = 40
-    x_dmid = x_dleaf + LW_D + 38
-    x_dcat = x_dmid + MW_D + 36
-    CX = x_dcat + CW + 36 + RX
-    x_rcat = CX + RX + 40
-    x_rmid = x_rcat + CW_R + 38
-    x_nleaf = x_rmid + MW_R + 38
-    x_eleaf = x_rmid
-    W = x_nleaf + LW + 50
-    top = 50
-    h_left = (len(data[0][1]) + len(data) - 2) * PITCH + GAP
-    n_right = sum(len(k) for _, k in naive) + len(ev)       # leaf rows on the right: naive groups, then evaluation
-    h_right = (n_right - 1) * PITCH + len(naive) * GAP
-    Ht = max(h_left, h_right)
-    cy = top + LH / 2 + Ht / 2
-    H = int(top + LH + Ht + 160)
-
+    def rows_h(groups):
+        return sum(GAP + PITCH + len(k) * PITCH for _, k in groups)
+    HEAD = 84
+    card_h = HEAD + max(rows_h(data), rows_h(naive), rows_h(ev)) + 6
+    LEG = 56
+    H = TOP + card_h + LEG
     s = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">' % (W, H, W, H),
-         '<defs>'
-         '<radialGradient id="bg" cx="0.5" cy="0.42" r="0.75"><stop offset="0" stop-color="%s"/>'
-         '<stop offset="1" stop-color="%s"/></radialGradient>'
-         '<pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" '
-         'fill="none" stroke="#ffffff" stroke-opacity="0.028" stroke-width="1"/></pattern>'
-         '<linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="%s"/>'
-         '<stop offset="0.55" stop-color="%s"/><stop offset="1" stop-color="%s"/></linearGradient>'
-         '<radialGradient id="glow" r="0.5"><stop offset="0.35" stop-color="%s" stop-opacity="0.35"/>'
-         '<stop offset="1" stop-color="%s" stop-opacity="0"/></radialGradient>'
-         '<filter id="soft" x="-20%%" y="-40%%" width="140%%" height="180%%"><feGaussianBlur in="SourceAlpha" stdDeviation="5"/>'
-         '<feOffset dy="4"/><feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>'
-         '<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>'
-         '</defs>' % (K['bg0'], K['bg1'], K['yellow'], K['orange'], K['coral'], K['orange'], K['orange']),
-         '<rect width="%d" height="%d" rx="28" fill="url(#bg)"/>' % (W, H),
-         '<rect width="%d" height="%d" rx="28" fill="url(#grid)"/>' % (W, H)]
-    links, nodes = [], []
+         '<rect width="%d" height="%d" rx="18" fill="%s"/>' % (W, H, C['paper'])]
 
-    def link(x1, y1, x2, y2, col, wd, op=0.6):
-        mx = (x1 + x2) / 2
-        links.append('<path d="M %g %g C %g %g %g %g %g %g" fill="none" stroke="%s" stroke-width="%g" '
-                     'stroke-linecap="round" stroke-opacity="%g"/>' % (x1, y1, mx, y1, mx, y2, x2, y2, col, wd, op))
+    def card(x, w, title, sub, mono_sub=False):
+        s.append('<rect x="%g" y="%g" width="%g" height="%g" rx="12" fill="%s" stroke="%s" stroke-width="1.4"/>'
+                 % (x, TOP, w, card_h, C['card'], C['line']))
+        s.append(text(x + 20, TOP + 42, title, 24, C['ink'], 'bold', 'start'))
+        s.append(text(x + 20, TOP + 68, sub, 16, C['ink2'], anchor='start', mono=mono_sub))
 
-    def solid(x, y, w, h, label, col, size):              # category: filled in its branch color; '\n' breaks lines
-        lines = label.split('\n')
-        nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="%s" filter="url(#soft)"/>'
-                     % (x, y - h / 2, w, h, min(h / 2, 30), col))
-        for i, l in enumerate(lines):
-            dy = (i - (len(lines) - 1) / 2) * size * 1.15
-            nodes.append(t(x + w / 2, y + dy + size * 0.36, l, size, K['ink'], 'bold'))
-
-    def ring(x, y, w, h, label, col, size):               # middle level: outlined
-        nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="%s" fill-opacity="0.10" stroke="%s" '
-                     'stroke-width="2"/>' % (x, y - h / 2, w, h, h / 2, col, col))
-        nodes.append(t(x + w / 2, y + size * 0.36, label, size, col, 'bold'))
-
-    def chip(x, y, label, kind, col):
-        w = len(label) * 9.6 + 26
-        if kind == 'Done':
-            nodes.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="%s"/>' % (x, y - 14, w, col))
-            nodes.append(t(x + w / 2, y + 5.8, label, 16, K['ink'], 'bold'))
-        elif kind == 'Not yet':
-            nodes.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="none" stroke="%s" stroke-width="1.6" '
-                         'stroke-dasharray="4 3"/>' % (x, y - 14, w, col))
-            nodes.append(t(x + w / 2, y + 5.8, label, 16, col, 'bold'))
+    def mark(x, y, st, col):
+        if st == 'done':
+            s.append('<circle cx="%g" cy="%g" r="9" fill="%s"/>' % (x, y, col))
+            s.append('<path d="M %g %g l 3.2 3.4 l 6 -7" fill="none" stroke="%s" stroke-width="2.2" '
+                     'stroke-linecap="round" stroke-linejoin="round"/>' % (x - 4.6, y + 0.4, C['white']))
+        elif st == 'next':
+            s.append('<circle cx="%g" cy="%g" r="8" fill="none" stroke="%s" stroke-width="2"/>' % (x, y, col))
         else:
-            nodes.append('<rect x="%g" y="%g" width="%g" height="28" rx="14" fill="#ffffff" fill-opacity="0.07"/>'
-                         % (x, y - 14, w))
-            nodes.append(t(x + w / 2, y + 5.8, label, 16, K['muted'], 'bold'))
-        return w
+            s.append('<path d="M %g %g h 12" stroke="%s" stroke-width="2.2" stroke-linecap="round"/>'
+                     % (x - 6, y, C['muted']))
 
-    def leaf(x, y, w, label, col, status=None, counts=()):
-        if status == "Won't have":
-            nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="#ffffff" fill-opacity="0.035" '
-                         'stroke="%s" stroke-opacity="0.5" stroke-width="1.4"/>' % (x, y - LH / 2, w, LH, LH / 2, K['dim']))
-            tc = K['muted']
-        elif status == 'Not yet':
-            nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="none" stroke="%s" stroke-width="1.8" '
-                         'stroke-dasharray="6 5"/>' % (x, y - LH / 2, w, LH, LH / 2, col))
-            tc = K['text']
-        else:
-            nodes.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="%s" fill-opacity="0.13" stroke="%s" '
-                         'stroke-opacity="0.85" stroke-width="1.6"/>' % (x, y - LH / 2, w, LH, LH / 2, col, col))
-            tc = K['text']
-        nodes.append(t(x + 22, y + FL * 0.36, label, FL, tc, anchor='start'))
-        if status:
-            cw = len(status) * 9.6 + 26
-            chip(x + w - cw - 9, y, status, status, col)
-        cx = x + w - 28
-        for n, c in reversed(counts):
-            nodes.append('<circle cx="%g" cy="%g" r="17" fill="%s"/>' % (cx, y, c))
-            nodes.append(t(cx, y + 5.8, str(n), 16, K['ink'], 'bold'))
-            cx -= 40
+    def group(x, y, label):
+        s.append(text(x + 20, y + FG * 0.35, label, FG, C['ink2'], 'bold', 'start'))
 
-    # ---- left: Data
-    y = cy - h_left / 2
-    gname, kids = data[0]                                 # Contest benchmarks: one leaf per suite
-    ys = [y + i * PITCH for i in range(len(kids))]
-    my = (ys[0] + ys[-1]) / 2
-    for yy, (label, n, col) in zip(ys, kids):
-        link(x_dmid, my, x_dleaf + LW_D, yy, col, 2.2)
-        leaf(x_dleaf, yy, LW_D, label, col, counts=[(n, col)])
-    link(x_dcat, cy, x_dmid + MW_D, my, DATA, 2.8)
-    ring(x_dmid, my, MW_D, 50, gname, DATA, FM)
-    y = ys[-1] + PITCH + GAP
-    for gname, counts in data[1:]:                        # ASAP7, NS3K: leaves at the middle level
-        link(x_dcat, cy, x_dmid + MW_D, y, DATA, 2.8)
-        leaf(x_dmid, y, MW_D, gname, DATA, counts=counts)
+    # Data: one row per suite, design counts in two columns
+    x, w = xs[0], widths[0]
+    card(x, w, 'Data', '262 designs in the zoo, loaded as tensors')
+    cp, cf = x + w - 136, x + w - 50
+    y = TOP + HEAD
+    for g, (gname, kids) in enumerate(data):
+        y += GAP
+        group(x, y, gname)
+        if g == 0:                                        # column heads once, on the first group's line
+            s.append(text(cp, y + 5, 'Placement', 14, C['muted']))
+            s.append(text(cf, y + 5, 'Floorplan', 14, C['muted']))
+        for label, p, f in kids:
+            y += PITCH
+            s.append(text(x + 20, y + FS * 0.35, label, FS, C['ink'], anchor='start'))
+            for cx, n in ((cp, p), (cf, f)):
+                if n:
+                    s.append(text(cx, y + FS * 0.35, str(n), FS, C['ink'], 'bold'))
         y += PITCH
-    solid(x_dcat, cy, CW, 92, 'Data,\nas tensors', DATA, FC)
-    link(CX - RX, cy, x_dcat + CW, cy, DATA, 4.5, 0.75)
 
-    # ---- right: Naive Engine, then Evaluation
-    y0 = cy - h_right / 2
-    mids = []
-    row = 0
-    for g, (_gname, kids) in enumerate(naive):
-        ys = [y0 + (row + i) * PITCH + g * GAP for i in range(len(kids))]
-        row += len(kids)
-        my = (ys[0] + ys[-1]) / 2
-        mids.append(my)
-        for yy, (label, st) in zip(ys, kids):
-            link(x_rmid + MW_R, my, x_nleaf, yy, NAIVE, 2.2)
-            leaf(x_nleaf, yy, LW, label, NAIVE, st)
-    ny = (mids[0] + mids[-1]) / 2
-    for g, (gname, _) in enumerate(naive):
-        link(x_rcat + CW_R, ny, x_rmid, mids[g], NAIVE, 2.8)
-        ring(x_rmid, mids[g], MW_R, 50, gname, NAIVE, FM)
-    eys = [y0 + (row + i) * PITCH + len(naive) * GAP for i in range(len(ev))]
-    ey = (eys[0] + eys[-1]) / 2
-    for yy, (label, st) in zip(eys, ev):
-        link(x_rcat + CW_R, ey, x_eleaf, yy, EVAL, 2.2)
-        leaf(x_eleaf, yy, LW_E, label, EVAL, st)
-    link(CX + RX, cy, x_rcat, ny, NAIVE, 4.5, 0.75)
-    link(CX + RX, cy, x_rcat, ey, EVAL, 4.5, 0.75)
-    solid(x_rcat, ny, CW_R, 60, 'Naive Engine', NAIVE, FC)
-    solid(x_rcat, ey, CW_R, 60, 'Evaluation', EVAL, FC)
+    # engines and evaluators: one row per feature with its status
+    for x, w, col, (title, sub, mono), groups in (
+            (xs[1], widths[1], C['terra'], ('Engines', 'attar.naive, d.edit()', True), naive),
+            (xs[2], widths[2], C['amber'], ('Evaluation', 'What Attar measures', False), ev)):
+        card(x, w, title, sub, mono)
+        y = TOP + HEAD
+        for gname, kids in groups:
+            y += GAP
+            group(x, y, gname)
+            for label, st in kids:
+                y += PITCH
+                mark(x + 31, y, st, col)
+                s.append(text(x + 52, y + FS * 0.35, label, FS, C['muted'] if st == 'out' else C['ink'],
+                              anchor='start'))
+            y += PITCH
 
-    s += links + nodes
-    # ---- center: the logo's gradient
-    s.append('<ellipse cx="%g" cy="%g" rx="%g" ry="%g" fill="url(#glow)"/>' % (CX, cy, RX * 2.1, RY * 2.6))
-    s.append('<rect x="%g" y="%g" width="%g" height="%g" rx="%g" fill="url(#brand)" filter="url(#soft)"/>'
-             % (CX - RX, cy - RY, 2 * RX, 2 * RY, RY))
-    s.append(t(CX, cy + 16, 'Attar', 46, K['ink'], 'bold', ls=1))
-
-    # ---- legend
-    ly = H - 58
-    s.append('<line x1="50" y1="%g" x2="%g" y2="%g" stroke="#ffffff" stroke-opacity="0.08"/>' % (ly - 42, W - 50, ly - 42))
-    x = 50
-    for label, col in (('Placement benchmark (after_fp)', PL), ('Floorplan benchmark (before_fp)', FP)):
-        s.append('<rect x="%g" y="%g" width="40" height="24" rx="12" fill="%s" fill-opacity="0.13" stroke="%s" '
-                 'stroke-width="1.8"/>' % (x, ly - 12, col, col))
-        s.append(t(x + 54, ly + 7, label, 20, K['text'], anchor='start'))
-        x += 54 + len(label) * 10.4 + 44
-    s.append('<circle cx="%g" cy="%g" r="16" fill="%s"/>' % (x + 16, ly, K['cream']))
-    s.append(t(x + 16, ly + 5.5, 'n', 16, K['ink'], 'bold'))
-    s.append(t(x + 42, ly + 7, 'designs in the zoo', 20, K['text'], anchor='start'))
-    x = W - 50
-    nodes = []
-    for label in ("Won't have", 'Not yet', 'Done'):
-        w = len(label) * 9.6 + 26
-        x -= w
-        chip(x, ly, label, label, K['text'])
-        x -= 16
-    s += nodes
+    # legend, then what Attar leaves to the full flow
+    ly = TOP + card_h + LEG / 2 + 2
+    x = M + 12
+    for st, label in (('done', 'Done'), ('next', 'Not yet')):
+        mark(x, ly, st, C['ink2'])
+        s.append(text(x + 18, ly + 6, label, 16, C['ink2'], anchor='start'))
+        x += 18 + len(label) * 9 + 36
+    x += 24
+    mark(x + 6, ly, 'out', C['muted'])
+    s.append(text(x + 22, ly + 6, 'Left to your P&R tool:', 16, C['ink2'], 'bold', 'start'))
+    s.append(text(x + 22 + 22 * 9 + 12, ly + 6, out, 16, C['ink2'], anchor='start'))
     s.append('</svg>')
     open(os.path.join(IMG, 'roadmap.svg'), 'w').write('\n'.join(s))
 
