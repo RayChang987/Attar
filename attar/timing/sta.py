@@ -2117,6 +2117,51 @@ class Timer:
                 r.index_reduce_(0, f * 2 + rf, r[t_ * 2 + rf] - wd[:, None], 'amin')
         return r, through
 
+    def path_prev(self):
+        """The arrival predecessor of every pin transition and tag of the last run: prev (P * 2, NT), the row (pin * 2
+        + transition) whose arrival in the tag plus the step's delay makes this row's arrival in that tag, -1 at a
+        startpoint. At a net sink: its driver, same transition (the wire); at a cell output: among the search arcs
+        into it, the input transition with the largest arrival + the arc's delay of the last run (its recorded gate
+        delay: nothing is recomputed), as the forward pass took the maximum; ties go to the rise input, then the lower
+        arc index. Also wire (P * 2,) bool: the step into the row is a wire. Index reductions over the levels."""
+        dev, P, NT = self.dev, self.P, self.NT
+        A = self.amax.reshape(P * 2, NT)
+        i32 = torch.int32                                            # (rows and keys fit: half the memory)
+        prev = torch.full((P * 2, NT), -1, device=dev, dtype=i32)
+        wire = torch.zeros(P * 2, device=dev, dtype=torch.bool)
+        for rf in (0, 1):                                            # net sinks: their driver, through the wire
+            s_, f_ = self.n_to * 2 + rf, self.n_fr * 2 + rf
+            ok = torch.isfinite(A[s_]) & torch.isfinite(A[f_])
+            prev[s_] = torch.where(ok, f_[:, None].to(i32), prev[s_])
+            wire[s_] = True
+        cbs = [(cb, src) for cb, src in zip(self.cb_lev, self._cb_src) if cb is not None]
+        if cbs:
+            assert len(self._rec) == len(cbs) + (self.lc is not None), \
+                'the delays of the last run do not match its levels'
+            recs = self._rec[1:] if self.lc is not None else self._rec
+            big = 2 ** 31 - 1
+            best = torch.full((P * 2 * NT,), -INF, device=dev, dtype=A.dtype)
+            kmin = torch.full((P * 2 * NT,), big, device=dev, dtype=i32)
+            tg = torch.arange(NT, device=dev)
+            span = max(int(len(self.c_lib)), 1)
+            for (cb, src), rec in zip(cbs, recs):                    # a level at a time: its arcs' outputs
+                _, f, t_, orf, irf, _, _, arr = cb
+                arc = torch.as_tensor(src, device=dev)
+                fi, ti = f * 2 + irf, t_ * 2 + orf
+                v = A[fi] + rec[0].to(A.dtype)[:, None]
+                v = torch.where(arr[:, None] & torch.isfinite(A[fi]), v, torch.full_like(v, -INF))
+                ix = (ti[:, None] * NT + tg).flatten()
+                v = v.flatten()
+                best.scatter_reduce_(0, ix, v, 'amax')
+                win = (v == best[ix]) & torch.isfinite(v)
+                key = torch.where(win, (irf * span + arc)[:, None].expand(-1, NT).flatten().to(i32),
+                                  torch.full(ix.shape, big, device=dev, dtype=i32))
+                kmin.scatter_reduce_(0, ix, key, 'amin')
+                sel = win & (key == kmin[ix])
+                prev.view(-1)[ix[sel]] = fi[:, None].expand(-1, NT).flatten()[sel].to(i32)
+                wire[ti] = False
+        return prev, wire
+
 
 class TimingResult:
     """Per-endpoint setup / hold slack (ps; inf where not constrained) and their summaries; per-pin and per-net
@@ -2207,53 +2252,19 @@ class TimingResult:
         return (n['cells'][c] if m < 0 else '%s/%s' % (n['cells'][c], self.timer._mp_names[m])).replace('\\', '')
 
     def path(self, endpoint=None):
-        """The latest-arriving path into an endpoint (default: the worst setup endpoint), traced back from the
-        arrivals: at a net sink its driver; at a cell output the arc and input transition whose arrival + delay is the
-        latest (gate delays recomputed with the timer's own arc_eval). Returns [(pin, 'r'|'f', arrival ps, slew ps)],
+        """The worst path into an endpoint (default: the worst setup endpoint), as critical_paths picks it (the worst
+        transition and tag, back through the latest arrivals). Returns [(pin, 'r'|'f', arrival ps, slew ps)],
         startpoint first. Valid for the last run of this result's timer."""
         T = self.timer
-        dev = T.dev
         if endpoint is None:
             p = int(torch.argmin(self.setup).item())
         elif isinstance(endpoint, str):
             p = next(q for q in self.endpoints.tolist() if self._pin_name(q) == endpoint)
         else:
             p = int(endpoint)
-        arr = T.amax.max(2).values                                          # (P, 2): latest over tags
-        rf = int(torch.argmax(arr[p]).item())
-        sink_drv = dict(zip(T.n_to.tolist(), T.n_fr.tolist())) if T._sink_drv is None else T._sink_drv
-        T._sink_drv = sink_drv
-        out = []
-        for _ in range(100000):
-            out.append((self._pin_name(p), 'rf'[rf], float(arr[p, rf]), float(T.smax[p, rf])))
-            if p in sink_drv:
-                p = sink_drv[p]; continue
-            ai = torch.nonzero(T.c_to == p).flatten()
-            if not len(ai):
-                break                                               # a startpoint (register output, input port)
-            ai = ai[T.c_arr[ai]]                                    # the search's arcs (not the slew-only ones)
-            if not len(ai):
-                break
-            lib, f = T.c_lib[ai], T.c_fr[ai]
-            best, nxt = -INF, None
-            for irf in (0, 1):
-                sense = T.c_sense[ai]
-                use = (sense == S_NON) | ((sense == S_POS) & (irf == rf)) | ((sense == S_NEG) & (irf != rf))
-                use = use & (T.t_n[lib, rf, 0] > 0)
-                if not bool(use.any()):
-                    continue
-                orf = torch.full_like(lib, rf)
-                pi = T.pi[T.pin_net[torch.full_like(lib, p)], rf] if T.pi is not None else torch.zeros(len(ai), 3, device=dev)
-                dmax, _, _ = arc_eval(T.t_ix1, T.t_ix2, T.t_val, T.t_n, lib, orf, T.smax[f, irf], pi[:, 0] + pi[:, 2],
-                                      pi[:, 2], pi[:, 1], T.t_thr[lib, orf])
-                cand = torch.where(use, arr[f, irf] + dmax, torch.full_like(dmax, -INF))
-                k = int(torch.argmax(cand).item())
-                if float(cand[k]) > best:
-                    best, nxt = float(cand[k]), (int(f[k]), irf)
-            if nxt is None:
-                break
-            p, rf = nxt
-        return out[::-1]
+        cp = self.critical_paths([p])
+        sm = T.smax.reshape(-1)[cp.rows].tolist()
+        return [(nm, rf, a, s_) for (nm, rf, a), s_ in zip(cp.report(0), sm)]
 
     def clock_arrivals(self):
         """{register clock pin name: (arrival max rise, max fall, min rise, min fall, slew max rise, max fall,
@@ -2268,6 +2279,59 @@ class TimingResult:
             out[self._pin_name(p)] = (ax[0], ax[1], an[0], an[1], sx[0], sx[1], sn[0], sn[1])
         return out
 
+    def critical_paths(self, endpoints=None, violating=True, max_paths=None):
+        """The worst path into each of many endpoints at once (batched on the timer's device): endpoints (pin
+        indices; default: every constrained endpoint, only the violating ones when violating), the worst max_paths of
+        them when given. As OpenSTA's report_checks -path_delay max picks it: at the endpoint the transition and tag
+        (launch clock edge) of the worst setup slack, then back through the latest arrivals in that tag. Not modeled:
+        clock reconvergence pessimism removal in the choice (with propagated clocks OpenSTA may report another
+        launching register whose path has a larger CRPR credit). Returns a CriticalPaths, worst first."""
+        T = self.timer
+        dev, P, NT = T.dev, T.P, T.NT
+        ep = self.endpoints if endpoints is None else torch.as_tensor(endpoints, device=dev, dtype=torch.long)
+        sl = self.setup[ep]
+        if endpoints is None and violating:
+            ep, sl = ep[sl < 0], sl[sl < 0]
+        o = torch.argsort(sl, stable=True)
+        if max_paths is not None:
+            o = o[:max_paths]
+        ep, sl = ep[o], sl[o]
+        A = T.amax.reshape(P * 2, NT)
+        req = torch.full((P * 2, NT), INF, device=dev)
+        for rows, rq, _ in T._setup_required():
+            req.index_reduce_(0, rows, torch.where(torch.isnan(rq), INF, rq), 'amin')
+        both = (ep[:, None] * 2 + torch.arange(2, device=dev)).flatten()          # (E * 2,): rise, fall
+        slk = torch.where(torch.isfinite(A[both]) & torch.isfinite(req[both]), req[both] - A[both],
+                          torch.full_like(A[both], INF)).reshape(len(ep), 2 * NT)
+        late = torch.where(torch.isfinite(A[both]), A[both], torch.full_like(A[both], -INF)).reshape(len(ep), 2 * NT)
+        k = torch.where(torch.isfinite(slk).any(1), torch.argmin(slk, 1), torch.argmax(late, 1))  # (unconstrained:
+        node = (ep * 2 + k // NT) * NT + k % NT                                                   # the latest)
+        prev, wire = T.path_prev()
+        par = (prev * NT + torch.arange(NT, device=dev, dtype=prev.dtype)).flatten()   # (int32: P * 2 * NT < 2^31)
+        par = torch.where(prev.flatten() >= 0, par, torch.full_like(par, -1))
+        del prev
+        # walk back twice: the lengths, then each path written from its end
+        n = torch.zeros(len(ep), device=dev, dtype=torch.long)
+        cur = node.clone()
+        while len(cur):
+            for _ in range(32):
+                live = cur >= 0
+                n += live.long()
+                cur = torch.where(live, par[cur.clamp(min=0)].long(), cur)
+            if not bool((cur >= 0).any()):
+                break
+        ptr = torch.zeros(len(ep) + 1, device=dev, dtype=torch.long)
+        ptr[1:] = torch.cumsum(n, 0)
+        nodes = torch.empty(int(ptr[-1]), device=dev, dtype=torch.long)
+        cur, at = node.clone(), ptr[1:] - 1
+        for _ in range(int(n.max()) if len(ep) else 0):
+            live = cur >= 0
+            nodes[at[live]] = cur[live]
+            at = at - live.long()
+            cur = torch.where(live, par[cur.clamp(min=0)].long(), cur)
+        rows = nodes // NT
+        return CriticalPaths(self, ep, sl, ptr, rows, A.reshape(-1)[nodes], wire[rows], nodes % NT)
+
     def endpoint_slacks(self, names=True):
         """{endpoint name ('inst/PIN' or port): (setup slack, hold slack)}."""
         d = self.timer.d
@@ -2280,3 +2344,48 @@ class TimingResult:
             nm = (cells[c] if p_mpin[p] < 0 else '%s/%s' % (cells[c], mp[p_mpin[p]])).replace('\\', '')
             out[nm] = (float(self.setup[p]), float(self.hold[p]))
         return out
+
+
+
+class CriticalPaths:
+    """Paths of TimingResult.critical_paths, in CSR form: path k is rows[ptr[k]:ptr[k + 1]], startpoint first, each row
+    a pin transition (pin * 2 + 0 rise / 1 fall) with its arrival (ps) in the path's tag; wire[i]: the step into row
+    i is a net (driver pin -> sink pin), else a cell arc (input -> output). endpoint / slack (setup, ps) per path,
+    worst first."""
+
+    def __init__(self, result, endpoint, slack, ptr, rows, arrival, wire, tag):
+        self.result = result
+        self.endpoint, self.slack, self.ptr, self.rows, self.arrival, self.wire, self.tag = \
+            endpoint, slack, ptr, rows, arrival, wire, tag
+        self.pin = rows // 2
+        self.rf = rows % 2
+
+    def __len__(self):
+        return len(self.endpoint)
+
+    def path_of(self):
+        """(N,) the path index of every row."""
+        return torch.repeat_interleave(torch.arange(len(self), device=self.ptr.device), self.ptr[1:] - self.ptr[:-1])
+
+    def pin_count(self):
+        """(P,) how many of the paths pass through each pin."""
+        P = self.result.timer.P
+        k = self.path_of()
+        key = torch.unique(k * P + self.pin)                         # once per path and pin
+        return torch.bincount(key % P, minlength=P)
+
+    def edges(self):
+        """The steps of the paths: (from pin, to pin, is a wire, path index), (M,) each: consecutive rows."""
+        k = self.path_of()
+        if len(k) < 2:
+            z = torch.zeros(0, dtype=torch.long, device=self.ptr.device)
+            return z, z, z.bool(), z
+        same = k[1:] == k[:-1]
+        return self.pin[:-1][same], self.pin[1:][same], self.wire[1:][same], k[1:][same]
+
+    def report(self, k=0):
+        """Path k as [(pin name, 'r'|'f', arrival ps)], startpoint first (as TimingResult.path)."""
+        a, b = int(self.ptr[k]), int(self.ptr[k + 1])
+        name = self.result._pin_name
+        return [(name(int(p)), 'rf'[int(r)], float(t)) for p, r, t in
+                zip(self.pin[a:b].tolist(), self.rf[a:b].tolist(), self.arrival[a:b].tolist())]

@@ -138,9 +138,19 @@ def _diverged(hist, best, window=50, threshold=0.05):
 
 def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins=None, seed=0,
                  verbose=True, log_every=50, snapshot='naive_gp', graphs=True, movable=None, macro_halo=0.0,
-                 routability=False, route_args=None):
+                 routability=False, route_args=None, extra=None, callback=None, callback_every=1):
     """Place the movable cells of d. Sets d.pos (the placement becomes a fact) and saves a snapshot.
-    Returns a dict with the trajectory (iterations, HPWL, overflow, time)."""
+    Returns a dict with the trajectory (iterations, HPWL, overflow, time).
+
+    Hooks for a user's objective terms (timing-driven placement and the like):
+      extra(pos) -> (value, grad): a term added to the objective at every evaluation; pos (C, 2) the lower-left of
+        every cell (as d.pos; the movable ones at the iterate), grad (C, 2) its gradient with respect to pos (only
+        the movable cells' rows are used). Added after the wirelength and density, with the same preconditioner (the
+        cell's pin count + lambda x area). Called outside the CUDA graph: it may sync, call d.timing(pos), etc.
+      callback(it, pos) every callback_every iterations, after the step: e.g. time the placement (d.timing(pos)) and
+        update d.n_weight in place (the wirelength reads it at the next evaluation) or the extra term's state.
+        Returning True stops the placement there.
+    Net weights (d.n_weight) weigh the wirelength as they are when each evaluation runs."""
     from ..evaluator import Evaluator
     if movable is None:
         d.require('global_place')
@@ -263,6 +273,17 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
         mt = _graph(metrics, x)
     else:
         og = lambda xa: obj_grad(xa)[:2]
+    if extra is not None:                               # the user's term, outside the graph, same preconditioner
+        og_base = og
+
+        def og(xa):
+            f, gr = og_base(xa)
+            xa = torch.maximum(torch.minimum(xa, hi), lo)
+            ve, ge = extra(full_pos(xa[:n_mov]).detach())
+            gr = gr.clone()
+            pre = (npins[:n_mov] + lam * area_all[:n_mov]).clamp(min=1.0)
+            gr[:n_mov] += ge[mv].to(gr.dtype) / pre[:, None]
+            return f + ve, gr
 
     # WA gamma from the overflow, from the start (DREAMPlace): a fixed initial value jumps at the first update when
     # the initial overflow is far from 1 (ispd2006_hb/ibm02: 0.58), and the Lipschitz estimate then collapses
@@ -387,6 +408,12 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
                 best = None
                 prev_hpwl = None
                 continue
+        if callback is not None and it % max(1, int(callback_every)) == 0:
+            if callback(it, full_pos(u[:n_mov]).detach()):
+                hist['stopped_by_callback'] = it
+                if best is None or ov < best[0]:
+                    best = (ov, hp, it, u.clone())
+                break
         if best is None or ov < best[0]:
             best = (ov, hp, it, u.clone())
         if ov < stop_overflow and it > 20:
