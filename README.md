@@ -9,7 +9,7 @@ Evolve VLSI placement, timing-optimization and routing algorithms in minutes, no
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/attar?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/attar)
 [![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/docs/features.md#evaluators)
-[![Tests](https://img.shields.io/badge/tests-135%20passing-5f7f1e?style=flat-square)](https://github.com/RayChang987/Attar/tree/main/tests)
+[![Tests](https://img.shields.io/badge/tests-145%20passing-5f7f1e?style=flat-square)](https://github.com/RayChang987/Attar/tree/main/tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/LICENSE)
 
 [Quick start](#quick-start) &nbsp;·&nbsp; [Why Attar](#why-attar) &nbsp;·&nbsp; [What's inside](#whats-inside) &nbsp;·&nbsp;
@@ -51,7 +51,7 @@ cva6 WNS -195 → -75 ps, in 2.2 s on an RTX 3080 Ti.</sub>
   IBM-HB+, OpenROAD-flow-scripts) load with one call, in one format, from LEF/DEF, Bookshelf or YAL. An algorithm
   is a function from tensors to positions: no database API, no TCL.
 - **Faithful.** Against OpenROAD and OpenSTA on the same placement: HPWL within 0.00002%, timing (WNS) within
-  0.34%, power within 0.01%, global-routing wirelength within 3.6%.
+  0.34%, power within 0.06%, global-routing wirelength within 3.6%.
 
 ## What's inside
 

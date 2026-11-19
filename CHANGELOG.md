@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.0.4
+
+**Upgrading.** The zoo's timing data changed: `after_fp/iccad2025` was distilled again (signal pins on DEF power /
+ground nets are now kept, as constants), the shared library bundles were rebuilt (recovery / removal arcs) and every
+design's timing was attached again. Designs downloaded before 1.0.4 still load and time, without those: fetch the
+suites you time again, e.g. `attar.fetch('after_fp/iccad2025', force=True)`.
+
+Timing
+- Equal to the ICCAD 2025 contest's own evaluation (`openRoad_eval_script/eval_def.tcl`: OpenROAD,
+  `estimate_parasitics -placement`, TNS / WNS, `report_power`) on all 13 designs at their given placement: TNS / WNS
+  within 0.01%, power within 0.06% (`tools/validate_iccad2025.py`, docs/validation/timing_routing.md). Ported from
+  OpenSTA for it: pins tied to VDD / VSS as constants; `set_input_transition -min`; combinational loops broken where
+  OpenSTA's levelization breaks them; latches (no D -> Q arrival without an enabling clock, the borrowing rules and
+  the D pins' required times otherwise); one wire delay per load, the largest over its driver's arcs; recovery /
+  removal checks; escaped port names in SDC patterns. Other suites gain too: ORFS asap7 aes TNS error 0.45% -> 0.01%,
+  nangate45 ibex and NS3K aes endpoint MAE 0.5 -> 0.00 ps.
+- `TimingResult.critical_paths(endpoints=None, violating=True, max_paths=None)`: the worst path into each of many
+  endpoints at once, as `report_checks -path_delay max` picks it (the endpoint's worst transition and launch tag,
+  then back through the latest arrivals), from the run's recorded delays: a `CriticalPaths` in CSR form with
+  `pin_count()` (paths through each pin) and `edges()` (net and arc steps). 53 of 54 sampled ICCAD 2025 paths are
+  OpenSTA's to the pin and transition (the other starts at another register: CRPR is not part of the choice);
+  96,506 paths of a 1M-cell design in 0.13 s on the GPU. `path()` uses it: it no longer launches a rising-edge
+  flip-flop from its clock's falling edge, and it is 20-100x faster.
+- CPU: the C++ helpers use PyTorch's thread count (torch.get_num_threads). With one thread per logical CPU they
+  fought PyTorch's own OpenMP threads: CPU timing on iccad2025/fpu 19.4 -> 0.8 s, mempool 8.9 -> 1.6 s.
+- Estimated parasitics: pins stacked at one location (an unplaced design) no longer make the Steiner trees quadratic,
+  with the same trees (a 95k-pin net: 12.5 -> 1.5 s).
+
+Power
+- `d.power()` is 10-20x faster: the register passes of the activity propagation visit only the pins that changed,
+  as OpenSTA's breadth-first search, in C++ (also for GPU timers); mempool (184k cells) 74 -> 3.8 s on the CPU,
+  10.9 -> 1.0 s on the GPU. The first call's setup is 5-9x faster (mempool 41 -> 4.6 s).
+- Less memory: the expression tables stay in host memory, compact; the instance powers are evaluated on the GPU
+  when they fit, else on the CPU. 1M-cell designs now fit a GPU with 7 GB free; CPU peak on jpeg_x20 14.7 -> 10.4 GB.
+- A resize in place releases the timer's power analysis: it was kept with the old masters' functions and tables.
+
+Placement
+- `naive.global_place(..., extra=fn, callback=cb, callback_every=k)`: hooks for research objectives such as
+  timing-driven placement. `extra(pos) -> (value, grad)` is added to the objective at every evaluation, with the
+  wirelength's preconditioner, outside the CUDA graph (it may time the design); `callback(it, pos)` runs every k
+  iterations (time the placement, update `d.n_weight` in place; returning True stops). Nothing changes when unused.
+
 ## 1.0.3
 
 **Upgrading.** Two new suites, `after_fp/iccad2015` and `before_fp/orfs_nangate45`. The routing fact of the ORFS,
