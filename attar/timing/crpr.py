@@ -93,6 +93,9 @@ class Crpr:
         parent[to_[o]] = fr_[o]
         nodes = np.nonzero(pclk)[0]
         cidx = np.full(P, -1, np.int64); cidx[nodes] = np.arange(len(nodes))
+        lat_pins = getattr(T, '_lat_pins', None)                 # pin clock latencies: the clock is ideal there, no
+        if lat_pins is not None and len(lat_pins):                # credit (Crpr: both clock infos propagated)
+            cidx[lat_pins] = -1
         idx = np.arange(len(nodes))
         up0 = np.where(parent[nodes] >= 0, cidx[np.maximum(parent[nodes], 0)], idx)
         up0 = np.where(up0 >= 0, up0, idx)
@@ -157,7 +160,7 @@ class Crpr:
             l_tag = self.Gt.repeat(len(lk)).repeat(2)
             l_neg = torch.cat([torch.zeros(len(lk) * G, device=dev, dtype=torch.bool),
                                torch.ones(len(lk) * G, device=dev, dtype=torch.bool)])
-            self.levs.append((a, w, (d_src, d_tgt, d_u), (l_tgt, l_u, l_row, l_tag, l_neg)))
+            self.levs.append((a, w, tgt, (d_src, d_tgt, d_u), (l_tgt, l_u, l_row, l_tag, l_neg)))
         # nets driven by input ports
         self.pa = None
         if len(T.pa):
@@ -207,11 +210,13 @@ class Crpr:
         for lv, rec in zip(self.levs, T._rec):
             if lv is None:
                 continue
-            a, w, (d_src, d_tgt, d_u), (l_tgt, l_u, l_row, l_tag, l_neg) = lv
-            wc = w.clamp(min=0); ow = w >= 0
+            a, w, trow, (d_src, d_tgt, d_u), (l_tgt, l_u, l_row, l_tag, l_neg) = lv
+            ow = w >= 0
             z = torch.zeros(len(a), device=dev)
             dly = torch.cat([rec[0][a], -rec[2][a]])                     # per (late, early) unit
-            wir = torch.cat([torch.where(ow, rec[1][wc], z), torch.where(ow, -rec[3][wc], z)])
+            # a load's wire delay: the largest of its driver's arcs (the timer's, Timer._load_arr)
+            wbx, wbn = T._wb
+            wir = torch.cat([torch.where(ow, wbx[trow], z), torch.where(ow, -wbn[trow], z)])
             rep, v, cid = S.get(d_src)                                   # data arcs: their input's entries
             u = d_u[rep]
             v = (v + dly[u]) + wir[u]                                    # the timer's order: (arrival + gate) + wire

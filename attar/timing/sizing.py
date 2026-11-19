@@ -105,6 +105,12 @@ def resize(d, cells, masters, check=True):
                 raise ValueError('%s: pin %s of %s not in %s' % (n['cells'][c], pn, n['masters'][om], new))
             a['p_mpin'][p] = pos_new[pn]
             touched.append(p)
+        if 'tie_cell' in a:                              # its pins on supply nets
+            for j in np.nonzero(a['tie_cell'] == c)[0]:
+                pn = n['master_pins'][om][int(a['tie_mpin'][j]) - int(a['m_pin_ptr'][om])]
+                if pn not in pos_new:
+                    raise ValueError('%s: pin %s of %s not in %s' % (n['cells'][c], pn, n['masters'][om], new))
+                a['tie_mpin'] = a['tie_mpin'].copy(); a['tie_mpin'][j] = pos_new[pn]
         a['c_master'][c] = nm
     # derived geometry of the cells and pins that changed
     s = d.scale

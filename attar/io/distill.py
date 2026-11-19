@@ -170,8 +170,14 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
     p_cell = []; p_mpin = []; p_dir = []; n_ptr = [0]; n_flags = []; net_names = []
     port_dir = {p[0]: PORT_DIR.get(p[5], D_INOUT) for p in pins}
     skipped = 0; has_conn = np.zeros(N, bool)
+    tie = []                                        # signal pins on a POWER / GROUND net: (cell, master pin, 1 / 0)
     for name, conns, use in d['nets']:
         if use in ('POWER', 'GROUND'):
+            for comp, pin in conns:
+                i = cid.get(comp) if comp != 'PIN' else None
+                k = mpin_id.get((comps[i][1], pin)) if i is not None else None
+                if k is not None and m_pin_use[k] in (U_SIGNAL, U_CLOCK):
+                    tie.append((i, k, 1 if use == 'POWER' else 0)); has_conn[i] = True
             continue
         for comp, pin in conns:
             if comp == 'PIN':
@@ -225,6 +231,10 @@ def distill(def_path, lef_paths, out_dir, lib_paths=(), extra=None, reference=No
                  'tr_start': np.array([t[1] for t in trk], np.int32), 'tr_num': np.array([t[2] for t in trk], np.int32),
                  'tr_step': np.array([t[3] for t in trk], np.int32), 'tr_layer': np.array([lid[t[4]] for t in trk], np.int16),
                  'tr_die': np.zeros(len(trk), np.uint8)})
+    if tie:   # constants for timing (OpenSTA's sim: a pin on a supply net is logic 1 / 0) and power
+        tie.sort()
+        core.update({'tie_cell': np.array([x[0] for x in tie], np.int32), 'tie_mpin': np.array([x[1] for x in tie], np.int32),
+                     'tie_val': np.array([x[2] for x in tie], np.uint8)})
     core.update(ref)
     tp = {'layer_dir': np.array([0 if l.get('direction') == 'HORIZONTAL' else 1 for l in layers], np.uint8),
           'layer_pitch': np.array([q(l['pitch']) for l in layers], np.int32),

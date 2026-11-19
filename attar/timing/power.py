@@ -47,8 +47,10 @@ O_UNKNOWN, O_INPUT, O_PROP, O_CLOCK, O_CONST = 0, 1, 2, 3, 4
 F64 = torch.float64
 ACT = torch.float32              # activities, as OpenSTA keeps them (float): a register loop that has not converged
 #                                  after its 50 passes ends where float rounding takes it
-R_PIN, R_SEQ, R_NONE, R_PAD = 0, 1, 2, 3   # an expression variable: an instance pin, a register state, absent,
-#                                            padding (constant 0: merged groups of a level, see Power.__init__)
+R_PIN, R_SEQ, R_NONE, R_PAD, R_IN, R_TIE = 0, 1, 2, 3, 4, 5   # an expression variable: an instance pin, a register
+#   state, absent, padding (constant 0: merged groups of a level, see Power.__init__), an unconnected input pin of the
+#   instance (a levelize root: OpenSTA seeds it with the input activity, Power::seedActivities), a pin on a supply
+#   net (idx: its value; OpenSTA's sim makes it a constant, Power::findActivity: duty the value, density 0)
 
 
 def _truth(vs, f):
@@ -65,6 +67,7 @@ class _Exprs:
     def __init__(self, dev):
         self.dev = dev
         self.rows = {}
+        self.in_density, self.min_period = 0.0, 0.0     # R_IN variables' activity (set by Power)
 
     def _g(self, k):
         return self.rows.setdefault(k, {'kind': [], 'idx': [], 'tid': [], 'n': 0, 'bank': [], 'bank_id': {}})
@@ -113,9 +116,12 @@ class _Exprs:
         ip, iq = idx.clamp(max=P - 1), idx.clamp(max=max(S - 1, 0))
         z = torch.zeros_like(idx, dtype=ACT)
         sq = lambda x: x[iq] if S else z  # noqa: E731
-        u = torch.where(kind == R_PIN, pin_u[ip], torch.where(kind == R_SEQ, sq(seq_u), z))
-        d = torch.where(kind == R_PIN, pin_d[ip], torch.where(kind == R_SEQ, sq(seq_d), z))
-        pr = torch.where(kind == R_PIN, per[ip], torch.full_like(z, INF))
+        ri, rt = kind == R_IN, kind == R_TIE
+        other = torch.where(ri, z + 0.5, torch.where(rt, idx.to(z.dtype), z))
+        u = torch.where(kind == R_PIN, pin_u[ip], torch.where(kind == R_SEQ, sq(seq_u), other))
+        d = torch.where(kind == R_PIN, pin_d[ip], torch.where(kind == R_SEQ, sq(seq_d),
+                                                              torch.where(ri, z + self.in_density, z)))
+        pr = torch.where(kind == R_PIN, per[ip], torch.where(ri | rt, z + self.min_period, torch.full_like(z, INF)))
         ck = (kind == R_PIN) & clk[ip]
         return kind[:, :k], u[:, :k], d[:, :k], pr[:, :k], ck[:, :k]
 
@@ -148,7 +154,7 @@ class _Exprs:
         w = self._weights(g['bits'], u, k)
         duty = (w * tab).sum(1)
         # change density: P(f(previous period) != f(current)) over the period of the fastest launching clock
-        period = torch.where(kind == R_PIN, per, torch.full_like(per, INF)).amin(1)
+        period = torch.where((kind == R_PIN) | (kind == R_IN) | (kind == R_TIE), per, torch.full_like(per, INF)).amin(1)
         period = torch.where(torch.isfinite(period), period, torch.full_like(period, min_period))
         period = torch.where(period > 0, period, torch.full_like(period, unit))
         uc = u.clamp(0, 1)
@@ -173,7 +179,8 @@ class _Exprs:
         for j in range(k):
             flip = tab[:, r ^ (1 << j)]
             pdiff = (w * (tab - flip).abs()).sum(1)
-            dsum = dsum + torch.where(kind[:, j] == R_PIN, d[:, j] * pdiff, torch.zeros_like(pdiff))
+            pinlike = (kind[:, j] == R_PIN) | (kind[:, j] == R_IN) | (kind[:, j] == R_TIE)
+            dsum = dsum + torch.where(pinlike, d[:, j] * pdiff, torch.zeros_like(pdiff))
         return duty, torch.where(ok, dens_change, dsum)
 
 
@@ -215,6 +222,19 @@ class Power:
                     break
         keys = np.where(p_mpin >= 0, p_cell * len(mpn) + p_mpin, -1)
         o = np.argsort(keys); sk = keys[o]
+
+        if 'tie_cell' in a:                            # pins on supply nets: (cell, master pin) -> 1 / 0
+            tk = a['tie_cell'].astype(np.int64) * len(mpn) + a['tie_mpin'].astype(np.int64)
+            to_ = np.argsort(tk); tks = tk[to_]; tvs = a['tie_val'].astype(np.int64)[to_]
+        else:
+            tks = np.zeros(0, np.int64); tvs = tks
+
+        def tie_of(cell, mp):
+            if not len(tks):
+                return np.full(len(cell), -1, np.int64)
+            k = np.asarray(cell) * len(mpn) + np.asarray(mp)
+            i = np.minimum(np.searchsorted(tks, k), len(tks) - 1)
+            return np.where(tks[i] == k, tvs[i], -1)
 
         def pin_of(cell, mp):
             k = np.asarray(cell) * len(mpn) + np.asarray(mp)
@@ -297,7 +317,10 @@ class Power:
             for j, v in enumerate(vs):
                 if v in loc:
                     pp = pin_of(cells, loc[v])
-                    kind[:, j] = np.where(pp >= 0, R_PIN, R_NONE); idx[:, j] = np.maximum(pp, 0)
+                    absent = R_IN if t['mp_dir'][loc[v]] in (0, 2) else R_NONE   # an unconnected input pin
+                    tv = tie_of(cells, loc[v])
+                    kind[:, j] = np.where(pp >= 0, R_PIN, np.where(tv >= 0, R_TIE, absent))
+                    idx[:, j] = np.where(pp >= 0, pp, np.maximum(tv, 0))
                 elif v in slot_of:
                     sl = slot_of[v][cells]
                     kind[:, j] = np.where(sl >= 0, R_SEQ, R_NONE); idx[:, j] = np.maximum(sl, 0)
@@ -574,6 +597,7 @@ class Power:
         per = [c['period'] for c in T.clocks if c.get('period')]
         self.min_period = min(per) if per else 0.0
         self.in_density = 0.1 / (self.min_period if self.min_period > 0 else 1.0)
+        self.X.in_density, self.X.min_period = self.in_density, self.min_period
         wf = [c['waveform'] for c in T.clocks]
         self.clk_period = Tt([c['period'] for c in T.clocks] or [INF], ACT)
         self.clk_duty = Tt([(w[1] - w[0]) / c['period'] for w, c in zip(wf, T.clocks)] or [0.0], ACT)

@@ -37,7 +37,8 @@ def _opts(args, flags, valued):
 def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
     """Evaluate an SDC. ports_in / ports_out: the design's port names (for get_ports patterns, all_inputs, ...).
     Returns {'clocks': {name: {'period', 'waveform', 'sources', 'latency', 'uncertainty', ['transition']}}, 'input_delay': [...],
-    'output_delay': [...], 'input_transition': {port: ps}, 'load': {port: fF}, 'clock_groups': [...],
+    'output_delay': [...], 'input_transition': {port: ps} (max), 'input_transition_min': {port: ps}, 'load': {port: fF},
+    'clock_groups': [...],
     'path_delays': [{'kind': 'max'|'min', 'value', 'from', 'to': [(kind, name)] or None, 'ignore_clock_latency'}],
     'unsupported': {command: count}} with times and capacitances in the SDC's units (OpenSTA: the first Liberty
     file's units; attar.timing.ir.attach converts them to ps / fF)."""
@@ -49,8 +50,9 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
     tcl = tkinter.Tcl()
     ports = list(ports_in) + list(ports_out)
     port_set = set(ports)
-    res = {'clocks': {}, 'input_delay': [], 'output_delay': [], 'input_transition': {}, 'load': {},
-           'clock_groups': [], 'path_delays': [], 'unsupported': {},
+    plain = {p.replace('\\', ''): p for p in ports if '\\' in p}
+    res = {'clocks': {}, 'input_delay': [], 'output_delay': [], 'input_transition': {}, 'input_transition_min': {}, 'load': {},
+           'clock_groups': [], 'path_delays': [], 'unsupported': {}, 'pin_latency': [],
            'limits': {k: {'design': None, 'ports': {}, 'clocks': {}} for k in ('max_transition', 'max_capacitance',
                                                                              'max_fanout')}}
 
@@ -81,9 +83,11 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
         for pat in [p for a in pos for p in split(a)]:
             if pat in port_set:                      # bus bits ('key[0]') are names, not bracket globs
                 names.append(pat)
+            elif pat in plain:                       # a DEF name's escaped brackets (DEF a\[r\][0] is a[r][0])
+                names.append(plain[pat])
             elif '*' in pat or '?' in pat:
                 g = pat.replace('[', '[[]').replace(']', '[]]').replace('[[[]]', '[[]')
-                names += [p for p in ports if fnmatch.fnmatchcase(p, g)]
+                names += [p for p in ports if fnmatch.fnmatchcase(p.replace('\\', ''), g)]
         return tag('port', names)
 
     def get_clocks(*args):
@@ -113,8 +117,21 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
         val = float(pos[0])
         for a in pos[1:]:
             for k, n in objs(a, 'clock'):
-                if k == 'clock' and n in res['clocks'] and not o.get('-min'):
-                    res['clocks'][n]['source_latency' if o.get('-source') else 'latency'] = val
+                if k == 'clock' and n in res['clocks']:
+                    if not o.get('-min'):
+                        res['clocks'][n]['source_latency' if o.get('-source') else 'latency'] = val
+                elif k in ('pin', 'port') and not o.get('-source'):
+                    # network latency on a pin (Sdc::setClockLatency(clk, pin)): where a clock reaches the pin, its
+                    # arrival becomes the ideal edge + this latency and the clock is ideal from there on
+                    # (Search::mutateTag); rf / min-max: the transitions and analyses it applies to (none given: all)
+                    rf = [i for i, f in enumerate(('-rise', '-fall')) if o.get(f)] or [0, 1]
+                    mm = ([m for m, fs in (('max', ('-max', '-late')), ('min', ('-min', '-early')))
+                           if any(o.get(f) for f in fs)] or ['max', 'min'])
+                    res['pin_latency'].append({'pin': n, 'port': k == 'port', 'clock': o.get('-clock'),
+                                               'value': val, 'rf': rf, 'mm': mm})
+                else:
+                    key = 'set_clock_latency -source on %ss' % k if o.get('-source') else 'set_clock_latency on %ss' % k
+                    res['unsupported'][key] = res['unsupported'].get(key, 0) + 1
         return ''
 
     def set_clock_uncertainty(*args):
@@ -168,6 +185,8 @@ def read(path_or_text, ports_in=(), ports_out=(), design='', is_text=False):
             for _k, n in objs(a, 'port'):
                 if not o.get('-min'):
                     res['input_transition'][n] = float(pos[0])
+                if not o.get('-max'):
+                    res['input_transition_min'][n] = float(pos[0])
         return ''
 
     def set_load(*args):

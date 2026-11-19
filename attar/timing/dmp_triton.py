@@ -467,8 +467,9 @@ def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t
                       NT, K, NIT: tl.constexpr, RIT: tl.constexpr, BLOCK: tl.constexpr, MODE: tl.constexpr):
     """One level's arcs, 2N lanes (max analysis, then min): DMP gate delay and driver slew, the driver pin's arrivals
     (per tag) and slews by float atomics, and per lane the row its loads need (STATE + delay, arr) in st_o.
-    fi < 0: a launch arc (arrival t0 into tag at its clock pin, slew s0: the clock's transition). arr = 0: an arc of
-    delay calculation only (its slews count, as every arc's in OpenSTA's graph delay calculation; no arrivals)."""
+    fi < 0: a launch arc (arrival t0 into tag at its clock pin, slew s0: the clock's transition). arr bit 0 clear: an arc
+    of delay calculation only (its slews count, as every arc's in OpenSTA's graph delay calculation; no arrivals);
+    bit 1: an arc that does not annotate its loads (a latch D -> Q arc, GraphDelayCalc::annotateDelaysSlews)."""
     l = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = l < 2 * N
     mn = l >= N
@@ -495,7 +496,8 @@ def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t
     delay, ds, ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo, ub = _gate_dev(
         ix1, ix2, val, nn, lib, orf, slew, cn + cf, cf, rr, vth, vl, vh, der, mask, K, NIT, RIT, MODE)
     ti = t * 2 + orf
-    arr = tl.load(arr_p + c, mask=mask, other=1) != 0
+    arr_b = tl.load(arr_p + c, mask=mask, other=1)
+    arr = (arr_b & 1) != 0
     for g in range(NT):
         ax = tl.load(amax + fis * NT + g, mask=mask & ~launch, other=-INF)
         an = tl.load(amin + fis * NT + g, mask=mask & ~launch, other=INF)
@@ -513,6 +515,7 @@ def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t
     tl.store(so + 10, vo, mask=mask); tl.store(so + 11, ub, mask=mask); tl.store(so + 12, ds, mask=mask)
     tl.store(so + 13, vth, mask=mask); tl.store(so + 14, vl, mask=mask); tl.store(so + 15, vh, mask=mask)
     tl.store(so + 16, der, mask=mask); tl.store(so + 17, delay, mask=mask); tl.store(so + 18, arr.to(tl.float32), mask=mask)
+    tl.store(so + 19, ((arr_b & 2) != 0).to(tl.float32), mask=mask)
 
 
 @triton.jit(do_not_specialize=['N', 'M', 'NT'])
@@ -520,8 +523,10 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
                       amax, amin, smax, smin, w_o, N, M,
                       NT, RIT: tl.constexpr, BLOCK: tl.constexpr, MODE: tl.constexpr):
     """One level's loads, 2M lanes (max analysis, then min): DMP wire delay and load slew from the arc's row of
-    stage_gate_kernel, threshold adjustment, the load pin's arrivals and slews by float atomics; every lane's wire
-    delay in w_o (2M,: max, then min), for required times (attar.timing.sta.Timer.required) and CRPR (attar.timing.crpr)."""
+    stage_gate_kernel, threshold adjustment, the load pin's slews by float atomics (not from an arc that does not
+    annotate its loads); every lane's wire delay in w_o (2M,: max, then min). The loads' arrivals are the caller's
+    (stage: the driver's arrival + the largest wire delay of its arcs, as OpenSTA's graph delay calculation keeps
+    one wire delay per wire edge and transition)."""
     l = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = l < 2 * M
     mn = l >= M
@@ -538,14 +543,8 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
     ub = tl.load(row + 11, mask=mask, other=1.0); ds = tl.load(row + 12, mask=mask, other=0.0)
     vth = tl.load(row + 13, mask=mask, other=0.5); vl = tl.load(row + 14, mask=mask, other=0.2)
     vh = tl.load(row + 15, mask=mask, other=0.8); der = tl.load(row + 16, mask=mask, other=1.0)
-    delay = tl.load(row + 17, mask=mask, other=0.0)
-    arr = tl.load(row + 18, mask=mask, other=0.0) > 0.5
+    nol = tl.load(row + 19, mask=mask, other=0.0) > 0.5
     orf = tl.load(orf_p + c, mask=mask, other=0)
-    fi = tl.load(fi_p + c, mask=mask, other=-1)
-    launch = fi < 0
-    fis = tl.maximum(fi, 0)
-    t0l = tl.load(t0_p + c, mask=mask, other=0.0)
-    tagl = tl.load(tag_p + c, mask=mask, other=0)
     sk = tl.load(nto_p + a, mask=mask, other=0)
     elm = tl.load(elm_p + a * 4 + orf + 2 * mn.to(tl.int32), mask=mask, other=0.0)
     lb = sthr_p + (sk * 2 + orf) * 4
@@ -553,19 +552,10 @@ def stage_load_kernel(st_p, ea_p, en_p, fi_p, orf_p, t0_p, tag_p, nto_p, elm_p, 
     lvh = tl.load(lb + 2, mask=mask, other=0.8); lder = tl.load(lb + 3, mask=mask, other=1.0)
     w, sl = _load_dev(ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo, ub, ds, vth, vl, vh, der, elm, orf == 0,
                       lvth, lvl, lvh, lder, RIT, MODE)
-    delay = delay.to(tl.float32)                           # (float64 rows in MODE 2)
     tl.store(w_o + l, w.to(tl.float32), mask=mask)
     si = sk * 2 + orf
-    INF = float('inf')
-    for g in range(NT):
-        ax = tl.load(amax + fis * NT + g, mask=mask & ~launch & ~mn, other=-INF)
-        an = tl.load(amin + fis * NT + g, mask=mask & ~launch & mn, other=INF)
-        ax = tl.where(launch, tl.where(tagl == g, t0l, -INF), ax) + delay + w
-        an = tl.where(launch, tl.where(tagl == g, t0l, INF), an) + delay + w
-        tl.atomic_max(amax + si * NT + g, ax, mask=mask & ~mn & arr & (ax > -INF))
-        tl.atomic_min(amin + si * NT + g, an, mask=mask & mn & arr & (an < INF))
-    tl.atomic_max(smax + si, sl, mask=mask & ~mn)
-    tl.atomic_min(smin + si, sl, mask=mask & mn)
+    tl.atomic_max(smax + si, sl, mask=mask & ~mn & ~nol)
+    tl.atomic_min(smin + si, sl, mask=mask & mn & ~nol)
 
 
 BLOCK = 128
