@@ -8,6 +8,7 @@ import os
 import subprocess
 
 import numpy as np
+import torch
 
 _SRC = os.path.join(os.path.dirname(__file__), 'csrc', 'pdtree.cpp')
 _LIB = None
@@ -68,7 +69,7 @@ def pd_rc(x, y, ptr, drv, cap, rv, r, c, dbu, alpha=0.3, threads=None):
     elm = np.zeros((M, V), np.float32); pi = np.zeros((E, V, 3), np.float32); length = np.zeros(E, np.float32)
     p = lambda a: a.ctypes.data_as(ctypes.c_void_p)  # noqa: E731
     lib.attar_pd_rc(E, p(ptr), p(drv), p(x), p(y), V, p(cap), p(rv), float(r), float(c), float(dbu), float(alpha),
-                    p(elm), p(pi), p(length), int(threads or os.cpu_count() or 1))
+                    p(elm), p(pi), p(length), int(threads or torch.get_num_threads() or 1))
     return elm, pi, length
 
 
@@ -84,7 +85,7 @@ def pd_edges(x, y, ptr, alpha=0.0, threads=None):
     E = len(ptr) - 1
     cnt = np.zeros(E, np.int64)
     p = lambda a: a.ctypes.data_as(ctypes.c_void_p)  # noqa: E731
-    th = int(threads or os.cpu_count() or 1)
+    th = int(threads or torch.get_num_threads() or 1)
     lib.attar_pd_edges(E, p(ptr), p(x), p(y), float(alpha), p(cnt), None, None, th)
     off = np.concatenate([[0], np.cumsum(cnt)]).astype(np.int64)
     out = np.zeros((int(off[-1]), 4), np.int32)

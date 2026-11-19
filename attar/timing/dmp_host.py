@@ -65,7 +65,10 @@ def _ptr(a):
     return a.ctypes.data_as(ctypes.c_void_p)
 
 
-_THREADS = os.cpu_count() or 1
+def _threads():
+    """PyTorch's intra-op thread count (the physical cores by default): with as many OpenMP threads as logical CPUs
+    the two runtimes' spinning threads contend (a 20x slowdown measured on a 10-core / 20-thread CPU)."""
+    return max(1, torch.get_num_threads())
 
 
 class Tables:
@@ -86,7 +89,7 @@ def gate(tables, lib, orf, slew, ctot, c_far, rpi, thr):
         args = [_np(lib, np.int64), _np(orf, np.int64), _np(slew, np.float32), _np(ctot, np.float32),
                 _np(c_far, np.float32), _np(rpi, np.float32), _np(thr, np.float32)]
         _build().attar_dmp_gate(N, _ptr(T.ix1), _ptr(T.ix2), _ptr(T.val), _ptr(T.tn), T.K, *[_ptr(a) for a in args],
-                                _ptr(delay), _ptr(dslew), _ptr(state), NEWTON_MAX_ITER, FIND_ROOT_MAX_ITER, _THREADS)
+                                _ptr(delay), _ptr(dslew), _ptr(state), NEWTON_MAX_ITER, FIND_ROOT_MAX_ITER, _threads())
     return torch.from_numpy(delay), torch.from_numpy(dslew), torch.from_numpy(state)
 
 
@@ -96,5 +99,5 @@ def load(state, elmore, rise, lthr):
     w = np.empty(N, np.float32); s = np.empty(N, np.float32)
     if N:
         args = [_np(state, np.float32), _np(elmore, np.float32), _np(rise, np.uint8), _np(lthr, np.float32)]
-        _build().attar_dmp_load(N, *[_ptr(a) for a in args], _ptr(w), _ptr(s), FIND_ROOT_MAX_ITER, _THREADS)
+        _build().attar_dmp_load(N, *[_ptr(a) for a in args], _ptr(w), _ptr(s), FIND_ROOT_MAX_ITER, _threads())
     return torch.from_numpy(w), torch.from_numpy(s)
