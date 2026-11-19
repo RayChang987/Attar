@@ -54,8 +54,11 @@ R_PIN, R_SEQ, R_NONE, R_PAD, R_IN, R_TIE = 0, 1, 2, 3, 4, 5   # an expression va
 
 
 def _truth(vs, f):
-    """A function's truth table over its variables vs (row r: variable i is bit i of r)."""
-    return np.array([f({v: (r >> i) & 1 for i, v in enumerate(vs)}) for r in range(1 << len(vs))], np.float64)
+    """A function's truth table over its variables vs (row r: variable i is bit i of r): the evaluator (its operators
+    are elementwise) run once on every row's bits."""
+    r = np.arange(1 << len(vs), dtype=np.int64)
+    out = f({v: (r >> i) & 1 for i, v in enumerate(vs)})
+    return np.broadcast_to(np.asarray(out, np.float64), r.shape).copy()
 
 
 class _Exprs:
@@ -68,6 +71,10 @@ class _Exprs:
         self.dev = dev
         self.rows = {}
         self.in_density, self.min_period = 0.0, 0.0     # R_IN variables' activity (set by Power)
+        self.host = None                                 # attar.timing.activity_host on the CPU (activity())
+        if torch.device(dev).type == 'cpu':
+            from . import activity_host
+            self.host = activity_host if activity_host.available() else None
 
     def _g(self, k):
         return self.rows.setdefault(k, {'kind': [], 'idx': [], 'tid': [], 'n': 0, 'bank': [], 'bank_id': {}})
@@ -79,7 +86,9 @@ class _Exprs:
         if key not in g['bank_id']:
             g['bank_id'][key] = len(g['bank']); g['bank'].append(np.asarray(table, np.float64))
         n = kind.shape[0]
-        g['kind'].append(kind); g['idx'].append(idx); g['tid'].append(np.full(n, g['bank_id'][key], np.int64))
+        # (compact: kind one of R_*, idx a pin, state slot or tie value, tid a table: tens of millions of entries)
+        g['kind'].append(kind.astype(np.int8)); g['idx'].append(idx.astype(np.int32))
+        g['tid'].append(np.full(n, g['bank_id'][key], np.int32))
         rows = np.arange(g['n'], g['n'] + n)
         g['n'] += n
         return k, rows
@@ -91,13 +100,13 @@ class _Exprs:
             R = 1 << k
             kk = max(k, 1)
             if k == 0:                                   # constant functions (tie cells)
-                kind = np.full((g['n'], 1), R_NONE, np.int64); idx = np.zeros((g['n'], 1), np.int64)
+                kind = np.full((g['n'], 1), R_NONE, np.int8); idx = np.zeros((g['n'], 1), np.int32)
             else:
-                kind = np.concatenate(g['kind']).reshape(-1, k) if g['n'] else np.zeros((0, k), np.int64)
-                idx = np.concatenate(g['idx']).reshape(-1, k) if g['n'] else np.zeros((0, k), np.int64)
+                kind = np.concatenate(g.pop('kind')).reshape(-1, k) if g['n'] else np.zeros((0, k), np.int8)
+                idx = np.concatenate(g.pop('idx')).reshape(-1, k) if g['n'] else np.zeros((0, k), np.int32)
             bits = ((np.arange(R)[:, None] >> np.arange(kk)[None]) & 1).astype(np.float64)
-            self.groups[k] = {'kind': T_(kind, torch.long), 'idx': T_(idx, torch.long),
-                              'tid': T_(np.concatenate(g['tid']) if g['n'] else np.zeros(0, np.int64), torch.long),
+            self.groups[k] = {'kind': T_(kind, torch.int8), 'idx': T_(idx, torch.int32),
+                              'tid': T_(np.concatenate(g['tid']) if g['n'] else np.zeros(0, np.int32), torch.int32),
                               'bank': T_(np.stack(g['bank']) if g['bank'] else np.zeros((0, R)), ACT),
                               'bits': T_(bits, ACT), 'n': g['n'], 'flip_base': torch.arange(R, device=self.dev)}
         self.rows = None
@@ -126,12 +135,16 @@ class _Exprs:
         return kind[:, :k], u[:, :k], d[:, :k], pr[:, :k], ck[:, :k]
 
     @staticmethod
-    def _weights(bits, p, k):
-        """(n, 2^k) probabilities of the truth table's rows."""
-        w = torch.ones(p.shape[0], bits.shape[0], dtype=ACT, device=p.device)
-        for j in range(k):
-            w = w * torch.where(bits[None, :, j] > 0.5, p[:, j:j + 1], 1 - p[:, j:j + 1])
-        return w
+    def _fold(tab, u, k):
+        """Power::evalBddDuty: the Shannon expansion duty0 (1 - v) + duty1 v per variable (the last first), in double
+        and stored in float at each step as there: a convex combination, never above 1 (a sum of the rows' weights
+        can round above 1, and a register's min(duty, 1 - duty) below 0, which its loops amplify)."""
+        t = tab
+        for j in reversed(range(k)):
+            h = 1 << j
+            v = u[:, j:j + 1].double()
+            t = (t[:, :h].double() * (1.0 - v) + t[:, h:2 * h].double() * v).to(ACT)
+        return t[:, 0]
 
     def duty(self, k, rows, act):
         g = self.groups[k]
@@ -140,19 +153,27 @@ class _Exprs:
         if k == 0:
             return tab[:, 0]
         _, u, _, _, _ = self._vars(k, rows, act)
-        return (self._weights(g['bits'], u, k) * tab).sum(1)
+        return self._fold(tab, u, k)
+
+    def duty_of(self, k, rows, act):
+        """duty(), in C++ on the CPU (with the density, unused)."""
+        if self.host is not None:
+            return self.host.activity(self.groups[k], self.groups[k].get('K', k), rows, act, self.in_density,
+                                      self.min_period, self.min_period, 1.0)[0]
+        return self.duty(k, rows, act)
 
     def activity(self, k, rows, act, min_period, unit):
         """(duty, density) of the entries: Power::evalActivity's BDD path (evalBddDuty, evalBddActivity)."""
         g = self.groups[k]
+        if self.host is not None:
+            return self.host.activity(g, g.get('K', k), rows, act, self.in_density, self.min_period, min_period, unit)
         tab = self.table(k, rows)
         kind, u, d, per, ck = self._vars(k, rows, act)
         k = g.get('K', k)
         if k == 0:
             return tab[:, 0], torch.zeros_like(tab[:, 0])
         n, R = tab.shape
-        w = self._weights(g['bits'], u, k)
-        duty = (w * tab).sum(1)
+        duty = self._fold(tab, u, k)
         # change density: P(f(previous period) != f(current)) over the period of the fastest launching clock
         period = torch.where((kind == R_PIN) | (kind == R_IN) | (kind == R_TIE), per, torch.full_like(per, INF)).amin(1)
         period = torch.where(torch.isfinite(period), period, torch.full_like(period, min_period))
@@ -178,23 +199,35 @@ class _Exprs:
         r = g['flip_base']
         for j in range(k):
             flip = tab[:, r ^ (1 << j)]
-            pdiff = (w * (tab - flip).abs()).sum(1)
+            pdiff = self._fold((tab - flip).abs(), u, k)
             pinlike = (kind[:, j] == R_PIN) | (kind[:, j] == R_IN) | (kind[:, j] == R_TIE)
             dsum = dsum + torch.where(pinlike, d[:, j] * pdiff, torch.zeros_like(pdiff))
         return duty, torch.where(ok, dens_change, dsum)
 
 
+def _cpu_host():
+    from . import activity_host
+    return activity_host.available()
+
+
 class Power:
-    """Built once per timer (the netlist's activity graph, function tables, power groups); run(result) evaluates."""
+    """Built once per timer (the netlist's activity graph, function tables, power groups); run(result) evaluates.
+    Two devices: dev, the activity propagation's and the expressions' (the CPU when the C++ is there,
+    attar.timing.activity_host: a register pass visits a few pins per level, measured 0.5 s on the CPU against 4.8 s
+    of CUDA-graph replays on mempool; the expression tables, gigabytes on a million cells, then stay off the GPU), and
+    ev_dev, the timer's, where the instance powers are evaluated from its slews and loads."""
 
     def __init__(self, T):
         from . import ir
         from .library import KIND_MACRO, KIND_PAD, design_power
         from ..io.liberty import parse_function
         self.T = T
-        d, dev = T.d, T.dev
-        self.dev = dev
+        d, ev_dev = T.d, T.dev
+        dev = torch.device('cpu') if torch.device(ev_dev).type == 'cuda' and _cpu_host() else ev_dev
+        self.dev, self.ev_dev = dev, ev_dev
+        self.t_dev = T.dev
         Tt = lambda x, dt=torch.long: torch.as_tensor(np.asarray(x), device=dev, dtype=dt)  # noqa: E731
+        Te = lambda x, dt=torch.long: torch.as_tensor(np.asarray(x), device=ev_dev, dtype=dt)  # noqa: E731
         a = d.raw
         P = T.P
         p_cell = T.p_cell_np
@@ -287,6 +320,27 @@ class Power:
         cells_of = {}
         for m in used:
             cells_of[m] = np.nonzero(c_master == m)[0]
+        # pin_of / tie_of are asked for the instances of one master at a time (all of them or a subset), many times
+        # per master pin: one lookup per master pin over all its master's instances, then indexed by the position of
+        # the instance among them
+        pos_in_m = np.zeros(C, np.int64)
+        for cs in cells_of.values():
+            pos_in_m[cs] = np.arange(len(cs))
+        mp_master = np.searchsorted(m_ptr, np.arange(len(mpn)), 'right') - 1
+        raw_pin_of, raw_tie_of, cols = pin_of, tie_of, {}
+
+        def col(mp):
+            mp = int(mp)
+            if mp not in cols:
+                cs = cells_of[int(mp_master[mp])]
+                cols[mp] = (raw_pin_of(cs, mp), raw_tie_of(cs, mp))
+            return cols[mp]
+
+        def pin_of(cell, mp):  # noqa: F811
+            return col(mp)[0][pos_in_m[np.asarray(cell)]]
+
+        def tie_of(cell, mp):  # noqa: F811
+            return col(mp)[1][pos_in_m[np.asarray(cell)]]
         slot_of = {}                                    # register state name -> (C,) its slot per instance (-1)
         nslot = 0
         for m, sq in seqs.items():
@@ -310,8 +364,19 @@ class Power:
                 mpcache[m] = {pn: int(m_ptr[m]) + i for i, pn in enumerate(names['master_pins'][m])}
             return mpcache[m]
 
+        ref_cache = {}
+
         def refs(cells, m, vs):
-            """(kind, idx) (n, k) of the variables vs on instances cells of master m."""
+            """(kind, idx) (n, k) of the variables vs on instances cells of master m (computed once per master and
+            variables for all its instances, as pin_of)."""
+            key = (m, tuple(vs))
+            if key not in ref_cache:
+                ref_cache[key] = refs_all(cells_of[m], m, vs)
+            kind, idx = ref_cache[key]
+            pos = pos_in_m[np.asarray(cells)]
+            return kind[pos], idx[pos]
+
+        def refs_all(cells, m, vs):
             loc = loc_of(m)
             kind = np.full((len(cells), len(vs)), R_NONE, np.int64); idx = np.zeros_like(kind)
             for j, v in enumerate(vs):
@@ -431,12 +496,15 @@ class Power:
         rows = {k: [] for k in ('inst', 'grp', 'pin', 'rel', 'out', 'dk', 'ek', 'er', 'inv', 'pg')}
         # dk: duty kind: 0 constant 0.5, 1 an expression (ek, er), 3 constant 1, 4 constant 0
 
+        row_t = {'inst': np.int32, 'grp': np.int32, 'pin': np.int32, 'rel': np.int32, 'out': np.int8, 'dk': np.int8,
+                 'ek': np.int8, 'er': np.int32, 'inv': bool, 'pg': np.int8}       # (compact: tens of millions of rows)
+
         def put(cells, g, pins, rel, side, dk, ek, er, inv, pg):
             n_ = len(cells)
             for key, v in (('inst', cells), ('grp', np.full(n_, g)), ('pin', pins), ('rel', rel),
                            ('out', np.full(n_, side)), ('dk', dk), ('ek', ek), ('er', er), ('inv', np.full(n_, inv)),
                            ('pg', np.full(n_, pg))):
-                rows[key].append(np.asarray(v))
+                rows[key].append(np.asarray(v).astype(row_t[key]))
         for g in range(len(ip_master)):
             m = int(ip_master[g])
             cells = cells_of.get(m)
@@ -475,7 +543,7 @@ class Power:
                 else:
                     dk, ek, er = np.full(n_, 3), none_k, none_r
                 put(cells, g, to_pins, to_pins, 0, dk, ek, er, False, int(ip_pg[g]))
-        rows = {k: (np.concatenate(v) if v else np.zeros(0, np.int64)) for k, v in rows.items()}
+        rows = {k: (np.concatenate(v) if v else np.zeros(0, row_t[k])) for k, v in rows.items()}
         # leakage groups of primary power pg pins
         lk_master, lk_val, lk_pg, lk_prim = pw['lk_master'], pw['lk_val'], pw['lk_pg'], pw['lk_primary']
         lrows = {k: [] for k in ('inst', 'val', 'pg', 'cond', 'ek', 'er')}
@@ -530,8 +598,9 @@ class Power:
                     fun = [fun_pins]
                 key = ('level', L)
                 R = 1 << K
-                X.groups[key] = {'kind': Tt(np.concatenate(kinds)), 'idx': Tt(np.concatenate(idxs)),
-                                 'tid': Tt(np.concatenate(tids)), 'bank': Tt(np.stack(bank), ACT),
+                X.groups[key] = {'kind': Tt(np.concatenate(kinds), torch.int8),
+                                 'idx': Tt(np.concatenate(idxs), torch.int32),
+                                 'tid': Tt(np.concatenate(tids), torch.int32), 'bank': Tt(np.stack(bank), ACT),
                                  'bits': Tt(((np.arange(R)[:, None] >> np.arange(max(K, 1))[None]) & 1).astype(np.float64), ACT),
                                  'n': len(fun[0]), 'K': K, 'flip_base': torch.arange(R, device=dev)}
                 v = fun[0]
@@ -541,7 +610,7 @@ class Power:
         self.is_seq_load = is_load & (p_mpin >= 0) & np.where(p_mpin >= 0, seq_cell[p_cell], False)
         self.is_drv_t = Tt(is_drv, torch.bool)
         self.is_clock = Tt(clock, torch.bool)
-        self.is_iclock = Tt(T.iclk, torch.bool)               # ideal clock pins (getSlew: the clock's transition)
+        self.is_iclock = torch.as_tensor(T.iclk, device=T.dev)   # ideal clock pins (getSlew: the clock's transition)
         # Power::findClk on a clock network pin: the fastest clock of the paths through it, its own and those of the
         # input delays on its clock's source ports (their data arrivals run through the clock network too)
         cidx = {k: i for i, k in enumerate(T.clock_names)}
@@ -552,21 +621,36 @@ class Power:
                 cj = cidx.get(e.get('clock'))
                 if e.get('cell') in c['sources'] and cj is not None and per_[cj] < per_[eff[ci]]:
                     eff[ci] = cj
-        self.clk_of = Tt(np.asarray(eff, np.int64)[np.maximum(T.clk_of, 0)] if len(eff) else np.zeros(P, np.int64))
+        clk_of = np.asarray(eff, np.int64)[np.maximum(T.clk_of, 0)] if len(eff) else np.zeros(P, np.int64)
+        self.clk_of, self.clk_of_t = Tt(clk_of), torch.as_tensor(clk_of, device=T.dev)
         self.p_cell_t = Tt(p_cell)
         self.p_net = d.p_net
-        self.r = {k: Tt(rows[k], torch.bool if k == 'inv' else torch.long)
+        # the instance power rows, evaluated on ev_dev: compact types (tens of millions of rows on a million cells);
+        # without the room for them and run()'s per-row work there, on the CPU
+        n_r, n_l = len(rows['inst']), len(lrows['inst'])
+        if torch.device(ev_dev).type == 'cuda':
+            cd = torch.device(ev_dev)
+            cd = torch.device('cuda', cd.index if cd.index is not None else torch.cuda.current_device())
+            free, _ = torch.cuda.mem_get_info(cd)
+            room = free + torch.cuda.memory_reserved(cd) - torch.cuda.memory_allocated(cd)
+            if 160 * n_r + 64 * n_l + 64 * P > 0.7 * room:       # (measured: about 150 bytes a row, run() included)
+                ev_dev = self.ev_dev = torch.device('cpu')
+                Te = lambda x, dt=torch.long: torch.as_tensor(np.asarray(x), device=ev_dev, dtype=dt)  # noqa: E731
+        i32, i8 = torch.int32, torch.int8
+        self.r = {k: Te(rows[k], {'inv': torch.bool, 'out': i8, 'dk': i8, 'pg': i8}.get(k, i32))
                   for k in ('inst', 'grp', 'pin', 'rel', 'out', 'dk', 'inv', 'pg')}
-        self.l_ = {'inst': Tt(lrows['inst'].astype(np.int64)), 'val': Tt(lrows['val'], F64),
-                   'pg': Tt(lrows['pg'].astype(np.int64)), 'cond': Tt(lrows['cond'].astype(bool), torch.bool)}
+        self.l_ = {'inst': Te(lrows['inst'].astype(np.int64), i32), 'val': Te(lrows['val'], F64),
+                   'pg': Te(lrows['pg'].astype(np.int64), i8), 'cond': Te(lrows['cond'].astype(bool), torch.bool)}
+        self.is_drv_e = Te(is_drv, torch.bool)
         # expression handles of the internal power rows, then the leakage rows: grouped by k once
-        hk = np.concatenate([rows['ek'], lrows['ek'].astype(np.int64)])
-        hr = np.concatenate([rows['er'], lrows['er'].astype(np.int64)])
+        hk = np.concatenate([rows['ek'], lrows['ek'].astype(np.int8)])
+        hr = np.concatenate([rows['er'], lrows['er'].astype(np.int32)])
         self.n_ip = len(rows['ek'])
         self.n_h = len(hk)
-        self._hk = [(int(k), Tt(np.nonzero(hk == k)[0]), Tt(hr[hk == k])) for k in np.unique(hk) if k >= 0]
-        self.ip_tab = (Tt(pw['ip_ix1'], torch.float32), Tt(pw['ip_ix2'], torch.float32),
-                       Tt(pw['ip_val'], torch.float32), Tt(pw['ip_n']))
+        self._hk = [(int(k), Tt(np.nonzero(hk == k)[0], torch.int32), Tt(hr[hk == k], torch.int32))
+                    for k in np.unique(hk) if k >= 0]
+        self.ip_tab = (Te(pw['ip_ix1'], torch.float32), Te(pw['ip_ix2'], torch.float32),
+                       Te(pw['ip_val'], torch.float32), Te(pw['ip_n']))
         # per instance: report_power group, cell leakage
         self.C = C
         m_kind, m_cleak = pw['m_kind'], pw['m_cleak']
@@ -581,18 +665,19 @@ class Power:
         kind[lib_cell & ~nonclk_out] = 2
         kind[lib_cell & ((mk & KIND_PAD) > 0)] = 4
         kind[lib_cell & ((mk & KIND_MACRO) > 0)] = 3
-        self.inst_kind = Tt(kind)
+        self.inst_kind = Te(kind)
         self.lib_cell = lib_cell
-        self.lib_cell_t = Tt(lib_cell, torch.bool)
-        self.cleak = Tt(np.where(c_master >= 0, m_cleak[c_master.clip(0)], np.nan), F64)
+        self.lib_cell_t = Te(lib_cell, torch.bool)
+        self.cleak = Te(np.where(c_master >= 0, m_cleak[c_master.clip(0)], np.nan), F64)
         has_lk = np.zeros(C, bool)
         if len(lrows['inst']):
             has_lk[lrows['inst'].astype(np.int64)] = True
-        self.has_lk = Tt(has_lk, torch.bool)
+        self.has_lk = Te(has_lk, torch.bool)
         mv = np.where(p_mpin >= 0, pw['mp_volt'][p_mpin.clip(0)], np.nan)
         dv_ = np.where(c_master >= 0, pw['m_volt'][c_master.clip(0)], 0.0)[p_cell]
-        self.sw_pins = Tt(np.nonzero(outs & dir_out)[0])
-        self.volt = Tt(np.where(np.isfinite(mv), mv, dv_), F64)
+        self.sw_pins = Te(np.nonzero(outs & dir_out)[0])
+        self.sw_cell = Te(p_cell[np.nonzero(outs & dir_out)[0]])
+        self.volt = Te(np.where(np.isfinite(mv), mv, dv_), F64)
         self.const_pin = Tt(T.const_net[p_net])        # constants (Sim): per pin -1, 0, 1
         per = [c['period'] for c in T.clocks if c.get('period')]
         self.min_period = min(per) if per else 0.0
@@ -602,6 +687,7 @@ class Power:
         self.clk_period = Tt([c['period'] for c in T.clocks] or [INF], ACT)
         self.clk_duty = Tt([(w[1] - w[0]) / c['period'] for w, c in zip(wf, T.clocks)] or [0.0], ACT)
         self.debug = 0
+        self.frontier = True                       # register passes by _graphs' frontier (False: its sweep)
 
     # ------------------------------------------------------------------------------------------------------------
     def _launch_period(self):
@@ -612,18 +698,22 @@ class Power:
         per = torch.full((T.P,), INF, dtype=ACT, device=self.dev)
         if C:
             ok = torch.isfinite(T.amax[:, :, :2 * C]).any(1) | torch.isfinite(T.amin[:, :, :2 * C]).any(1)  # (P, 2C)
+            ok = ok.to(self.dev)
             cp = self.clk_period.repeat_interleave(2)[None].expand_as(ok)
             per = torch.where(ok, cp, torch.full_like(cp, INF)).amin(1)
             per = torch.where(self.is_clock, self.clk_period[self.clk_of], per)
         return torch.where(torch.isfinite(per), per, torch.full_like(per, self.min_period))
 
-    def _find(self, dens, duty, orig):
-        """findActivity: constants (0, value); clock network pins without a propagated activity, their clock's."""
-        clk = self.is_clock & (orig == O_UNKNOWN)
-        fd = torch.where(clk, 2.0 / self.clk_period[self.clk_of], dens)
-        fu = torch.where(clk, self.clk_duty[self.clk_of], duty)
-        cst = self.const_pin >= 0
-        return torch.where(cst, torch.zeros_like(fd), fd), torch.where(cst, self.const_pin.to(fu.dtype), fu)
+    def _find(self, dens, duty, orig, pins=None):
+        """findActivity: constants (0, value); clock network pins without a propagated activity, their clock's.
+        pins: the pins the arguments are of (default: all)."""
+        ic, co, cp = (self.is_clock, self.clk_of, self.const_pin) if pins is None else \
+            (self.is_clock[pins], self.clk_of[pins], self.const_pin[pins])
+        clk = ic & (orig == O_UNKNOWN)
+        fd = torch.where(clk, 2.0 / self.clk_period[co], dens)
+        fu = torch.where(clk, self.clk_duty[co], duty)
+        cst = cp >= 0
+        return torch.where(cst, torch.zeros_like(fd), fd), torch.where(cst, cp.to(fu.dtype), fu)
 
     def _dense_setup(self):
         """Static tensors for the dense (GPU-resident) propagation: per level the successor edges of its pins, the
@@ -656,20 +746,24 @@ class Power:
         self._dn = {'edges': edges, 'regs': regs, 'sp_pin': Tt(self.sp_pin if len(self.sp_pin) else [0]),
                     'sp_reg': Tt(self.sp_reg if len(self.sp_reg) else [0]), 'n_sp': len(self.sp_pin),
                     'isl': Tt(self.is_seq_load, torch.bool), 'reg_cell': Tt(self.reg_cell),
-                    'root': Tt(self.root), 'funless': Tt(self.funless), 'seed_dst': Tt(seed_dst)}
+                    'root': Tt(self.root), 'funless': Tt(self.funless), 'seed_dst': Tt(seed_dst),
+                    'so_r': torch.nonzero(self.reg_so >= 0).view(-1).to(dev),
+                    'si_r': torch.nonzero(self.reg_si >= 0).view(-1).to(dev)}
         return self._dn
 
-    def activities(self, slew_min):
+    def activities(self, slew_min, lp=None):
         """Per pin (density per ps, duty, origin) and per register state (density, duty): Power::ensureActivities.
         slew_min: (P, 2) the min analysis slews (the density cap). The breadth-first visits of OpenSTA are emulated
-        level by level with an enqueued mask on the GPU (a pin at a level is evaluated only when enqueued, its fanout
-        enqueued only when it changed by more than 1%). A sweep over the levels and a register seeding step are each
-        one CUDA graph on the GPU (persistent buffers); one host sync per register pass."""
+        level by level with an enqueued mask (a pin at a level is evaluated only when enqueued, its fanout enqueued
+        only when it changed by more than 1%). On self.dev: with the C++ (attar.timing.activity_host) the sweeps run
+        on the CPU, also for a GPU timer. Without it, a sweep over the levels and a register seeding step are each one
+        CUDA graph on the GPU (persistent buffers; one host sync per register pass), eager PyTorch on the CPU."""
+        slew_min = slew_min.to(self.dev)
         D = self._dense_setup()
         B = self._buffers()
         avg = slew_min.to(ACT).mean(1)
         B['cap'].copy_(torch.where(avg > 0, 1.0 / avg.clamp(min=1e-30), torch.full_like(avg, INF)))
-        lp = self._launch_period()
+        lp = self._launch_period() if lp is None else lp
         self._lp = lp
         B['lp'].copy_(lp)
         pc = torch.where(lp > 0, torch.where(self.is_clock, 2.0, 1.0).to(ACT) / lp.clamp(min=1e-30),
@@ -680,14 +774,18 @@ class Power:
         # seeds: roots and function-less outputs take the input activity, their fanout enqueued
         for seeds in (D['root'], D['funless']):
             B['dens'][seeds] = self.in_density; B['duty'][seeds] = 0.5; B['orig'][seeds] = O_INPUT
+        fd, fu = self._find(B['dens'], B['duty'], B['orig'])
+        B['fd'].copy_(fd); B['fu'].copy_(fu)
         B['enq'][D['seed_dst']] = 1
-        sweep, seed = self._graphs()
+        sweep, seed, frontier = self._graphs()
         sweep()
         n_pass = 1
         R = self.n_reg
         while n_pass <= MAX_PASSES and R and bool(B['regs'][D['reg_cell']].any()):
             seed()
-            sweep()
+            # a register pass re-visits the fanout of the registers whose inputs changed: few pins (OpenSTA's
+            # breadth-first search visits only those); the dense sweep visits every level's every pin
+            (frontier if self.frontier else sweep)()
             n_pass += 1
         self.n_passes = n_pass - 1
         self.converged = not (R and bool(B['regs'][D['reg_cell']].any()))
@@ -701,17 +799,21 @@ class Power:
                        'sq_d': f(S), 'sq_u': f(S), 'sq_o': torch.zeros(S, dtype=torch.long, device=dev),
                        'enq': torch.zeros(P, dtype=torch.uint8, device=dev),
                        'regs': torch.zeros(self.C, dtype=torch.uint8, device=dev),
-                       'changed': torch.zeros(P, dtype=torch.bool, device=dev),
+                       'changed': torch.zeros(P, dtype=torch.bool, device=dev), 'fd': f(P), 'fu': f(P),
                        'cap': f(P), 'prop_cap': f(P), 'lp': f(P)}
         return self._B
 
     def _graphs(self):
-        """(sweep, seed) callables: CUDA-graph replays on the GPU, the eager functions elsewhere."""
+        """(sweep, seed, frontier) callables, frontier the sweep of the register passes: on the GPU CUDA-graph replays
+        (frontier the dense sweep: a replay costs less than the host syncs of visiting the enqueued pins only); on
+        the CPU sweep and frontier the C++ sweep over the enqueued pins (attar.timing.activity_host), else the eager
+        functions (frontier over the enqueued pins)."""
         if hasattr(self, '_G'):
             return self._G
         B, D, X = self._B, self._dn, self.X
         dev = self.dev
         dens, duty, orig, sq_d, sq_u, sq_o = (B[k] for k in ('dens', 'duty', 'orig', 'sq_d', 'sq_u', 'sq_o'))
+        fdb, fub = B['fd'], B['fu']                        # findActivity of every pin, kept with dens / duty / orig
         enq, regs, changed, cap, prop_cap, lp = (B[k] for k in ('enq', 'regs', 'changed', 'cap', 'prop_cap', 'lp'))
         p_cell, isl = self.p_cell_t, D['isl']
         R = self.n_reg
@@ -724,13 +826,14 @@ class Power:
             nd = torch.minimum(nd, cap[pins])
             nd = torch.where(no == O_PROP, torch.minimum(nd, prop_cap[pins]), nd)
             ch = m & ((pct(nd, dens[pins]) > TOL) | (pct(nu, duty[pins]) > TOL) | (no != orig[pins]))
-            dens[pins] = torch.where(m, nd, dens[pins]); duty[pins] = torch.where(m, nu, duty[pins])
-            orig[pins] = torch.where(m, no, orig[pins])
+            nd, nu, no = torch.where(m, nd, dens[pins]), torch.where(m, nu, duty[pins]), torch.where(m, no, orig[pins])
+            dens[pins] = nd; duty[pins] = nu; orig[pins] = no
+            a, b = self._find(nd, nu, no, pins)
+            fdb[pins] = a; fub[pins] = b
             return ch
 
         def act():
-            fd, fu = self._find(dens, duty, orig)
-            return (fu, fd, sq_u, sq_d, lp, self.is_clock)
+            return (fub, fdb, sq_u, sq_d, lp, self.is_clock)
 
         def step(L, Ld):
             """One level of the breadth-first visit."""
@@ -752,6 +855,39 @@ class Power:
             src, dst = D['edges'][L]
             if len(src):
                 enq.scatter_reduce_(0, dst, changed[src].to(torch.uint8), 'amax')
+
+        def step_frontier(L, Ld):
+            """step on the level's enqueued pins only (the same values: every pin is computed on its own)."""
+            ld = Ld['load'][1]
+            if len(ld):
+                ii = (enq[ld] > 0).nonzero().squeeze(1)
+                if len(ii):
+                    pins, dr = ld[ii], Ld['load_drv'][ii]
+                    ch = set_check(pins, dens[dr], duty[dr], torch.full_like(pins, O_PROP))
+                    changed[pins] = ch
+                    regs.scatter_reduce_(0, p_cell[pins], (ch & isl[pins]).to(torch.uint8), 'amax')
+            stt = Ld['state'][1]
+            if len(stt):
+                ii = (enq[stt] > 0).nonzero().squeeze(1)
+                if len(ii):
+                    pins = stt[ii]
+                    s_ = self.fn_seq[pins]
+                    changed[pins] = set_check(pins, sq_d[s_], sq_u[s_], sq_o[s_])
+            for k, _, pins, rows_ in Ld['fun']:
+                ii = (enq[pins] > 0).nonzero().squeeze(1)
+                if len(ii):
+                    pins = pins[ii]
+                    u, dd = X.activity(k, rows_[ii], act(), self.min_period, 1.0)
+                    changed[pins] = set_check(pins, dd, u, torch.full_like(pins, O_PROP))
+            src, dst = D['edges'][L]
+            if len(src):
+                enq.scatter_reduce_(0, dst, changed[src].to(torch.uint8), 'amax')
+
+        def frontier():
+            changed.zero_()
+            for L, Ld in enumerate(self.levels):
+                step_frontier(L, Ld)
+            enq.zero_()
 
         def segment(lo, hi, first, last):
             def f():
@@ -775,23 +911,30 @@ class Power:
             for which in (1, 2):                          # data, clock: duty and density of every register
                 u_ = torch.zeros(R, dtype=ACT, device=dev); d_ = torch.zeros_like(u_)
                 for k, jj, rr in D['regs'][which]:
+                    if not graphed:                        # (eager: the registers seeded only; the others are not
+                        m = sel[jj]                        # written below)
+                        jj, rr = jj[m], rr[m]
                     uu, dd = X.activity(k, rr, a_, self.min_period, 1.0)
                     u_[jj] = uu; d_[jj] = dd
                 ins.append((u_, d_))
             (u, dn), (cu, cd) = ins
             latch = torch.where(dn > cd / 2, torch.where(self.reg_clkinv, dn * (1 - cu), dn * cu), dn)
             od = torch.where(self.reg_isreg, torch.minimum(dn, torch.minimum(u, 1 - u) * cd), latch)
-            for slots, inv in ((self.reg_so, False), (self.reg_si, True)):
-                ok = sel & (slots >= 0)
-                s_ = slots.clamp(min=0)
-                nu = (1 - u) if inv else u
-                sq_d.scatter_(0, s_, torch.where(ok, od, sq_d[s_]))
+            for slots, rj, inv in ((self.reg_so, D['so_r'], False), (self.reg_si, D['si_r'], True)):
+                s_, ok = slots[rj], sel[rj]                 # (the registers with the output: each slot written once)
+                nu = (1 - u[rj]) if inv else u[rj]
+                sq_d.scatter_(0, s_, torch.where(ok, od[rj], sq_d[s_]))
                 sq_u.scatter_(0, s_, torch.where(ok, nu, sq_u[s_]))
                 sq_o.scatter_(0, s_, torch.where(ok, torch.full_like(s_, O_PROP), sq_o[s_]))
             if D['n_sp']:
                 enq.scatter_reduce_(0, D['sp_pin'], sel[D['sp_reg']].to(torch.uint8), 'amax')
-        if dev.type != 'cuda' if hasattr(dev, 'type') else not str(dev).startswith('cuda'):
-            self._G = (sweep, seed if R else (lambda: None))
+        graphed = not (dev.type != 'cuda' if hasattr(dev, 'type') else not str(dev).startswith('cuda'))
+        if not graphed:
+            if X.host is not None:                         # the sweep in C++ (every pass visits the enqueued pins)
+                from .activity_host import Sweep
+                c_sweep = Sweep(self)
+                sweep = frontier = lambda: c_sweep(TOL)  # noqa: E731
+            self._G = (sweep, seed if R else (lambda: None), frontier)
             return self._G
         # capture: warm up on a side stream with copies of the state, then record each function once
         saved = {k: v.clone() for k, v in B.items()}
@@ -826,7 +969,7 @@ class Power:
         room = free + torch.cuda.memory_reserved(dev) - torch.cuda.memory_allocated(dev)
         budget = room // 4
         if max(need + [need_seed]) > budget:
-            self._G = (sweep, seed if R else (lambda: None))
+            self._G = (sweep, seed if R else (lambda: None), sweep)
             for k, v in saved.items():
                 B[k].copy_(v)
             return self._G
@@ -864,31 +1007,60 @@ class Power:
             for f in sw_fns:
                 f()
         self.n_segments = len(fns)
-        self._G = (sweep_graph, seed_fn)
+        self._G = (sweep_graph, seed_fn, sweep_graph)      # (a replay is cheaper than the eager frontier's host syncs)
         return self._G
 
+    _EV = ('r', 'l_', 'ip_tab', 'is_drv_e', 'inst_kind', 'lib_cell_t', 'cleak', 'has_lk', 'sw_pins', 'sw_cell', 'volt')
+
+    def _move_ev(self, dev):
+        """Evaluate the instance powers on dev from now on (after running out of memory on the GPU)."""
+        mv = lambda v: v.to(dev) if isinstance(v, torch.Tensor) else (  # noqa: E731
+            {k: x.to(dev) for k, x in v.items()} if isinstance(v, dict) else tuple(x.to(dev) for x in v))
+        for k in self._EV:
+            setattr(self, k, mv(getattr(self, k)))
+        for k in ('_segs', '_ct', '_inv_pinpg', '_inv_leak', '_inst_leak'):
+            self.__dict__.pop(k, None)
+        self.ev_dev = torch.device(dev)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     def run(self, result):
-        """Per instance internal, switching and leakage power (W) at the timer's last run: a PowerResult."""
-        T, dev = self.T, self.dev
+        """run_() on the evaluation device; on the GPU out of memory, again with the evaluation on the CPU."""
+        try:
+            return self.run_(result)
+        except torch.OutOfMemoryError:
+            if torch.device(self.ev_dev).type != 'cuda':
+                raise
+        self._move_ev('cpu')
+        return self.run_(result)
+
+    def run_(self, result):
+        """Per instance internal, switching and leakage power (W) at the timer's last run: a PowerResult, what a new
+        OpenSTA session at this placement reports (activities propagated at this run: their density caps read its
+        slews; OpenSTA in one session keeps activities and instance powers across new parasitics, reporting the
+        old placement's power)."""
+        T, dev = self.T, self.ev_dev
         from .drv import _static
         from .sta import nldm
         S = _static(T)
         dens, duty, orig, sq_d, sq_u = self.activities(T.smin)
         fd, fu = self._find(dens, duty, orig)
         a_ = (fu, fd, sq_u, sq_d, self._lp, self.is_clock)
-        # slews (max analysis; ideal clock pins: the clock's transition) and load capacitance
+        ev = self._eval_handles(a_).to(dev)                 # (the expressions on self.dev)
+        fd, fu, orig = fd.to(dev), fu.to(dev), orig.to(dev)
+        # slews (max analysis; ideal clock pins: the clock's transition) and load capacitance, on the timer's device
         smax = T.smax.float()
-        ctr = T.ctr.float()[self.clk_of] if len(T.clocks) else torch.zeros_like(smax)
-        slew = torch.where(self.is_iclock[:, None], ctr, smax)
+        ctr = T.ctr.float()[self.clk_of_t] if len(T.clocks) else torch.zeros_like(smax)
+        slew = torch.where(self.is_iclock[:, None], ctr, smax).to(dev)
         pins_c = S['net_sum'](T.pin_cap)
         if T.pi is not None:
             pit = T.pi[:, :2, 0] + T.pi[:, :2, 2]
             net_cap = torch.where(pit >= pins_c, pit, pins_c).amax(1)
         else:
             net_cap = pins_c.amax(1)
-        load = net_cap.float()[self.p_net]
+        load = net_cap.float()[self.p_net].to(dev)
+        del smax, ctr, pins_c, net_cap
         C = self.C
-        ev = self._eval_handles(a_)
         nr = self.n_ip
         # -- internal power ------------------------------------------------------------------------------------------
         r = self.r
@@ -896,9 +1068,7 @@ class Power:
         internal = torch.zeros(C, dtype=F64, device=dev)
         if n:
             dk = r['dk']
-            one, half_, zero = (torch.full((n,), v, dtype=F64, device=dev) for v in (1.0, 0.5, 0.0))
-            gd = torch.where(dk == 3, one, torch.where(dk == 0, half_, zero))
-            gd = torch.where(dk == 1, ev[:nr], gd)
+            gd = torch.where(dk == 1, ev[:nr], torch.where(dk == 3, 1.0, torch.where(dk == 0, 0.5, 0.0)).double())
             pin, rel, out, g = r['pin'], r['rel'], r['out'] == 1, r['grp']
             ix1, ix2, val, nn = self.ip_tab
             energy = torch.zeros(n, dtype=F64, device=dev)
@@ -911,16 +1081,20 @@ class Power:
                     frf = torch.where(r['inv'][sl_], torch.full_like(gg, 1 - trf), torch.full_like(gg, trf))
                     s_rel = slew[relc[sl_], frf]
                     s_in = torch.where(oo, torch.where(rr >= 0, s_rel, torch.zeros_like(s_rel)), slew[pp, trf])
-                    cl = torch.where(oo | self.is_drv_t[pp], load[pp], torch.zeros_like(s_in))
+                    cl = torch.where(oo | self.is_drv_e[pp], load[pp], torch.zeros_like(s_in))
                     e = nldm(ix1[gg, trf], ix2[gg, trf], val[gg, trf], nn[gg, trf].long(), s_in, cl).double()
                     energy[sl_] += torch.where(nn[gg, trf, 0] > 0, e, torch.zeros_like(e))
             energy = energy / 2
             fdr = torch.where(rel >= 0, fd[relc], torch.zeros_like(energy))
+            del relc
             contrib = torch.where(out & (rel >= 0), fdr * gd, torch.zeros_like(energy))
             ds = self._seg('pinpg')(contrib)[self._inv_pinpg]
+            del contrib
             weight = torch.where((ds != 0) & (rel >= 0), fdr * gd / torch.where(ds != 0, ds, torch.ones_like(ds)),
                                  torch.zeros_like(ds))
+            del ds, fdr
             pwr = torch.where(out, weight * energy * fd[pin], energy * gd * fd[pin])
+            del weight, energy, gd
             internal = self._seg('inst')(pwr)
         # -- switching -----------------------------------------------------------------------------------------------
         sp = self.sw_pins
@@ -935,30 +1109,34 @@ class Power:
         """Deterministic segmented sums (attar.timing.drv.SegSum) over the static indices of the power rows."""
         if not hasattr(self, '_segs'):
             from .drv import SegSum
-            dev, C = self.dev, self.C
-            r, l_ = self.r, self.l_
-            self._segs = {'inst': SegSum(r['inst'], C), 'sw': SegSum(self.p_cell_t[self.sw_pins], C)}
-            key = r['pin'] * 64 + (r['pg'] + 1)
+            dev, C = self.ev_dev, self.C
+            r, l_ = ({k: v.cpu() for k, v in x.items()} for x in (self.r, self.l_))    # (sorted on the CPU)
+            self._segs = {'inst': SegSum(r['inst'], C, dev), 'sw': SegSum(self.sw_cell.cpu(), C, dev)}
+            key = r['pin'].long() * 64 + (r['pg'].long() + 1)
             uk, inv = torch.unique(key, return_inverse=True)
-            self._segs['pinpg'] = SegSum(inv, len(uk)); self._inv_pinpg = inv
-            lk = l_['inst'] * 64 + (l_['pg'] + 1)
+            del key
+            self._segs['pinpg'] = SegSum(inv, len(uk), dev); self._inv_pinpg = inv.int().to(dev)
+            del inv
+            lk = l_['inst'].long() * 64 + (l_['pg'].long() + 1)
             uk, inv = torch.unique(lk, return_inverse=True)
-            self._K_leak = len(uk); self._inv_leak = inv
-            self._segs['leak'] = SegSum(inv, len(uk))
-            self._inst_leak = torch.zeros(len(uk), dtype=torch.long, device=dev).scatter_(0, inv, l_['inst'])
-            self._segs['leak_inst'] = SegSum(self._inst_leak, C)
+            self._K_leak = len(uk); self._inv_leak = inv.to(dev)
+            self._segs['leak'] = SegSum(inv, len(uk), dev)
+            self._inst_leak = torch.zeros(len(uk), dtype=torch.long).scatter_(0, inv, l_['inst'].long()).to(dev)
+            self._segs['leak_inst'] = SegSum(self._inst_leak.cpu(), C, dev)
         return self._segs[name]
 
     def _eval_handles(self, a_):
         """Duty of every expression handle: the internal power rows', then the leakage rows'."""
         out = torch.zeros(self.n_h, dtype=F64, device=self.dev)
+        CH = 1 << 19                                    # rows per chunk: the (rows, 2^k) tables stay small
         for k, ii, rr in self._hk:
-            out[ii] = self.X.duty(k, rr, a_).to(out.dtype)
+            for a0 in range(0, len(rr), CH):
+                out[ii[a0:a0 + CH]] = self.X.duty_of(k, rr[a0:a0 + CH], a_).to(out.dtype)
         return out
 
     def _leakage(self, duty):
         """Power::findLeakagePower per instance (nW); duty: each leakage row's `when` probability."""
-        dev, C = self.dev, self.C
+        dev, C = self.ev_dev, self.C
         l_ = self.l_
         out = torch.where(self.has_lk, torch.zeros(C, dtype=F64, device=dev), torch.nan_to_num(self.cleak, nan=0.0))
         n = len(l_['inst'])
@@ -995,7 +1173,7 @@ class Power:
         sq = torch.full((self.S,), 0.5, dtype=ACT, device=self.dev)
         z = torch.zeros_like(fu)
         a_ = (fu, z, sq, torch.zeros_like(sq), z, self.is_clock)
-        v = self._eval_handles(a_)[self.n_ip:]
+        v = self._eval_handles(a_)[self.n_ip:].to(self.ev_dev)
         self._ct = self.l_['cond'] & (v > 1 - 1e-12)
         return self._ct
 

@@ -444,7 +444,8 @@ class Timer:
             b['rv'] = self.pin_rvia.cpu().numpy()[pins_b]
         self._pin_setup()                               # locations (the master's pin rectangles), into ev.off in place
         self._mp_names = None; self._sink_drv = None
-        return True
+        self._power = None                              # its functions and tables are the old masters' (OpenSTA:
+        return True                                     # replaceEquivCellAfter -> Power::powerInvalid)
 
     def __getattr__(self, name):
         stale = self.__dict__.get('_stale')

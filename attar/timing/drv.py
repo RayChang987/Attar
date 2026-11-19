@@ -29,9 +29,14 @@ class SegSum:
     -> (m, ...), segment i the sum of the values whose index is i, always in the same order (a stable sort, then
     torch.segment_reduce)."""
 
-    def __init__(self, index, m):
-        self.o = torch.argsort(index, stable=True)
-        self.len = torch.bincount(index[self.o], minlength=m)
+    def __init__(self, index, m, device=None):
+        """device: where to keep it (default: the index's), built where the index is (a large one on the CPU: the
+        sort's working memory stays off the GPU)."""
+        o = torch.argsort(index, stable=True)
+        self.len = torch.bincount(index[o].long(), minlength=m)
+        self.o = o.int() if len(o) < 2 ** 31 else o          # (the order as int32: half the memory, same gather)
+        if device is not None:
+            self.o, self.len = self.o.to(device), self.len.to(device)
         self.m = m
 
     def __call__(self, v):
