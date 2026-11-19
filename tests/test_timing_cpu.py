@@ -55,6 +55,7 @@ class ResizedInPlaceTest(unittest.TestCase):
         import numpy as np
         d = _cpu('after_fp/orfs_asap7/aes')
         d.timing()
+        p0 = d.power()
         have = set(d.names['masters'])
         cells, masters = [], []
         for c in np.random.default_rng(3).permutation(len(d.names['cells'])).tolist():
@@ -74,6 +75,12 @@ class ResizedInPlaceTest(unittest.TestCase):
         for name in ('amax', 'amin', 'smax', 'smin', 'pin_cap', 'pin_cap_min', 'sink_thr', 'pin_ctp', 'pin_rvia'):
             self.assertTrue(torch.equal(getattr(T0, name), getattr(F, name)), name)
         self.assertEqual(r1.endpoint_slacks(), r2.endpoint_slacks())
+        # power: the new masters' functions and tables (OpenSTA: replaceEquivCellAfter -> Power::powerInvalid)
+        p1 = d.power()
+        d._timer = F; F._power = None
+        p2 = d.power()
+        self.assertEqual(p1.summary(), p2.summary())
+        self.assertNotEqual(p0.summary(), p1.summary())
 
     def test_a_new_master_releases_the_timer(self):
         d = _cpu('after_fp/orfs_asap7/aes')
@@ -104,3 +111,29 @@ class HostDelayCalcTest(unittest.TestCase):
         for a, b in zip(ref, (T.amax, T.amin, T.smax, T.smin)):
             self.assertTrue(torch.equal(a, b))
         self.assertEqual(r0.endpoint_slacks(), r1.endpoint_slacks())
+
+
+class HostActivityTest(unittest.TestCase):
+    def test_cpp_activities_equal_the_pytorch_reference(self):
+        """Power's activity propagation on the CPU in C++ (attar.timing.activity_host) against the PyTorch path (its
+        dense sweep, and its sweep over the enqueued pins: bitwise the same); float32 sums in another order."""
+        from attar.timing import activity_host
+        if not activity_host.available():
+            self.skipTest('no C++ activities: %s' % activity_host.error())
+        d = _cpu('after_fp/orfs_asap7/aes')
+        d.power()
+        P = d.timing().timer._power
+        self.assertIsNotNone(P.X.host)
+        res = {}
+        for name, host, frontier in (('dense', None, False), ('frontier', None, True), ('c++', activity_host, True)):
+            P.X.host, P.frontier = host, frontier
+            if hasattr(P, '_G'):
+                del P._G
+            r = d.power()
+            res[name] = (r, P.n_passes)
+        a, b, c = (res[k][0] for k in ('dense', 'frontier', 'c++'))
+        for x, y in zip(a.activity, b.activity):
+            self.assertTrue(torch.equal(x, y))
+        self.assertEqual(res['dense'][1], res['c++'][1])
+        for x, y in zip(a.total, c.total):
+            self.assertLess(abs(float(x) - float(y)), 1e-6 * abs(float(x)))

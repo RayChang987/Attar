@@ -490,6 +490,10 @@ class Edit:
         if self.removed:
             rc = np.array(sorted(self.removed), np.int64)
             a['c_flags'] = a['c_flags'].copy(); a['c_flags'][rc] |= ASIDE | REMOVED
+            if 'tie_cell' in a:                          # their pins on supply nets go too
+                keep = ~np.isin(a['tie_cell'], rc)
+                for k in ('tie_cell', 'tie_mpin', 'tie_val'):
+                    a[k] = a[k][keep]
             d.flags[T(rc)] |= ASIDE | REMOVED
             d.placed[T(rc)] = False
             d._refresh_movable()

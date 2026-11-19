@@ -169,12 +169,24 @@ struct Cand {
   int sx = 0, sy = 0;   // odb::Point() is (0, 0) for gain-0 candidates
 };
 
+// (A pair with a neighbor at the node's own location has gain 0 (the Steiner point is the node), which never replaces
+// the best (gain > best.gain >= 0): those neighbors are left out of the pairs, in list order otherwise, the same
+// result. Pins stacked at one location (an unplaced design) hang off one node, whose pairs are otherwise quadratic.)
 Cand best_steiner_for_node(const Graph& g, int node, const vector<int>& PX, const vector<int>& PY) {
   const int nx = PX[node], ny = PY[node];
   Cand best;
-  for (int a1 = g.nodes[node].first_out; a1 != -1; a1 = g.arcs[a1].next_out) {
+  thread_local vector<int> arcs;
+  arcs.clear();
+  for (int a = g.nodes[node].first_out; a != -1; a = g.arcs[a].next_out) {
+    const int m = g.running(a);
+    if (PX[m] != nx || PY[m] != ny) arcs.push_back(a);
+  }
+  const size_t na = arcs.size();
+  for (size_t i1 = 0; i1 < na; ++i1) {
+    const int a1 = arcs[i1];
     const int n1 = g.running(a1);
-    for (int a2 = g.arcs[a1].next_out; a2 != -1; a2 = g.arcs[a2].next_out) {
+    for (size_t i2 = i1 + 1; i2 < na; ++i2) {
+      const int a2 = arcs[i2];
       const int n2 = g.running(a2);
       int sx = nx, sy = ny;
       if (std::min(PX[n1], PX[n2]) > nx) sx = std::min(PX[n1], PX[n2]);

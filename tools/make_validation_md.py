@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """docs/validation/timing_routing.md: Attar against OpenROAD / ORFS, from the JSON results the validation tools wrote.
 
-  timing   tools/validate_sta.py (asap7, nangate45), tools/validate_sta_ns3k.py and tools/validate_sta_iccad2015.py:
-           OpenSTA after estimate_parasitics
+  timing   tools/validate_sta.py (asap7, nangate45), tools/validate_sta_ns3k.py, tools/validate_sta_iccad2015.py and
+           tools/validate_iccad2025.py: OpenSTA after estimate_parasitics
   sizing   tools/validate_sizing.py: random cell swaps, OpenROAD replace_cell then OpenSTA
   routing  tools/validate_gr.py: capacity against OpenROAD's congestion report, GROV against ORFS's global route
-usage: make_validation_md.py [--sta J] [--ng45 J] [--ns3k J] [--iccad2015 J] [--sizing-asap7 J] [--sizing-ng45 J]
+usage: make_validation_md.py [--sta J] [--ng45 J] [--ns3k J] [--iccad2015 J] [--iccad2025 J] [--sizing-asap7 J] [--sizing-ng45 J]
                              [--gr J] [--out F]"""
 import argparse
 import json
@@ -68,10 +68,11 @@ def summary(rows):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('--sta', default=os.path.join(R, 'sta', 'v19_pinloc.json'))
-    ap.add_argument('--ng45', default=os.path.join(R, 'sta', 'ng45_v5_pinloc.json'))
-    ap.add_argument('--ns3k', default=os.path.join(R, 'sta_ns3k', 'v7_pinloc.json'))
-    ap.add_argument('--iccad2015', default=os.path.join(R, 'sta_iccad2015', 'v1.json'))
+    ap.add_argument('--sta', default=os.path.join(R, 'sta', 'v20_p0.json'))
+    ap.add_argument('--ng45', default=os.path.join(R, 'sta', 'ng45_v6_p0.json'))
+    ap.add_argument('--ns3k', default=os.path.join(R, 'sta_ns3k', 'v8_p0.json'))
+    ap.add_argument('--iccad2015', default=os.path.join(R, 'sta_iccad2015', 'v2_p0.json'))
+    ap.add_argument('--iccad2025', default=os.path.join(R, 'iccad25_eval', 'v1.json'))
     ap.add_argument('--sizing-asap7', default=os.path.join(R, 'sizing', 'asap7_v2.json'))
     ap.add_argument('--sizing-ng45', default=os.path.join(R, 'sizing', 'ng45_v2.json'))
     ap.add_argument('--gr', default=os.path.join(R, 'gr', 'v2.json'))
@@ -82,6 +83,9 @@ def main():
     a = ap.parse_args()
     sta, ng, ns = json.load(open(a.sta)), json.load(open(a.ng45)), json.load(open(a.ns3k))
     ic = json.load(open(a.iccad2015))
+    i25 = json.load(open(a.iccad2025))
+    for v in i25.values():                                 # the same columns as the other timing tables
+        v.setdefault('worst_ours', v['wns']); v.setdefault('worst_ref', v['wns_ref'])
     sz7, szn, gr = json.load(open(a.sizing_asap7)), json.load(open(a.sizing_ng45)), json.load(open(a.gr))
     ed = json.load(open(a.edit))
     db7, dbn = json.load(open(a.debuffer_asap7)), json.load(open(a.debuffer_ng45))
@@ -96,6 +100,8 @@ def main():
          '| Timing, ORFS nangate45 | %d | %s |' % (len(ng), summary(ng).split('; ', 1)[1]),
          '| Timing, NS3K (Innovus kit, unbuffered netlists) | %d | %s |' % (len(ns), summary(ns).split('; ', 1)[1]),
          '| Timing, ICCAD 2015 superblue (Late library) | %d | %s |' % (len(ic), summary(ic).split('; ', 1)[1]),
+         '| Timing and power, ICCAD 2025 contest evaluation | %d | %s; power error max %.2f%% |'
+         % (len(i25), summary(i25).split('; ', 1)[1], max(abs(e) for v in i25.values() for e in v['power_err_pct'])),
          '| Sizing (random swaps), asap7 | %d | %s |' % (len(sz7), summary(sz7).split('; ', 1)[1]),
          '| Sizing (random swaps), nangate45 | %d | %s |' % (len(szn), summary(szn).split('; ', 1)[1]),
          '| Netlist edits (buffers, clones), NS3K | %d | %s |' % (len(ed), summary(ed).split('; ', 1)[1]),
@@ -113,17 +119,15 @@ def main():
     ga, go = [r['attar_grov_%'] for r in sr], [r['orfs_grov_%'] for r in sr]
     L.append('| GROV ranking across designs, stress | %d | Pearson %.3f, Spearman %.3f of Attar\'s GROV with ORFS\'s |'
              % (len(sr), np.corrcoef(ga, go)[0, 1], np.corrcoef(ranks(ga), ranks(go))[0, 1]))
-    L += ['', 'Notes: a TNS error is relative to OpenSTA\'s TNS, so it is large where that TNS is tiny (asap7 aes: '
-          'Attar %.2f ps vs OpenSTA %.2f ps). NS3K netlists are unbuffered, so their slacks run to microseconds and the '
-          'setup MAE in ps is large in absolute terms only.' % (sta['aes']['tns_ours'], sta['aes']['tns_ref'])]
+    L += ['', 'Notes: a TNS error is relative to OpenSTA\'s TNS, so it is large where that TNS is tiny. NS3K netlists are '
+          'unbuffered, so their slacks run to microseconds and the setup MAE in ps is large in absolute terms only.']
     L += ['', '## Timing (STA)', '',
           'Setup / hold slack of every endpoint (register data pins, outputs) against OpenSTA after `estimate_parasitics '
           '-placement`, at the ORFS 3_3_place_gp placement (`tools/validate_sta.py`) or an Attar placement exported as '
           'DEF (NS3K, `tools/validate_sta_ns3k.py`). Attar puts each pin where `estimate_parasitics` does: OpenROAD\'s '
           'pin location, the mean of the centers of its LEF rectangles truncated to the database unit (not the center '
-          'of their bounding box, which differs on most multi-rectangle ASAP7 and Nangate45 pins). The residuals: '
-          'nangate45 ibex, one clock-gate latch D pin (latches are not modeled), all its other endpoints within '
-          '0.11 ps; riscv32i-mock-sram, up to 0.3 ps at SRAM macro pins (a design\'s own macros keep the box center).',
+          'of their bounding box, which differs on most multi-rectangle ASAP7 and Nangate45 pins). Endpoints OpenSTA '
+          'counts that Attar does not list are unconstrained ones (infinite slack).',
           '', '### ORFS asap7', '']
     L += timing_table(sta, lambda d: 'after_fp/orfs_asap7/' + d)
     L += ['', '### ORFS nangate45', '']
@@ -138,6 +142,26 @@ def main():
           'endpoint matches. The DEF handed to OpenROAD drops the TRACKS on metal7-9, which the superblue LEF does '
           'not define.', '']
     L += timing_table(ic, lambda d: 'after_fp/iccad2015/' + d)
+    L += ['', '### ICCAD 2025 (contest evaluation)', '',
+          'Problem C\'s own scoring (`openRoad_eval_script/eval_def.tcl`) at each design\'s given placement '
+          '(`tools/validate_iccad2025.py`): OpenROAD reads `ASAP7/LIB/*nldm*.lib` (not the SRAM macros\' Liberty files: '
+          'the macros are black boxes in the scores, and in the zoo\'s timing), the LEFs, DEF and SDC, the contest\'s '
+          '`setRC.tcl`, runs `estimate_parasitics -placement`, then TNS, WNS and `report_power`. The SDCs exercise '
+          'propagated clocks with pin clock latencies, min / max input transitions, signal pins tied to VDD / VSS (DEF '
+          'NETS of USE POWER / GROUND: constants), recovery / removal checks on asynchronous set / reset pins, latches '
+          '(clock-gated, and ones whose enable no clock reaches) and combinational loops. Power: internal, switching, '
+          'leakage error against `report_power`\'s totals.', '',
+          '| design | cells | endpoints | WNS Attar / OpenSTA (ps) | WNS err | TNS err | setup MAE (ps) | hold MAE (ps) | '
+          'power err (int / sw / leak) | Attar run | OpenSTA |',
+          '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |']
+    for d, v in i25.items():
+        c = cells('after_fp/iccad2025/' + d)
+        L.append('| %s | %s | %d | %.2f / %.2f | %s | %s | %.2f | %.2f | %s | %.2f s | %.2f s |' % (
+            d, '{:,}'.format(c) if c else '–', v['matched'], v['wns'], v['wns_ref'], f(v.get('wns_err_pct'), '%.2f%%'),
+            f(v.get('tns_err_pct'), '%.2f%%'), v['setup_mae'], v['hold_mae'],
+            ' / '.join('%+.2f%%' % e for e in v['power_err_pct']), v['attar_s'], v['ref_s']))
+    L += ['', 'Attar run: the first `d.timing()` (timer build included); OpenSTA: `estimate_parasitics` and the timing '
+          'update.']
     L += ['', '## Sizing', '', 'A seeded random 20% of the cells with alternatives swapped within their equivalence '
           'class (drive strength, threshold voltage): `d.resize` in Attar (masters from the zoo\'s library bundle), '
           '`replace_cell` in OpenROAD, then both time the design (`tools/validate_sizing.py`).', '',

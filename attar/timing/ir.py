@@ -25,6 +25,10 @@ T_COMB, T_RISE_EDGE, T_FALL_EDGE, T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F, T_PR
 TYPE_CODE = {'combinational': T_COMB, 'combinational_rise': T_COMB, 'combinational_fall': T_COMB,
              'rising_edge': T_RISE_EDGE, 'falling_edge': T_FALL_EDGE,
              'setup_rising': T_SETUP_R, 'hold_rising': T_HOLD_R, 'setup_falling': T_SETUP_F, 'hold_falling': T_HOLD_F,
+             # asynchronous (preset / clear) pin checks: OpenSTA times them as setup / hold checks (TimingRole recovery
+             # / removal: the same cycle accounting; sta_recovery_removal_checks_enabled is on by default)
+             'recovery_rising': T_SETUP_R, 'recovery_falling': T_SETUP_F, 'removal_rising': T_HOLD_R,
+             'removal_falling': T_HOLD_F,
              'preset': T_PRESET, 'clear': T_CLEAR, 'three_state_enable': T_TRISTATE, 'three_state_disable': T_TRISTATE,
              'three_state_enable_rise': T_TRISTATE, 'three_state_enable_fall': T_TRISTATE,
              'three_state_disable_rise': T_TRISTATE, 'three_state_disable_fall': T_TRISTATE}
@@ -111,7 +115,11 @@ def _sdc_units(s, tu, cu):
     for w in ('input_delay', 'output_delay', 'path_delays'):
         for e in s[w]:
             e['value'] *= tu
-    s['input_transition'] = {p: v * tu for p, v in s['input_transition'].items()}
+    for e in s.get('pin_latency', []):
+        e['value'] *= tu
+    for k in ('input_transition', 'input_transition_min'):
+        if k in s:
+            s[k] = {p: v * tu for p, v in s[k].items()}
     s['load'] = {p: v * cu for p, v in s['load'].items()}
     for kind, u in (('max_transition', tu), ('max_capacitance', cu)):
         L = s.get('limits', {}).get(kind)
@@ -252,6 +260,8 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=
         for w in ('input_delay', 'output_delay'):
             info[w] = [dict(e, cell=port_idx[e['port']]) for e in s[w] if e['port'] in port_idx]
         info['input_transition'] = {str(port_idx[p]): v for p, v in s['input_transition'].items() if p in port_idx}
+        info['input_transition_min'] = {str(port_idx[p]): v for p, v in s['input_transition_min'].items()
+                                        if p in port_idx}
         info['load'] = {str(port_idx[p]): v for p, v in s['load'].items() if p in port_idx}
         info['clock_groups'] = s['clock_groups']
         # design rule limits (ps, fF, fanout): the design's, by IO cell index for ports, by name for clocks
@@ -273,6 +283,38 @@ def attach(ir_dir, lib_paths, sdc_path=None, rc_tcl=None, sdc_text=None, bundle=
             return out
         info['path_delays'] = [dict(e, **{'from': cells_of(e['from']), 'to': cells_of(e['to'])}) for e in s['path_delays']]
         info['unsupported'] = s['unsupported']
+        # pin clock latencies (set_clock_latency on pins / ports): by pin index
+        info['pin_latency'] = []
+        if s.get('pin_latency'):
+            p_cell, p_mpin = a['p_cell'].astype(np.int64), a['p_mpin'].astype(np.int64)
+            m_of = np.searchsorted(m_ptr, np.arange(int(m_ptr[-1])), side='right') - 1    # master of a master pin
+            want = {}
+            for e in s['pin_latency']:
+                n = e['pin'].replace('\\', '')
+                if e['port']:
+                    c = port_idx.get(n)
+                    key = (c, None)
+                else:
+                    inst, _, pn = n.rpartition('/')
+                    c = cell_idx.get(inst)
+                    key = (c, pn)
+                want.setdefault(key, []).append(e)
+            cells = np.asarray(sorted({c for c, _ in want if c is not None}), np.int64)
+            hit = np.nonzero(np.isin(p_cell, cells))[0] if len(cells) else np.zeros(0, np.int64)
+            pin_of = {}
+            for p in hit.tolist():
+                k = int(p_mpin[p])
+                pn = None if k < 0 else mpins[int(m_of[k])][k - int(m_ptr[int(m_of[k])])]
+                pin_of[(int(p_cell[p]), pn)] = p
+            for key, es in want.items():
+                p = pin_of.get(key) if key[0] is not None else None
+                for e in es:
+                    if p is None:
+                        info['unsupported']['set_clock_latency on unknown pins'] = (
+                            info['unsupported'].get('set_clock_latency on unknown pins', 0) + 1)
+                    else:
+                        info['pin_latency'].append({'pin': int(p), 'clock': e['clock'], 'value': e['value'],
+                                                    'rf': e['rf'], 'mm': e['mm']})
     # IO pins' layers (the first LAYER of each pin in the source DEF's PINS): OpenROAD connects a port to its net's
     # estimated tree through the vias from that layer
     info['io_layer'] = {}

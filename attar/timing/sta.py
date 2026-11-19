@@ -9,8 +9,11 @@ use OpenSTA's edge relationships between any two clocks. Delays: NLDM tables, bi
 alpha 0.3), a pi segment per branch (set_wire_rc -signal), each pin at OpenROAD's location (the mean of its LEF
 rectangles' centers, _pin_setup) behind its via resistance; reduced as OpenSTA does to the driver's pi model and
 every sink's Elmore delay.
-Path delays: set_max_delay -from / -to. Not modeled: other path exceptions (set_false_path, ...), clock gating
-checks, recovery / removal, latches.
+Path delays: set_max_delay -from / -to. Recovery / removal checks are setup / hold checks (as OpenSTA's). Latches: data
+passes D -> Q while the enable is open (time borrowing, OpenSTA's Latches) in the max analysis, and a latch D's setup
+required time is OpenSTA's (the opening, the arrival while borrowing, or the closing less max borrow); the min analysis
+passes nothing through a latch. Combinational loops are broken where OpenSTA's levelization breaks them. Not
+modeled: other path exceptions (set_false_path, ...), clock gating checks.
 """
 import json
 import re
@@ -25,7 +28,7 @@ import torch
 from .. import metrics as M
 from ..io.distill import D_IN, D_INOUT, D_OUT
 from . import ir as timing_mod
-from .ir import (S_NEG, S_NON, S_POS, T_COMB, T_FALL_EDGE, T_HOLD_F, T_HOLD_R, T_RISE_EDGE,
+from .ir import (S_NEG, S_NON, S_POS, T_CLEAR, T_COMB, T_FALL_EDGE, T_HOLD_F, T_HOLD_R, T_PRESET, T_RISE_EDGE,
                      T_SETUP_F, T_SETUP_R, T_TRISTATE)
 
 warnings.filterwarnings('ignore', message='index_reduce')     # torch marks index_reduce beta; it is what we need
@@ -88,6 +91,40 @@ def _relationships(clocks):
                     su[2 * a + ea, 2 * b + eb] = best_s
                     ho[2 * a + ea, 2 * b + eb] = best_h
     return su, ho
+
+
+def _latch_relationships(clocks):
+    """Latch setup cycle accounting (OpenSTA's CycleAccting, TimingRole::latchSetup) between every data (launch
+    clock, edge) and latch enable (clock, open edge): the enable's opening is the one before the first closing
+    (opposite) edge strictly after the launch. Returns (required, shift), (2C, 2C) each: the opening time relative to
+    the launch cycle's start, and the launch cycle's offset less the enable cycle's (sourceTimeOffset -
+    targetTimeOffset: moves an arrival into the enable clock's cycle 0)."""
+    C = len(clocks)
+    req = np.full((2 * C, 2 * C), np.nan); sh = np.full((2 * C, 2 * C), np.nan)
+    for a, ca in enumerate(clocks):
+        for b, cb in enumerate(clocks):
+            Ta, Tb = ca['period'], cb['period']
+            ia, ib = int(round(Ta * 1000)), int(round(Tb * 1000))
+            L = ia * ib // math.gcd(ia, ib) if ia > 0 and ib > 0 else ia
+            n_launch = max(1, min(1000, L // max(ia, 1)))
+            for ea in (0, 1):
+                for eb in (0, 1):
+                    best = INF
+                    for m in range(n_launch):
+                        ts = ca['waveform'][ea] + m * Ta
+                        opp0, en0 = cb['waveform'][1 - eb], cb['waveform'][eb]
+                        k = math.floor((ts - opp0) / Tb) + 1                 # first closing edge strictly after
+                        if opp0 + k * Tb - ts < 1e-6:
+                            k += 1
+                        t_opp = opp0 + k * Tb
+                        t_en, cyc = en0 + k * Tb, k
+                        if t_en > t_opp:
+                            t_en -= Tb; cyc -= 1
+                        if t_opp - ts < best - 1e-9:
+                            best = t_opp - ts
+                            req[2 * a + ea, 2 * b + eb] = t_en - m * Ta
+                            sh[2 * a + ea, 2 * b + eb] = m * Ta - cyc * Tb
+    return req, sh
 
 
 STATE = ('valid', 'k0', 'k1', 'k2', 'k3', 'k4', 'p1', 'p2', 't0', 'dt', 'vo_delay', 'ub', 'drvr_slew', 'vth', 'vl', 'vh',
@@ -407,7 +444,8 @@ class Timer:
             b['rv'] = self.pin_rvia.cpu().numpy()[pins_b]
         self._pin_setup()                               # locations (the master's pin rectangles), into ev.off in place
         self._mp_names = None; self._sink_drv = None
-        return True
+        self._power = None                              # its functions and tables are the old masters' (OpenSTA:
+        return True                                     # replaceEquivCellAfter -> Power::powerInvalid)
 
     def __getattr__(self, name):
         stale = self.__dict__.get('_stale')
@@ -552,6 +590,11 @@ class Timer:
         from_const = self.const_net[p_net[fr]] >= 0
         plaunch = edge & pclk[fr] & ~clk_net[to] & ~off
         ck = ((comb | (edge & (clk_of[fr] < 0))) | plaunch) & ~from_const
+        # combinational loops: the edges OpenSTA's levelization disables (Levelize::findBackEdges) are not searched
+        ldq = self._latch_d_to_q(d, t, lib_id, atype)
+        loop_arc, loop_net = self._loop_edges(P, n_fr, n_to, fr, to, atype, ldq, p_cell, d.raw['p_mpin'])
+        ck &= ~loop_arc
+        self.loop_edges = (np.nonzero(loop_arc)[0], np.nonzero(loop_net)[0])
         launch = edge & iclk[fr] & ~clk_net[to] & ~off
         self.net_iclk = np.zeros(len(n_ptr) - 1, bool)
         self.net_iclk[drv >= 0] = iclk[drv[drv >= 0]]
@@ -563,7 +606,14 @@ class Timer:
         # (a data pin into a propagated clock network, e.g. a clock gate's enable: its arrivals are data, not the
         # clock's (OpenSTA's tags are not clock tags there), so they do not become clock arrivals; slews only)
         d2c = ~clk_net[fr] & pclk[to]
-        self.c_arr = T(((comb & ~iclk[fr] & ~iclk[to] & ~d2c) | plaunch)[ck] & ~off[ck])   # the search's (the rest: slews)
+        # latch D -> Q arcs are not ordinary arcs of the search (Latches::latchOutArrival): a latch whose enable a clock
+        # reaches passes data that arrives while it is open, as data of the enable's clock (_latch_prepare: the stage
+        # reads a transformed copy of D's arrivals); one whose enable no clock reaches passes nothing (slews only)
+        clocked = np.zeros(len(d.raw['c_master']) + 1, bool)
+        clocked[p_cell[fr[edge & clk_net[fr]]]] = True
+        self._lq_c = np.nonzero((ldq & clocked[p_cell[fr]])[ck])[0]          # c-selection indices of the clocked ones
+        self.c_arr = T(((comb & ~iclk[fr] & ~iclk[to] & ~d2c & ~ldq) | plaunch)[ck] & ~off[ck])   # the search's
+        #                                                                                    (the rest: slews)
         self.l_lib, self.l_fr, self.l_to, self.l_sense, self.l_type = sel(launch)
         chk = np.isin(atype, (T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F)) & (clk_of[fr] >= 0) & ~off
         self.k_lib, self.k_fr, self.k_to, self.k_sense, self.k_type = sel(chk)
@@ -571,12 +621,12 @@ class Timer:
         self._sel = {'c': np.nonzero(ck)[0], 'l': np.nonzero(launch)[0], 'k': np.nonzero(chk)[0]}
 
         # levels (Kahn) over net + combinational arcs (and the slew-only arcs)
-        g_fr = np.concatenate([n_fr[nk], fr[ck]]); g_to = np.concatenate([n_to[nk], to[ck]])
+        gn = nk & ~loop_net                              # (a disabled loop wire still loads its net)
+        g_fr = np.concatenate([n_fr[gn], fr[ck]]); g_to = np.concatenate([n_to[gn], to[ck]])
         # latch D -> Q arcs: OpenSTA's levelization never follows them (Levelize::searchThru); here a cycle is broken
         # there first (with propagated clocks, a clock gating latch closes one: register clock -> Q -> ... -> latch
         # D -> Q -> gate enable -> gated clock tree -> register clock)
-        ldq = self._latch_d_to_q(d, t, lib_id, atype)
-        lev, dropped = self._levelize(P, g_fr, g_to, prefer=np.concatenate([np.zeros(int(nk.sum()), bool), ldq[ck]]))
+        lev, dropped = self._levelize(P, g_fr, g_to, prefer=np.concatenate([np.zeros(int(gn.sum()), bool), ldq[ck]]))
         self.n_cycle_edges = dropped
         self.level = lev
         psrc = np.nonzero(pclk & np.isin(p_cell, [c_ for _, c in clocks for c_ in c['sources']]))[0]
@@ -623,6 +673,10 @@ class Timer:
         self.out_delay = [(port_pin[e['cell']], cidx.get(e['clock'], -1), e) for e in info.get('output_delay', [])
                           if e['cell'] in port_pin and e['clock'] in cidx]
         self.in_slew = {port_pin[int(c)]: v for c, v in info.get('input_transition', {}).items() if int(c) in port_pin}
+        # min analysis (set_input_transition -min; one set without -max sets both, an unset slew is 0); an IR attached
+        # before the min slews were kept has the max ones only
+        self.in_slew_min = self.in_slew if 'input_transition_min' not in info else \
+            {port_pin[int(c)]: v for c, v in info['input_transition_min'].items() if int(c) in port_pin}
         rc = info.get('rc') or {}
         self.r_sig, self.c_sig = (rc.get('signal') or [0.0, 0.0])
         self.cut_res = float(rc.get('cut_res', 0.0))
@@ -772,12 +826,14 @@ class Timer:
         o = np.argsort(p_cell, kind='stable'); cptr = np.searchsorted(p_cell[o], np.arange(len(c_master) + 1))
         pins_of = lambda c: o[cptr[c]:cptr[c + 1]]
         pin_memo, out_memo = {}, {}      # per instance: its pins; per (master, constant inputs): constant outputs
+        ties = {}                        # per instance: {pin on a supply net: 1 / 0} (OpenSTA: a constant pin)
         def evaluate(c):
             """Constant outputs of instance c: {pin: value}, and {input pin name: its constant}."""
             pins = pin_memo.get(c)
             if pins is None:
                 pins = pin_memo[c] = {names[p_mpin[p]]: p for p in pins_of(c) if p_mpin[p] >= 0}
             known = {n: int(cn[p_net[p]]) for n, p in pins.items() if cn[p_net[p]] >= 0 and pdir[p] != D_OUT}
+            known.update(ties.get(c, ()))
             key = (int(c_master[c]), tuple(sorted(known.items())))
             res = out_memo.get(key)
             if res is None:
@@ -791,8 +847,16 @@ class Timer:
                         res[pn] = vals.pop()
                 out_memo[key] = res
             return {pins[pn]: v for pn, v in res.items() if pn in pins}, known, pins
-        # seeds: tie cells (an output function without variables)
+        # seeds: tie cells (an output function without variables), instances with pins on a supply net
         queue = []
+        touched = set()
+        for c, k, v in zip(*(d.raw.get(x, ()) for x in ('tie_cell', 'tie_mpin', 'tie_val'))):
+            ties.setdefault(int(c), {})[names[k]] = int(v)
+        for c in ties:
+            res, _, _ = evaluate(c); touched.add(c)
+            for p, v in res.items():
+                if cn[p_net[p]] < 0:
+                    cn[p_net[p]] = v; queue.append(p_net[p])
         for m, fs in funcs.items():
             if all(not vs for vs, _ in fs.values()):
                 for c in np.nonzero(c_master == m)[0]:
@@ -800,7 +864,6 @@ class Timer:
                     for p, v in res.items():
                         if cn[p_net[p]] < 0:
                             cn[p_net[p]] = v; queue.append(p_net[p])
-        touched = set()
         while queue:
             n = queue.pop()
             for p in range(n_ptr[n], n_ptr[n + 1]):
@@ -942,10 +1005,119 @@ class Timer:
             bad = ~done[to] & ~done[fr]
             if prefer is not None and bool((bad & prefer).any()):
                 bad &= prefer
+            else:
+                bad = Timer._back_edges(P, fr, to, bad)
             dropped += int(bad.sum())
             fr, to = fr[~bad], to[~bad]
             if prefer is not None:
                 prefer = prefer[~bad]
+
+    @staticmethod
+    def _loop_edges(P, n_fr, n_to, fr, to, atype, ldq, p_cell, p_mpin):
+        """The edges OpenSTA's levelization disables to break combinational loops (Levelize::findBackEdges,
+        findCycleBackEdges): (per instance arc, per net edge) masks. Its depth-first search is replayed in its order:
+        the roots (no fanin) by vertex id, i.e. instance (DEF component) order then the instance's pins in LEF order,
+        ports last; a vertex's out edges newest first (Graph::makeEdge prepends): a driver's wires to its net's ports
+        then to its instance pins in reverse DEF order (definNet::end leaves a net's pins in DEF order, the wires are
+        made in that order, the ports' after), an instance pin's arcs in reverse Liberty order. The graph: wires and every instance arc but timing checks,
+        latch D -> Q and preset / clear (Levelize::searchThru). Only run when there is a cycle. (Under 100 roots
+        OpenSTA sorts them by name: not replayed.)"""
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+        keep = ~np.isin(atype, (T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F, T_PRESET, T_CLEAR)) & ~ldq
+        ia = np.nonzero(keep)[0]
+        NN = len(n_fr)
+        e_fr = np.concatenate([n_fr, fr[ia]]); e_to = np.concatenate([n_to, to[ia]])
+        loop_arc = np.zeros(len(fr), bool); loop_net = np.zeros(NN, bool)
+        g = coo_matrix((np.ones(len(e_fr)), (e_fr, e_to)), shape=(P, P)).tocsr()
+        _, comp = connected_components(g, directed=True, connection='strong')
+        if np.bincount(comp).max(initial=0) < 2 and not (e_fr == e_to).any():
+            return loop_arc, loop_net
+        # out edges in OpenSTA's iteration order
+        is_port = p_mpin < 0
+        k1 = np.concatenate([np.zeros(NN, np.int64), np.ones(len(ia), np.int64)])           # wires first
+        k2 = np.concatenate([(~is_port[n_to]).astype(np.int64), np.zeros(len(ia), np.int64)])
+        k3 = np.concatenate([-n_to.astype(np.int64), -ia.astype(np.int64)])
+        o = np.lexsort((k3, k2, k1, e_fr))
+        e_fr, e_to = e_fr[o], e_to[o]
+        eid = np.arange(len(o))[o]                                   # the edge's index in (net edges, kept arcs)
+        ptr = np.searchsorted(e_fr, np.arange(P + 1))
+        rank = np.empty(P, np.int64); rank[np.lexsort((p_mpin, p_cell))] = np.arange(P)
+        indeg = np.bincount(e_to, minlength=P); outdeg = np.diff(ptr)
+        roots = np.nonzero((indeg == 0) & (outdeg > 0))[0]
+        roots = roots[np.argsort(rank[roots], kind='stable')]
+        visited = np.zeros(P, bool); on_path = np.zeros(P, bool)
+        back = []
+        ptr_l, to_l = ptr.tolist(), e_to.tolist()
+
+        def dfs(stack):
+            while stack:
+                v, k = stack[-1]
+                if k < ptr_l[v + 1]:
+                    stack[-1] = (v, k + 1)
+                    w = to_l[k]
+                    if not visited[w]:
+                        visited[w] = True; on_path[w] = True
+                        stack.append((w, ptr_l[w]))
+                    elif on_path[w]:
+                        back.append(k)
+                else:
+                    stack.pop(); on_path[v] = False
+        # every root is pushed (and on the path) at the start: the search starts from the last one (findBackEdges)
+        for v in roots.tolist():
+            visited[v] = True; on_path[v] = True
+        dfs([(v, ptr_l[v]) for v in roots.tolist()])
+        # cycles no root reaches (findCycleBackEdges): a search from each vertex left (its start vertex not flagged)
+        left = np.nonzero(~visited)[0]
+        for v in left[np.argsort(rank[left], kind='stable')].tolist():
+            dfs([(v, ptr_l[v])])
+        b = eid[np.asarray(back, np.int64)] if back else np.zeros(0, np.int64)
+        loop_net[b[b < NN]] = True
+        loop_arc[ia[b[b >= NN] - NN]] = True
+        return loop_arc, loop_net
+
+    @staticmethod
+    def _back_edges(P, fr, to, cand):
+        """The edges that close cycles (OpenSTA's Levelize::findBackEdges: a depth-first search, every edge to a pin
+        on the current path is a disabled loop edge), searched inside each strongly connected component of the
+        candidate edges cand only: the rest of the graph stays. The search starts at the component's pins entered from
+        outside it (then the others), in pin order: OpenSTA's order (roots by name, the network's edge order) is not
+        reproduced, so the edge cut in a loop can differ."""
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+        ci = np.nonzero(cand)[0]
+        g = coo_matrix((np.ones(len(ci)), (fr[ci], to[ci])), shape=(P, P)).tocsr()
+        _, comp = connected_components(g, directed=True, connection='strong')
+        size = np.bincount(comp, minlength=comp.max() + 1)
+        inner = ci[(comp[fr[ci]] == comp[to[ci]]) & (size[comp[fr[ci]]] > 1)]
+        o = np.argsort(fr[inner], kind='stable'); inner = inner[o]
+        f2 = fr[inner]; t2 = to[inner]
+        nodes = np.unique(f2)
+        ptr = {int(v): (int(a), int(b)) for v, a, b in zip(nodes, np.searchsorted(f2, nodes),
+                                                             np.searchsorted(f2, nodes, side='right'))}
+        entered = set(to[~((comp[fr] == comp[to]) & (size[comp[to]] > 1))].tolist())
+        starts = sorted(nodes.tolist(), key=lambda v: (v not in entered, v))
+        visited, on_path = set(), set()
+        back = np.zeros(len(fr), bool)
+        for s0 in starts:
+            if s0 in visited:
+                continue
+            visited.add(s0); on_path.add(s0)
+            stack = [(s0, ptr[s0][0])]
+            while stack:
+                v, k = stack[-1]
+                hi = ptr.get(v, (0, 0))[1]
+                if k < hi:
+                    stack[-1] = (v, k + 1)
+                    w = int(t2[k])
+                    if w not in visited:
+                        visited.add(w); on_path.add(w)
+                        stack.append((w, ptr.get(w, (0, 0))[0]))
+                    elif w in on_path:
+                        back[inner[k]] = True
+                else:
+                    stack.pop(); on_path.discard(v)
+        return back
 
     def _group(self, lev):
         if not len(lev):
@@ -1173,7 +1345,7 @@ class Timer:
         ex_from = [set(e['from']) for e in self.ex]; ex_to = [set(e['to']) for e in self.ex]
         T = lambda x, dt=torch.long: torch.as_tensor(np.asarray(x), device=dev, dtype=dt)
         # input ports: arrival entries (flat index into (P, 2, NT)) and slews
-        ix_max, v_max, ix_min, v_min, sl_p, sl_v = [], [], [], [], [], []
+        ix_max, v_max, ix_min, v_min, sl_p, sl_v, sl_n = [], [], [], [], [], [], []
         wf = self.wf.cpu().numpy(); lat = self.lat.cpu().numpy()
         prop = self.prop_clk
         for p, ci, e in self.in_delay:
@@ -1186,7 +1358,7 @@ class Timer:
                     ix_max.append(k); v_max.append(base + e['value'])
                 if not e['max']:
                     ix_min.append(k); v_min.append(base + e['value'])
-            sl_p.append(p); sl_v.append(self.in_slew.get(p, 0.0))
+            sl_p.append(p); sl_v.append(self.in_slew.get(p, 0.0)); sl_n.append(self.in_slew_min.get(p, 0.0))
         # propagated clocks: the source's rise at the rising edge, its fall at the falling edge (+ source latency),
         # its slew the port's (set_input_transition)
         cell_of_pin = self.p_cell_np
@@ -1198,13 +1370,14 @@ class Timer:
                     k = (p * 2 + rf) * NT + 2 * ci + rf
                     v = float(wf[ci, rf]) + float(c.get('source_latency', 0.0))
                     ix_max.append(k); v_max.append(v); ix_min.append(k); v_min.append(v)
-                sl_p.append(p); sl_v.append(self.in_slew.get(p, 0.0))
-        for p, v in self.in_slew.items():              # set_input_transition sets a port's slew, input delay or not
-            if p not in sl_p and not self.clk_of[p] >= 0:
-                sl_p.append(p); sl_v.append(v)
+                sl_p.append(p); sl_v.append(self.in_slew.get(p, 0.0)); sl_n.append(self.in_slew_min.get(p, 0.0))
+        seen = set(sl_p)
+        for p in list(self.in_slew) + [q for q in self.in_slew_min if q not in self.in_slew]:
+            if p not in seen and not self.clk_of[p] >= 0:   # set_input_transition sets a port's slew, input delay or not
+                seen.add(p); sl_p.append(p); sl_v.append(self.in_slew.get(p, 0.0)); sl_n.append(self.in_slew_min.get(p, 0.0))
         self.in_ix_max, self.in_v_max = T(ix_max), T(v_max, torch.float32)
         self.in_ix_min, self.in_v_min = T(ix_min), T(v_min, torch.float32)
-        self.in_sl_p, self.in_sl_v = T(sl_p), T(sl_v, torch.float32)
+        self.in_sl_p, self.in_sl_v, self.in_sl_n = T(sl_p), T(sl_v, torch.float32), T(sl_n, torch.float32)
         if NT > 2 * C:                                  # exception tags: no clock relationship (NaN: not checked)
             pad = lambda m: torch.nn.functional.pad(m, (0, NT - m.shape[1], 0, NT - m.shape[0]), value=float('nan'))
             self.rel_setup, self.rel_hold = pad(self.rel_setup), pad(self.rel_hold)
@@ -1352,6 +1525,232 @@ class Timer:
         self.launch_t = torch.zeros(NT, device=dev)
         if C:
             self.launch_t[:2 * C] = self.wf[tags[:2 * C] // 2, tags[:2 * C] % 2]
+        self._pin_latency_setup()
+        self._latch_prepare()
+
+    def _pin_latency_setup(self):
+        """Pin clock latencies (set_clock_latency on pins, timing.json 'pin_latency'), as OpenSTA's Search::mutateTag: where
+        a propagated clock reaches such a pin its arrival becomes the ideal clock edge + source latency + the pin's
+        latency (to_latency), and from there the clock is not propagated (no CRPR: Crpr requires propagated clock
+        infos); the pin's slew stays the propagated one (ClkNetwork does not make it ideal). Each override is written
+        into the arrivals after the pin's own arrival is final (the stage of its level), before any arc out of it.
+        _lat_at: stage level (or 'end') -> (flat index, value) for the max and the min arrivals."""
+        self._lat_pins = np.zeros(0, np.int64)
+        self._lat_at = {}
+        pl = self.info.get('pin_latency') or []
+        if not pl:
+            return
+        NT, dev = self.NT, self.dev
+        wf = self.wf.cpu().numpy()
+        cidx = {k: i for i, k in enumerate(self.clock_names)}
+        src_lat = [float(c.get('source_latency', 0.0)) for c in self.clocks]
+        slot, skipped = {}, 0
+        for e in pl:
+            p = int(e['pin'])
+            cis = [cidx[e['clock']]] if e.get('clock') in cidx else ([int(self.clk_of[p])] if self.clk_of[p] >= 0 else [])
+            for ci in cis:
+                if not self.prop_clk[ci]:
+                    skipped += 1                        # an ideal clock's pin latency: not modeled
+                    continue
+                for rf in e['rf']:
+                    edge = rf ^ int(self.par[p])
+                    v = float(wf[ci, edge]) + src_lat[ci] + float(e['value'])
+                    s_ = slot.setdefault((p, rf, 2 * ci + edge), [np.nan, np.nan])
+                    for mm in e['mm']:
+                        s_[0 if mm == 'max' else 1] = v
+        if skipped:
+            warnings.warn('attar.timing.sta: %d pin clock latencies on ideal clocks are not modeled' % skipped,
+                          stacklevel=2)
+        if not slot:
+            return
+        keys = np.array(list(slot), np.int64).reshape(-1, 3)
+        vals = np.array(list(slot.values()), np.float64).reshape(-1, 2)
+        pins = keys[:, 0]
+        self._lat_pins = np.unique(pins)
+        # a pin with clock pins after it (not a register clock pin): only its own arrival is overridden here
+        leaf = np.zeros(self.P, bool)
+        leaf[self.k_fr.cpu().numpy()] = True
+        if len(self.l_fr):
+            leaf[self.l_fr.cpu().numpy()] = True
+        lf = self.c_fr[self.c_type == T_RISE_EDGE].cpu().numpy(), self.c_fr[self.c_type == T_FALL_EDGE].cpu().numpy()
+        leaf[np.concatenate(lf)] = True
+        if (~leaf[self._lat_pins]).any():
+            warnings.warn('attar.timing.sta: %d pin clock latencies on pins that are not register clock pins: the '
+                          'clock after them stays propagated' % int((~leaf[self._lat_pins]).sum()), stacklevel=2)
+        stage_lv = np.array([k for k in range(self.max_level + 1) if self.cb_lev[k] is not None], np.int64)
+        pos = np.searchsorted(stage_lv, self.level[pins])          # the first stage at or after the pin's level
+        at = np.where(pos < len(stage_lv), stage_lv[np.minimum(pos, max(len(stage_lv) - 1, 0))], -1)
+        flat = (keys[:, 0] * 2 + keys[:, 1]) * NT + keys[:, 2]
+        for a in np.unique(at):
+            m = at == a
+            mx, mn = m & np.isfinite(vals[:, 0]), m & np.isfinite(vals[:, 1])
+            T_ = lambda x, dt=torch.long: torch.as_tensor(x, device=dev, dtype=dt)  # noqa: E731
+            self._lat_at['end' if a < 0 else int(a)] = (T_(flat[mx]), T_(vals[mx, 0], torch.float32),
+                                                         T_(flat[mn]), T_(vals[mn, 1], torch.float32))
+
+    def _latch_prepare(self):
+        """Clocked latch D -> Q arcs, as OpenSTA's Latches::latchOutArrival / latchRequired: the stage of such an arc
+        reads its own rows of the arrival buffers (pseudo rows after the pins'), written just before the stage
+        (_apply_latch) from D's final arrivals: per launch tag, data arriving after the enable opens (enable arrival:
+        the latch setup cycle's opening + the enable clock's early latency) passes, at most max_borrow late (the enable
+        pulse width less the open / close latency difference and the latch setup time), moved into the enable clock's
+        cycle and carried as data of the enable's opening edge. Max analysis only (the min one passes nothing through
+        a latch); no CRPR, no set_max_time_borrow. _cb_fwd: per level the stage's (input rows, arrival mask)."""
+        dev, P, C = self.dev, self.P, len(self.clocks)
+        self._lq_n, self._lq_at, self._lq_chk = 0, {}, None
+        self._cb_fwd = [None if cb is None else (cb[1] * 2 + cb[4], cb[7], torch.zeros_like(cb[7]))
+                        for cb in self.cb_lev]
+        c = self._lq_c
+        if not len(c) or not C:
+            self._load_indices()
+            return
+        cfr, cto = self.c_fr.cpu().numpy(), self.c_to.cpu().numpy()
+        _, fr, to, atype, _ = self._arcs_all
+        en_of = {}                                               # Q -> (enable pin, its opening transition)
+        for i in np.nonzero(np.isin(atype, (T_RISE_EDGE, T_FALL_EDGE)) & np.isin(to, cto[c]))[0]:
+            en_of.setdefault(int(to[i]), (int(fr[i]), 0 if atype[i] == T_RISE_EDGE else 1))
+        keep = np.array([int(cto[x]) in en_of and self.clk_of[en_of[int(cto[x])][0]] >= 0 for x in c], bool)
+        c = c[keep]
+        if not len(c):
+            self._load_indices()
+            return
+        jof = {int(x): j for j, x in enumerate(c)}
+        self._lq_n = len(c)
+        D, Q = cfr[c], cto[c]
+        E = np.array([en_of[int(q)][0] for q in Q]); orf_e = np.array([en_of[int(q)][1] for q in Q])
+        ci = self.clk_of[E]; rf_e = orf_e ^ self.par[E]
+        tag_e, tag_c = 2 * ci + rf_e, 2 * ci + (1 - rf_e)
+        wf = self.wf.cpu().numpy(); per = np.array([cc['period'] for cc in self.clocks])
+        hi = wf[ci, 1] - wf[ci, 0]
+        pulse = np.where(rf_e == 0, hi, per[ci] - hi)
+        # the latch setup check (enable closing edge -> D)
+        kidx = np.full(len(c), -1, np.int64)
+        if len(self.k_lib):
+            kk = {}
+            kf, kt, ky = self.k_fr.cpu().numpy(), self.k_to.cpu().numpy(), self.k_type.cpu().numpy()
+            for i in range(len(kf)):
+                kk.setdefault((int(kf[i]), int(kt[i]), int(ky[i])), i)
+            for j in range(len(c)):
+                kidx[j] = kk.get((int(E[j]), int(D[j]), T_SETUP_R if orf_e[j] == 1 else T_SETUP_F), -1)
+        req, sh = _latch_relationships(self.clocks)
+        T_ = lambda x, dt=torch.long: torch.as_tensor(np.asarray(x), device=dev, dtype=dt)  # noqa: E731
+        f32 = torch.float32
+        # the latch D setup checks (Latches::latchRequired): required = the enable's opening if data arrives before it,
+        # the arrival while borrowing, the register check's (closing edge) beyond max_borrow
+        _, first = np.unique(kidx, return_index=True)
+        first = first[kidx[first] >= 0]
+        if len(first):
+            self._lq_chk = dict(k=T_(kidx[first]), E=T_(E[first]), oe=T_(orf_e[first]), tag_e=T_(tag_e[first]),
+                                ci=T_(ci[first]), prop=T_(self.prop_clk[ci[first]], torch.bool),
+                                req=T_(req[:, tag_e[first]].T, f32))
+        cs = self.c_sense.cpu().numpy()
+        for k, cb in enumerate(self.cb_lev):
+            if cb is None:
+                continue
+            src = self._cb_src[k]
+            m = np.isin(src, c)
+            if not m.any():
+                continue
+            irf, orf = cb[4].cpu().numpy(), cb[3].cpu().numpy()
+            js = np.array([jof.get(int(x), 0) for x in src])
+            fi = np.where(m, (P + js) * 2 + irf, cb[1].cpu().numpy() * 2 + irf)
+            sense = cs[src]
+            ok = (sense == S_NON) | ((sense == S_POS) & (irf == orf)) | ((sense == S_NEG) & (irf != orf))
+            arr = np.where(m, ok, cb[7].cpu().numpy())
+            self._cb_fwd[k] = (T_(fi), T_(arr, torch.bool), T_(m, torch.bool))
+            jj = np.unique(js[m])                                 # the latch arcs whose rows this stage reads
+            self._lq_at[k] = dict(
+                rows=T_(P + jj), D=T_(D[jj]), E=T_(E[jj]), oe=T_(orf_e[jj]), ce=T_(1 - orf_e[jj]),
+                tag_e=T_(tag_e[jj]), tag_c=T_(tag_c[jj]), ci=T_(ci[jj]),
+                prop=T_(self.prop_clk[ci[jj]], torch.bool), pulse=T_(pulse[jj], f32),
+                kidx=T_(np.maximum(kidx[jj], 0)), has_k=T_(kidx[jj] >= 0, torch.bool),
+                req=T_(req[:, tag_e[jj]].T, f32), sh=T_(sh[:, tag_e[jj]].T, f32))
+        self._load_indices()
+
+    def _load_indices(self):
+        """Per stage, how its loads' arrivals are made (_load_arr): OpenSTA's graph delay calculation keeps one wire
+        delay per wire edge and transition, the largest over the driver's arcs (GraphDelayCalc::annotateLoadDelaySlew
+        merges), but none from a latch D -> Q arc (annotateDelaysSlews); a load's arrival is its driver's + that delay.
+        Per stage (lane -> its (load, transition), those rows, their drivers' rows, the lanes that count)."""
+        def index(t_, orf, ea, en, nol):
+            si = self.n_to[en] * 2 + orf[ea]
+            u, inv = torch.unique(si, return_inverse=True)
+            d = torch.zeros(len(u), dtype=torch.long, device=self.dev).scatter_(0, inv, t_[ea] * 2 + orf[ea])
+            return inv, u, d, ~nol[ea]
+        self._ld_lev = [None if cb is None else index(cb[2], cb[3], cb[5], cb[6], fw[2])
+                        for cb, fw in zip(self.cb_lev, self._cb_fwd)]
+        self._ld_lc = None
+        if self.lc is not None:
+            lib, to, orf, tag, t0, cks = self.lc
+            self._ld_lc = index(to, orf, *self.lc_ex, torch.zeros_like(lib, dtype=torch.bool))
+
+    def _load_arr(self, amax, amin, ld, wx, wn):
+        """One stage's load arrivals (see _load_indices), the wire delays kept across stages in self._wb."""
+        inv, u, d, ok = ld
+        if not len(u):
+            return
+        wbx, wbn = self._wb
+        wbx.scatter_reduce_(0, u[inv], torch.where(ok, wx, torch.full_like(wx, -INF)), 'amax')
+        wbn.scatter_reduce_(0, u[inv], torch.where(ok, wn, torch.full_like(wn, INF)), 'amin')
+        amax.index_reduce_(0, u, amax[d] + wbx[u][:, None], 'amax')
+        amin.index_reduce_(0, u, amin[d] + wbn[u][:, None], 'amin')
+
+    def _latch_required(self, req, rf):
+        """Register check required times (n_k, NT) with the latch D checks' (see _latch_prepare): min(the closing
+        edge's, max(the enable's opening, the arrival)), per data tag."""
+        g = self._lq_chk
+        C2 = 2 * len(self.clocks)
+        E, k = g['E'], g['k']
+        lt = self.launch_t
+        open_lat = torch.where(g['prop'], self.amin[E, g['oe'], g['tag_e']] - lt[g['tag_e']], self.lat[g['ci']])
+        en = g['req'] + (open_lat - self.unc_s[g['ci']])[:, None]                         # (n, 2C)
+        a = self.amax[self.k_to[k], rf, :C2]
+        r = req[k].clone()
+        r[:, :C2] = torch.minimum(r[:, :C2], torch.maximum(en, a))
+        out = req.clone()
+        out[k] = r
+        return out
+
+    def _apply_latch(self, amax, amin, smax, smin, key):
+        """Write the pseudo rows of the latch D -> Q arcs of stage `key` (in place), see _latch_prepare."""
+        g = self._lq_at.get(key)
+        if g is None:
+            return
+        NT, C2 = self.NT, 2 * len(self.clocks)
+        A = amax.view(-1, 2, NT); Am = amin.view(-1, 2, NT)
+        S = smax.view(-1, 2); Sm = smin.view(-1, 2)
+        D, E, rows = g['D'], g['E'], g['rows']
+        lt = self.launch_t
+        lat_i = self.lat[g['ci']]
+        open_lat = torch.where(g['prop'], Am[E, g['oe'], g['tag_e']] - lt[g['tag_e']], lat_i)
+        close_lat = torch.where(g['prop'], Am[E, g['ce'], g['tag_c']] - lt[g['tag_c']], lat_i)
+        if len(self.k_lib):
+            kx = g['kidx']
+            cslew = torch.where(g['prop'], Sm[E, g['ce']], self.k_cslew[kx])
+            margin = torch.stack([self._lookup(self.k_lib[kx], rf, S[D, rf], cslew) for rf in (0, 1)], 1)
+            margin = torch.where(g['has_k'][:, None] & torch.isfinite(margin), margin, torch.zeros_like(margin))
+        else:
+            margin = torch.zeros(len(D), 2, device=self.dev)
+        en_arr = g['req'] + (open_lat - self.unc_s[g['ci']])[:, None]                    # (n, 2C)
+        maxb = g['pulse'][:, None] - (open_lat - close_lat)[:, None] - margin           # (n, 2)
+        a = A[D, :, :C2]                                                                 # (n, 2, 2C)
+        borrow = a - en_arr[:, None, :]
+        req = torch.where(borrow <= maxb[:, :, None], a, en_arr[:, None, :] + maxb[:, :, None])
+        v = torch.where((borrow > 0) & torch.isfinite(a), req + g['sh'][:, None, :], torch.full_like(a, -INF))
+        q = v.amax(2)                                                                    # (n, 2): per D transition
+        out = torch.full((len(D), 2, NT), -INF, device=self.dev)
+        out.scatter_(2, g['tag_e'][:, None, None].expand(-1, 2, 1), q[:, :, None])
+        A.index_copy_(0, rows, out)
+        Am.index_fill_(0, rows, INF)
+        S.index_copy_(0, rows, S[D]); Sm.index_copy_(0, rows, Sm[D])
+
+    def _apply_lat(self, amax, amin, key):
+        """Write the pin clock latencies assigned to stage `key` into the arrivals (in place)."""
+        o = self._lat_at.get(key)
+        if o is not None:
+            ix, vx, jn, vn = o
+            amax.view(-1)[ix] = vx
+            amin.view(-1)[jn] = vn
 
     def _prepare_triton(self):
         """Per level, the int32 arrays of the fused stage kernel (attar.timing.dmp_triton.stage)."""
@@ -1363,16 +1762,21 @@ class Timer:
                     i32(ea), i32(en), s0.float().contiguous(), i32(arr))
         self.tri_lev = []
         self._tri_src = []                                       # ('l' | 'c', selection index of each entry)
+        self._tri_k = []                                         # the stage level of each entry (None: launches)
         if self.lc is not None:
             lib, to, orf, tag, t0, cks = self.lc
             self.tri_lev.append(lev(lib, torch.full_like(lib, -1), to, orf, t0, tag, *self.lc_ex, cks,
                                     torch.ones_like(lib)))
             self._tri_src.append(('l', self._lc_src))
-        for cb, src in zip(self.cb_lev, self._cb_src):
+            self._tri_k.append(None)
+        for k, (cb, src) in enumerate(zip(self.cb_lev, self._cb_src)):
             if cb is not None:
-                lib, f, t_, orf, irf, ea, en, arr = cb
+                self._tri_k.append(k)
+                lib, f, t_, orf, irf, ea, en, _ = cb
+                fi, arr, nol = self._cb_fwd[k]
                 z = torch.zeros(len(lib), device=dev)
-                self.tri_lev.append(lev(lib, f * 2 + irf, t_, orf, z, torch.zeros_like(lib), ea, en, z, arr))
+                self.tri_lev.append(lev(lib, fi, t_, orf, z, torch.zeros_like(lib), ea, en, z,
+                                        arr.to(torch.int32) | (nol.to(torch.int32) << 1)))
                 self._tri_src.append(('c', src))
         self.tri_tables = (self.t_ix1.contiguous(), self.t_ix2.contiguous(), self.t_val.contiguous(), self.t_n32,
                            self.t_thr.contiguous())
@@ -1441,13 +1845,15 @@ class Timer:
         load_min = torch.zeros(P, 2, device=dev); load_min[self.drv_pins] = net_min[self.drv_nets]
         self.load, self.load_min = load, load_min
         pi = self.pi if self.pi is not None else torch.zeros(len(net_load), 4, 3, device=dev)
-        amax = torch.full((P * 2, NT), -INF, device=dev); amin = torch.full((P * 2, NT), INF, device=dev)
-        smax = torch.zeros(P * 2, device=dev); smin = torch.full((P * 2,), INF, device=dev)
+        PX = (P + self._lq_n) * 2                             # + the latch D -> Q arcs' pseudo rows (_latch_prepare)
+        amax = torch.full((PX, NT), -INF, device=dev); amin = torch.full((PX, NT), INF, device=dev)
+        smax = torch.zeros(PX, device=dev); smin = torch.full((PX,), INF, device=dev)
+        self._wb = (torch.full((PX,), -INF, device=dev), torch.full((PX,), INF, device=dev))   # wire delay per load row
         amax.view(-1).scatter_reduce_(0, self.in_ix_max, self.in_v_max, 'amax')
         amin.view(-1).scatter_reduce_(0, self.in_ix_min, self.in_v_min, 'amin')
         for rf in (0, 1):
             smax.scatter_reduce_(0, self.in_sl_p * 2 + rf, self.in_sl_v, 'amax')
-            smin.scatter_reduce_(0, self.in_sl_p * 2 + rf, self.in_sl_v, 'amin')
+            smin.scatter_reduce_(0, self.in_sl_p * 2 + rf, self.in_sl_n, 'amin')
         from . import dmp
         # nets driven by input ports: no driver model, the wire alone (dspfWireDelaySlew + thresholdAdjust)
         self._pa_w = []                                       # their wire delays [(rf, max, min)] (attar.timing.crpr)
@@ -1465,7 +1871,7 @@ class Timer:
 
         rec = []                       # per stage, the gate and wire delays, max and min (required(), attar.timing.crpr)
 
-        def stage(lib, fi, t_, orf, t0, tag, ea, en, sx, sn, arr=None):
+        def stage(lib, fi, t_, orf, t0, tag, ea, en, sx, sn, arr=None, nol=None, ld=None):
             """Arcs into drivers t_ (output transition orf): gate delays and driver slews (DMP), arrivals at the
             drivers and, through each arc's wire delays (DMP load waveform), at their loads. fi: the arcs' input
             (pin * 2 + transition), or None for launch arcs (arrival t0 into tag). arr: the arcs of the arrival search
@@ -1513,31 +1919,46 @@ class Timer:
                     w_, l_ = load_eval(*largs, self.steps)
                 wx, wn, lsx, lsn = w_[:m], w_[m:], l_[:m], l_[m:]
                 si = sk * 2 + orf[ea]
-                amax.index_reduce_(0, si, ax[ea] + wx[:, None], 'amax')
-                amin.index_reduce_(0, si, an[ea] + wn[:, None], 'amin')
+                if nol is not None:                          # latch D -> Q arcs: no load slews (nor wire delays)
+                    lsx = torch.where(nol[ea], torch.zeros_like(lsx), lsx)
+                    lsn = torch.where(nol[ea], torch.full_like(lsn, INF), lsn)
                 smax.scatter_reduce_(0, si, lsx, 'amax')
                 smin.scatter_reduce_(0, si, lsn, 'amin')
+                self._load_arr(amax, amin, ld, wx, wn)
             z0 = torch.zeros(0, device=dev)
             rec.append((dmax.float(), wx.float() if len(ea) else z0, dmin.float(), wn.float() if len(ea) else z0))
         if self.triton is not None and self.fused:               # one fused kernel per level
             pic, elc = pi.contiguous(), elm.contiguous()
-            self._rec = [self.triton.stage(self.tri_tables, lv, self.tri_sthr, pic, elc, self.tri_nto, amax, amin,
-                                           smax, smin, self.precision) for lv in self.tri_lev]
+            self._rec = []
+            for lv, k in zip(self.tri_lev, self._tri_k):
+                if k is not None:
+                    self._apply_lat(amax, amin, k)
+                    self._apply_latch(amax, amin, smax, smin, k)
+                self._rec.append(self.triton.stage(self.tri_tables, lv, self.tri_sthr, pic, elc, self.tri_nto, amax,
+                                                   amin, smax, smin, self.precision))
+                self._load_arr(amax, amin, self._ld_lc if k is None else self._ld_lev[k], self._rec[-1][1],
+                               self._rec[-1][3])
+            self._apply_lat(amax, amin, 'end')
+            amax, amin, smax, smin = amax[:P * 2], amin[:P * 2], smax[:P * 2], smin[:P * 2]
             smin = torch.where(torch.isfinite(smin), smin, smax)
             self.amax, self.amin = amax.view(P, 2, NT), amin.view(P, 2, NT)
             self.smax, self.smin = smax.view(P, 2), smin.view(P, 2)
             return self._checks()
         if self.lc is not None:
             lib, to, orf, tag, t0, cks = self.lc               # ideal clock: its transition at the register clock pin
-            stage(lib, None, to, orf, t0, tag, *self.lc_ex, cks, cks)
+            stage(lib, None, to, orf, t0, tag, *self.lc_ex, cks, cks, ld=self._ld_lc)
         for k in range(self.max_level + 1):
             cb = self.cb_lev[k]
             if cb is not None:
-                lib, f, t_, orf, irf, ea, en, arr = cb
-                fi = f * 2 + irf
+                self._apply_lat(amax, amin, k)
+                self._apply_latch(amax, amin, smax, smin, k)
+                lib, f, t_, orf, irf, ea, en, _ = cb
+                fi, arr, nol = self._cb_fwd[k]
                 sx = smax[fi]; sn = smin[fi]; sn = torch.where(torch.isfinite(sn), sn, sx)
-                stage(lib, fi, t_, orf, None, None, ea, en, sx, sn, arr)
+                stage(lib, fi, t_, orf, None, None, ea, en, sx, sn, arr, nol, self._ld_lev[k])
+        self._apply_lat(amax, amin, 'end')
         self._rec = rec
+        amax, amin, smax, smin = amax[:P * 2], amin[:P * 2], smax[:P * 2], smin[:P * 2]
         smin = torch.where(torch.isfinite(smin), smin, smax)
         self.amax, self.amin = amax.view(P, 2, NT), amin.view(P, 2, NT)
         self.smax, self.smin = smax.view(P, 2), smin.view(P, 2)
@@ -1610,6 +2031,8 @@ class Timer:
                 cmax = self._lookup(self.k_lib, rf, smax[self.k_to, rf], cslew)
                 req = (lt[None] + self.rel_setup[:, self.k_ctag].T + lat - cmax[:, None] - self.unc_s[self.k_ck][:, None]
                        - self.k_ctp_min[:, None])
+                if self._lq_chk is not None:
+                    req = self._latch_required(req, rf)
                 out.append((self.k_to * 2 + rf, torch.where((ok & self.k_setup)[:, None], req, torch.full_like(req, INF)),
                             rf))
         p, rf, ct, off = self.op_su
@@ -1641,8 +2064,8 @@ class Timer:
     def required(self):
         """Setup required times of the last run (OpenSTA's, max analysis): (r, through) with r (P * 2, NT) at every
         net sink, cell input and input port (pin * 2 + transition, per launch tag), and through (P * 2,) at every
-        driver pin the worst slack of the paths through it (wire delays depend on the arc that drives, as in the
-        forward pass, so a driver is timed per arc). Lazy: d.timing() only keeps the gate and wire delays it computed
+        driver pin the worst slack of the paths through it (a load's wire delay is the largest over its driver's arcs,
+        as in the forward pass). Lazy: d.timing() only keeps the gate and wire delays it computed
         (one float per arc and per load); this goes back through the levels with index reductions only."""
         dev, P, NT = self.dev, self.P, self.NT
         A = self.amax.reshape(P * 2, NT); S = self.smax.reshape(-1)
@@ -1665,8 +2088,9 @@ class Timer:
             t_, orf, en = cat(2), cat(3), cat(7)
             off = np.cumsum([0] + [len(L[0]) for L in levs])
             ea = torch.cat([L[6] + int(o) for L, o in zip(levs, off)])
-            dmax = torch.cat([x[0] for x in self._rec]); wx = torch.cat([x[1] for x in self._rec])
+            dmax = torch.cat([x[0] for x in self._rec])
             si = self.n_to[en] * 2 + orf[ea]
+            wx = self._wb[0][si]                                    # the loads' wire delays (_load_arr)
             loff = np.searchsorted(ea.cpu().numpy(), off)          # the loads of each level (ea ascends)
             for i in range(len(levs) - 1, -1, -1):
                 a0, a1, l0, l1 = int(off[i]), int(off[i + 1]), int(loff[i]), int(loff[i + 1])
@@ -1692,6 +2116,51 @@ class Timer:
                 wd, _ = dmp.input_port_load(S[f * 2 + rf], w4[:, rf], lt[:, 0], lt[:, 1], lt[:, 2], lt[:, 3])
                 r.index_reduce_(0, f * 2 + rf, r[t_ * 2 + rf] - wd[:, None], 'amin')
         return r, through
+
+    def path_prev(self):
+        """The arrival predecessor of every pin transition and tag of the last run: prev (P * 2, NT), the row (pin * 2
+        + transition) whose arrival in the tag plus the step's delay makes this row's arrival in that tag, -1 at a
+        startpoint. At a net sink: its driver, same transition (the wire); at a cell output: among the search arcs
+        into it, the input transition with the largest arrival + the arc's delay of the last run (its recorded gate
+        delay: nothing is recomputed), as the forward pass took the maximum; ties go to the rise input, then the lower
+        arc index. Also wire (P * 2,) bool: the step into the row is a wire. Index reductions over the levels."""
+        dev, P, NT = self.dev, self.P, self.NT
+        A = self.amax.reshape(P * 2, NT)
+        i32 = torch.int32                                            # (rows and keys fit: half the memory)
+        prev = torch.full((P * 2, NT), -1, device=dev, dtype=i32)
+        wire = torch.zeros(P * 2, device=dev, dtype=torch.bool)
+        for rf in (0, 1):                                            # net sinks: their driver, through the wire
+            s_, f_ = self.n_to * 2 + rf, self.n_fr * 2 + rf
+            ok = torch.isfinite(A[s_]) & torch.isfinite(A[f_])
+            prev[s_] = torch.where(ok, f_[:, None].to(i32), prev[s_])
+            wire[s_] = True
+        cbs = [(cb, src) for cb, src in zip(self.cb_lev, self._cb_src) if cb is not None]
+        if cbs:
+            assert len(self._rec) == len(cbs) + (self.lc is not None), \
+                'the delays of the last run do not match its levels'
+            recs = self._rec[1:] if self.lc is not None else self._rec
+            big = 2 ** 31 - 1
+            best = torch.full((P * 2 * NT,), -INF, device=dev, dtype=A.dtype)
+            kmin = torch.full((P * 2 * NT,), big, device=dev, dtype=i32)
+            tg = torch.arange(NT, device=dev)
+            span = max(int(len(self.c_lib)), 1)
+            for (cb, src), rec in zip(cbs, recs):                    # a level at a time: its arcs' outputs
+                _, f, t_, orf, irf, _, _, arr = cb
+                arc = torch.as_tensor(src, device=dev)
+                fi, ti = f * 2 + irf, t_ * 2 + orf
+                v = A[fi] + rec[0].to(A.dtype)[:, None]
+                v = torch.where(arr[:, None] & torch.isfinite(A[fi]), v, torch.full_like(v, -INF))
+                ix = (ti[:, None] * NT + tg).flatten()
+                v = v.flatten()
+                best.scatter_reduce_(0, ix, v, 'amax')
+                win = (v == best[ix]) & torch.isfinite(v)
+                key = torch.where(win, (irf * span + arc)[:, None].expand(-1, NT).flatten().to(i32),
+                                  torch.full(ix.shape, big, device=dev, dtype=i32))
+                kmin.scatter_reduce_(0, ix, key, 'amin')
+                sel = win & (key == kmin[ix])
+                prev.view(-1)[ix[sel]] = fi[:, None].expand(-1, NT).flatten()[sel].to(i32)
+                wire[ti] = False
+        return prev, wire
 
 
 class TimingResult:
@@ -1783,53 +2252,19 @@ class TimingResult:
         return (n['cells'][c] if m < 0 else '%s/%s' % (n['cells'][c], self.timer._mp_names[m])).replace('\\', '')
 
     def path(self, endpoint=None):
-        """The latest-arriving path into an endpoint (default: the worst setup endpoint), traced back from the
-        arrivals: at a net sink its driver; at a cell output the arc and input transition whose arrival + delay is the
-        latest (gate delays recomputed with the timer's own arc_eval). Returns [(pin, 'r'|'f', arrival ps, slew ps)],
+        """The worst path into an endpoint (default: the worst setup endpoint), as critical_paths picks it (the worst
+        transition and tag, back through the latest arrivals). Returns [(pin, 'r'|'f', arrival ps, slew ps)],
         startpoint first. Valid for the last run of this result's timer."""
         T = self.timer
-        dev = T.dev
         if endpoint is None:
             p = int(torch.argmin(self.setup).item())
         elif isinstance(endpoint, str):
             p = next(q for q in self.endpoints.tolist() if self._pin_name(q) == endpoint)
         else:
             p = int(endpoint)
-        arr = T.amax.max(2).values                                          # (P, 2): latest over tags
-        rf = int(torch.argmax(arr[p]).item())
-        sink_drv = dict(zip(T.n_to.tolist(), T.n_fr.tolist())) if T._sink_drv is None else T._sink_drv
-        T._sink_drv = sink_drv
-        out = []
-        for _ in range(100000):
-            out.append((self._pin_name(p), 'rf'[rf], float(arr[p, rf]), float(T.smax[p, rf])))
-            if p in sink_drv:
-                p = sink_drv[p]; continue
-            ai = torch.nonzero(T.c_to == p).flatten()
-            if not len(ai):
-                break                                               # a startpoint (register output, input port)
-            ai = ai[T.c_arr[ai]]                                    # the search's arcs (not the slew-only ones)
-            if not len(ai):
-                break
-            lib, f = T.c_lib[ai], T.c_fr[ai]
-            best, nxt = -INF, None
-            for irf in (0, 1):
-                sense = T.c_sense[ai]
-                use = (sense == S_NON) | ((sense == S_POS) & (irf == rf)) | ((sense == S_NEG) & (irf != rf))
-                use = use & (T.t_n[lib, rf, 0] > 0)
-                if not bool(use.any()):
-                    continue
-                orf = torch.full_like(lib, rf)
-                pi = T.pi[T.pin_net[torch.full_like(lib, p)], rf] if T.pi is not None else torch.zeros(len(ai), 3, device=dev)
-                dmax, _, _ = arc_eval(T.t_ix1, T.t_ix2, T.t_val, T.t_n, lib, orf, T.smax[f, irf], pi[:, 0] + pi[:, 2],
-                                      pi[:, 2], pi[:, 1], T.t_thr[lib, orf])
-                cand = torch.where(use, arr[f, irf] + dmax, torch.full_like(dmax, -INF))
-                k = int(torch.argmax(cand).item())
-                if float(cand[k]) > best:
-                    best, nxt = float(cand[k]), (int(f[k]), irf)
-            if nxt is None:
-                break
-            p, rf = nxt
-        return out[::-1]
+        cp = self.critical_paths([p])
+        sm = T.smax.reshape(-1)[cp.rows].tolist()
+        return [(nm, rf, a, s_) for (nm, rf, a), s_ in zip(cp.report(0), sm)]
 
     def clock_arrivals(self):
         """{register clock pin name: (arrival max rise, max fall, min rise, min fall, slew max rise, max fall,
@@ -1844,6 +2279,59 @@ class TimingResult:
             out[self._pin_name(p)] = (ax[0], ax[1], an[0], an[1], sx[0], sx[1], sn[0], sn[1])
         return out
 
+    def critical_paths(self, endpoints=None, violating=True, max_paths=None):
+        """The worst path into each of many endpoints at once (batched on the timer's device): endpoints (pin
+        indices; default: every constrained endpoint, only the violating ones when violating), the worst max_paths of
+        them when given. As OpenSTA's report_checks -path_delay max picks it: at the endpoint the transition and tag
+        (launch clock edge) of the worst setup slack, then back through the latest arrivals in that tag. Not modeled:
+        clock reconvergence pessimism removal in the choice (with propagated clocks OpenSTA may report another
+        launching register whose path has a larger CRPR credit). Returns a CriticalPaths, worst first."""
+        T = self.timer
+        dev, P, NT = T.dev, T.P, T.NT
+        ep = self.endpoints if endpoints is None else torch.as_tensor(endpoints, device=dev, dtype=torch.long)
+        sl = self.setup[ep]
+        if endpoints is None and violating:
+            ep, sl = ep[sl < 0], sl[sl < 0]
+        o = torch.argsort(sl, stable=True)
+        if max_paths is not None:
+            o = o[:max_paths]
+        ep, sl = ep[o], sl[o]
+        A = T.amax.reshape(P * 2, NT)
+        req = torch.full((P * 2, NT), INF, device=dev)
+        for rows, rq, _ in T._setup_required():
+            req.index_reduce_(0, rows, torch.where(torch.isnan(rq), INF, rq), 'amin')
+        both = (ep[:, None] * 2 + torch.arange(2, device=dev)).flatten()          # (E * 2,): rise, fall
+        slk = torch.where(torch.isfinite(A[both]) & torch.isfinite(req[both]), req[both] - A[both],
+                          torch.full_like(A[both], INF)).reshape(len(ep), 2 * NT)
+        late = torch.where(torch.isfinite(A[both]), A[both], torch.full_like(A[both], -INF)).reshape(len(ep), 2 * NT)
+        k = torch.where(torch.isfinite(slk).any(1), torch.argmin(slk, 1), torch.argmax(late, 1))  # (unconstrained:
+        node = (ep * 2 + k // NT) * NT + k % NT                                                   # the latest)
+        prev, wire = T.path_prev()
+        par = (prev * NT + torch.arange(NT, device=dev, dtype=prev.dtype)).flatten()   # (int32: P * 2 * NT < 2^31)
+        par = torch.where(prev.flatten() >= 0, par, torch.full_like(par, -1))
+        del prev
+        # walk back twice: the lengths, then each path written from its end
+        n = torch.zeros(len(ep), device=dev, dtype=torch.long)
+        cur = node.clone()
+        while len(cur):
+            for _ in range(32):
+                live = cur >= 0
+                n += live.long()
+                cur = torch.where(live, par[cur.clamp(min=0)].long(), cur)
+            if not bool((cur >= 0).any()):
+                break
+        ptr = torch.zeros(len(ep) + 1, device=dev, dtype=torch.long)
+        ptr[1:] = torch.cumsum(n, 0)
+        nodes = torch.empty(int(ptr[-1]), device=dev, dtype=torch.long)
+        cur, at = node.clone(), ptr[1:] - 1
+        for _ in range(int(n.max()) if len(ep) else 0):
+            live = cur >= 0
+            nodes[at[live]] = cur[live]
+            at = at - live.long()
+            cur = torch.where(live, par[cur.clamp(min=0)].long(), cur)
+        rows = nodes // NT
+        return CriticalPaths(self, ep, sl, ptr, rows, A.reshape(-1)[nodes], wire[rows], nodes % NT)
+
     def endpoint_slacks(self, names=True):
         """{endpoint name ('inst/PIN' or port): (setup slack, hold slack)}."""
         d = self.timer.d
@@ -1856,3 +2344,48 @@ class TimingResult:
             nm = (cells[c] if p_mpin[p] < 0 else '%s/%s' % (cells[c], mp[p_mpin[p]])).replace('\\', '')
             out[nm] = (float(self.setup[p]), float(self.hold[p]))
         return out
+
+
+
+class CriticalPaths:
+    """Paths of TimingResult.critical_paths, in CSR form: path k is rows[ptr[k]:ptr[k + 1]], startpoint first, each row
+    a pin transition (pin * 2 + 0 rise / 1 fall) with its arrival (ps) in the path's tag; wire[i]: the step into row
+    i is a net (driver pin -> sink pin), else a cell arc (input -> output). endpoint / slack (setup, ps) per path,
+    worst first."""
+
+    def __init__(self, result, endpoint, slack, ptr, rows, arrival, wire, tag):
+        self.result = result
+        self.endpoint, self.slack, self.ptr, self.rows, self.arrival, self.wire, self.tag = \
+            endpoint, slack, ptr, rows, arrival, wire, tag
+        self.pin = rows // 2
+        self.rf = rows % 2
+
+    def __len__(self):
+        return len(self.endpoint)
+
+    def path_of(self):
+        """(N,) the path index of every row."""
+        return torch.repeat_interleave(torch.arange(len(self), device=self.ptr.device), self.ptr[1:] - self.ptr[:-1])
+
+    def pin_count(self):
+        """(P,) how many of the paths pass through each pin."""
+        P = self.result.timer.P
+        k = self.path_of()
+        key = torch.unique(k * P + self.pin)                         # once per path and pin
+        return torch.bincount(key % P, minlength=P)
+
+    def edges(self):
+        """The steps of the paths: (from pin, to pin, is a wire, path index), (M,) each: consecutive rows."""
+        k = self.path_of()
+        if len(k) < 2:
+            z = torch.zeros(0, dtype=torch.long, device=self.ptr.device)
+            return z, z, z.bool(), z
+        same = k[1:] == k[:-1]
+        return self.pin[:-1][same], self.pin[1:][same], self.wire[1:][same], k[1:][same]
+
+    def report(self, k=0):
+        """Path k as [(pin name, 'r'|'f', arrival ps)], startpoint first (as TimingResult.path)."""
+        a, b = int(self.ptr[k]), int(self.ptr[k + 1])
+        name = self.result._pin_name
+        return [(name(int(p)), 'rf'[int(r)], float(t)) for p, r, t in
+                zip(self.pin[a:b].tolist(), self.rf[a:b].tolist(), self.arrival[a:b].tolist())]
