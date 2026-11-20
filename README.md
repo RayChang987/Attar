@@ -12,6 +12,8 @@ Evolve VLSI placement, timing-optimization and routing algorithms in minutes, no
 [![Tests](https://img.shields.io/badge/tests-145%20passing-5f7f1e?style=flat-square)](https://github.com/RayChang987/Attar/tree/main/tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/LICENSE)
 
+**English** &nbsp;·&nbsp; [繁體中文](README.zh-TW.md) &nbsp;·&nbsp; [简体中文](README.zh-CN.md)
+
 [Quick start](#quick-start) &nbsp;·&nbsp; [Why Attar](#why-attar) &nbsp;·&nbsp; [What's inside](#whats-inside) &nbsp;·&nbsp;
 [How it works](#how-it-works) &nbsp;·&nbsp; [Gallery](#gallery)
 
