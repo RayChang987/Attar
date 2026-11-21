@@ -91,6 +91,18 @@ Rules every reader follows:
 | orfs_asap7 | 15 | 0.4k-1.05M | cells unplaced | legal, also by OpenROAD `check_placement`; 6 routed by ORFS with 0 DRC. ORFS's asap7 designs, swerv and dynamic_node ported from nangate45, and jpeg_x20 (20 x jpeg, the million-cell scaling test) |
 | orfs_nangate45 | 8 | 0.7k-109k | cells unplaced | legal, also by OpenROAD `check_placement` |
 
+**ICCAD 2015 timing and published numbers.** Attar times superblue as OpenSTA does (table above). The
+timing-driven placement papers on these designs (DREAMPlace 4.0 and the work built on it) report OpenTimer's numbers,
+and the two timers disagree on a minority of endpoints. At one superblue1 placement, Attar's TNS was 3-4x OpenTimer's:
+70% of the 145k endpoints were within 0.5 ns of each other, and the 11% that were 1.5 ns or more worse in Attar
+carried most of its TNS. The likely cause, not fully confirmed: the `lcb*` local clock buffers are inverters, so under
+OpenSTA's semantics their registers capture on the clock's falling edge, which leaves paths from input ports and to
+output ports half a cycle; OpenTimer appears not to apply this. Compare methods on one timer. The ranking of two
+published methods held under both (their TNS ratio was 1.48 under OpenTimer and 1.25 under Attar, over 8 designs),
+but Attar's absolute numbers on these designs cannot be compared with published ones. Only the Late library is read,
+so hold checks use Late delays, and a timing result lists that in `limitations` (`summary()['exact']` is False). A
+superblue run with global placement's CUDA graphs and the timer needs about 10 GB of GPU memory.
+
 **`before_fp`**: floorplan problems (the die, IO pins and macros are the answer):
 
 | suite | designs | cells | starts from | Attar result |

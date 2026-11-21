@@ -27,6 +27,46 @@ Timing
   driver: exactly the trees the timer reduced, their length times the unit capacitance is its wire capacitance).
   Code that read `d._timer` internals (P05's differentiable timer, GRC-TDGR's arc gradients) can use these.
 - `attar.timing.steiner_big.pd_edges(..., drv=)`: root each tree at a given point (pd_rc's driver: the same tree).
+- More of the timer's data, so differentiable timers need none of its private fields: `graph()` adds the launches
+  under ideal clocks (arc, output transition, tag, launch time, clock slew), the launch tags (clock, edge, time), the
+  net and cell arcs disabled to break combinational loops, and the clocked latch D -> Q arcs with their enables;
+  `arrivals(per_tag=True)` keeps arrivals per launch tag; `endpoint_required()` gives every setup check's required
+  time and arrival per tag (its slack before CRPR; per pin their minimum is the setup slack with ideal clocks). Every
+  bundle carries `version` (`attar.timing.sta.TIMING_DATA_VERSION`, 1).
+- Pin clock latencies on ideal clocks (`set_clock_latency` on register clock pins of a clock that is not
+  `set_propagated_clock`: pre-CTS timing of an SDC with useful-skew pin latencies, e.g. the ICCAD 2025 SDCs without
+  their `set_propagated_clock`) are modeled, as OpenSTA does: the pin's latency replaces the clock's at launch and at
+  capture. Before, they were ignored with a warning. Only pin latencies given for both transitions and both min / max
+  (the common form); others are still listed as not modeled. Checked against OpenROAD on the ICCAD 2025 IWLS designs
+  (in the LATTE reproduction).
+- `TimingResult.clock_arrivals()` gave -inf / inf at the register clock pins of ideal clocks. It now gives what the
+  timer uses there: the clock edge plus its latency, and the clock's transition.
+- Known gaps are reported: `TimingResult.limitations` lists what makes a timing differ from OpenSTA's on the
+  design's constraints (SDC commands not applied, pin clock latencies not modeled, nets with a lumped wire model)
+  and a benchmark's Early library not read (ICCAD 2015: hold on Late delays). `summary()['exact']` is False when
+  there is one, and `report()` prints them. Before, the first three were a warning only.
+- Timing constraints editable in memory: `d.timing_settings()` (a copy of `timing.json`'s constraints),
+  `d.set_timing(clocks=..., input_delay=..., ...)`, `d.reset_timing()`, and `d.ideal_clocks()`, the reverse of
+  `d.propagate_clocks()`. The files are not touched; the timer is rebuilt on the next `timing()`.
+- `report()` names the parasitics (it said "placement estimate" for global-routing parasitics too).
+
+Design
+- Names: `d.pin_names(pins=None)` ('instance/PIN', ports by name, as OpenSTA prints them), `d.pin_index(names)`
+  (OpenTimer's 'instance:PIN' too), `d.cell_index(names)`, `TimingResult.pin_names(pins)`. The index spaces (cells,
+  pins, nets, masters, master pins, Liberty and timing arcs) are described in docs/api.md.
+- Placements from other tools: `d.read_placement(def_path, fixed=False)` takes positions and orientations by
+  component name from a DEF (any DBU); `d.set_positions(names, xy, orient=None)` sets them directly.
+
+Examples
+- Four Colab notebooks in `examples/colab/`, listed in the README: the timing-driven placement demo (moved from
+  `examples/`), LATTE (DAC 2026 timing-driven detailed placement), and the DAC 2026 hybrid net-pin weighting with its
+  DATE 2025 baseline on superblue18.
+
+Docs
+- docs/benchmarks.md: ICCAD 2015 timing against published (OpenTimer) numbers, and the GPU memory a superblue run
+  needs. docs/features.md: the known gaps of the global placer against DREAMPlace and of the legalizer on cells left
+  on macros. README: keeping the compiled kernels across Colab runtimes (`TRITON_CACHE_DIR`,
+  `TORCHINDUCTOR_CACHE_DIR`), also said by the first-compile notice.
 
 Routing
 - The global router failed with an IndexError on gcell grids wider than tall (`after_fp/iccad2025/des3`, 35 x 34):

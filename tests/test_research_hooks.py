@@ -6,6 +6,7 @@ import torch
 
 from common import SMALL, attar
 from attar import naive
+from attar.timing import sta as _sta
 
 
 def _cpu(name):
@@ -273,6 +274,147 @@ class TimingDataTest(unittest.TestCase):
         g2 = self.r.graph()
         self.assertGreater(int(g2.level.max()), 0)
         self.assertIn('TimingGraph', repr(g2))
+
+    def test_endpoint_required_gives_the_slacks(self):
+        er = self.r.endpoint_required()
+        s = torch.full((len(self.d.p_cell),), float('inf')).scatter_reduce(0, er.pin, er.slack, 'amin')
+        ep = self.r.endpoints
+        # propagated clocks: the result's slack has the clock reconvergence pessimism removed, never below these
+        self.assertTrue(bool((self.r.setup[ep] >= s[ep] - 1e-3).all()))
+        self.assertTrue(torch.isfinite(s[ep]).all())
+        self.assertEqual(er.version, _sta.TIMING_DATA_VERSION)
+
+
+GCD = 'after_fp/orfs_asap7/gcd'
+
+
+class IdealClockDataTest(unittest.TestCase):
+    """Ideal clocks (gcd: set_clock_latency, no set_propagated_clock): the clock arrivals at the registers, the launch
+    entries of graph(), and the endpoints' required times."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = _cpu(GCD)
+        cls.d.load_reference()
+        cls.r = cls.d.timing()
+
+    def test_clock_arrivals_are_the_edge_plus_latency(self):
+        ca = self.r.clock_arrivals()
+        self.assertGreater(len(ca), 10)
+        T = self.r.timer
+        c = T.clocks[0]
+        for v in ca.values():
+            self.assertAlmostEqual(v[0], c['waveform'][0] + c['latency'], places=3)      # max rise
+            self.assertAlmostEqual(v[1], c['waveform'][1] + c['latency'], places=3)      # max fall
+            self.assertEqual(v[0], v[2])
+
+    def test_launches_at_the_clock_arrival(self):
+        g, ca = self.r.graph(), self.r.clock_arrivals()
+        pin = g.l_from[g.launch_arc]
+        names = self.d.pin_names(pin)
+        # a rise-edge register launches at its clock pin's rise arrival
+        want = torch.tensor([ca[n][0] for n in names])
+        self.assertTrue(torch.allclose(g.launch_time, want))
+        self.assertTrue(bool((g.tag_clock[g.launch_tag] >= 0).all()))
+        self.assertTrue(torch.equal(g.tag_time[g.launch_tag], g.launch_time - self.r.timer.lat[g.tag_clock[g.launch_tag]]))
+
+    def test_endpoint_required_gives_the_slacks(self):
+        er = self.r.endpoint_required()
+        s = torch.full((len(self.d.p_cell),), float('inf')).scatter_reduce(0, er.pin, er.slack, 'amin')
+        ep = self.r.endpoints
+        self.assertTrue(torch.allclose(s[ep], self.r.setup[ep]))
+        a = self.r.arrivals(per_tag=True)
+        self.assertEqual(tuple(a.max.shape), (len(self.d.p_cell), 2, self.r.timer.NT))
+        self.assertTrue(torch.equal(a.max.amax(2), self.r.arrivals().max))
+
+
+class NamesAndPlacementTest(unittest.TestCase):
+    """Pin and cell names to indices and back; a placement read from a DEF by component name."""
+
+    def test_pin_names_round_trip(self):
+        d = _cpu(GCD)
+        names = d.pin_names()
+        self.assertEqual(len(names), len(d.p_cell))
+        pick = [0, 7, len(names) - 1]
+        self.assertEqual(d.pin_index([names[p] for p in pick]).tolist(), pick)
+        cell_pin = next(p for p in range(len(names)) if '/' in names[p])
+        ot = names[cell_pin][::-1].replace('/', ':', 1)[::-1]                # OpenTimer's instance:PIN
+        self.assertEqual(d.pin_index(ot).tolist(), [cell_pin])
+        self.assertEqual(d.cell_index(d.names['cells'][:3]).tolist(), [0, 1, 2])
+        with self.assertRaises(KeyError):
+            d.pin_index('no_such_instance/A')
+
+    def test_read_placement_from_an_exported_def(self):
+        import tempfile
+        import os
+        d = _cpu(GCD)
+        naive.global_place(d, max_iters=60, verbose=False, graphs=False, seed=0, snapshot='names_test')
+        naive.legalize(d, verbose=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'gcd.def')
+            d.export(path)
+            e = _cpu(GCD)
+            st = e.read_placement(path)
+        mv = d.movable
+        self.assertEqual(st['placed'], int(mv.sum()))
+        self.assertEqual(st['missing'], 0)
+        self.assertTrue(torch.allclose(e.pos[mv], d.pos[mv], atol=1e-4))
+        self.assertTrue(torch.equal(e.orient, d.orient))
+        self.assertAlmostEqual(e.timing().tns, d.timing().tns, places=2)
+        # set_positions by name
+        name = d.names['cells'][int(torch.nonzero(mv)[0])]
+        e.set_positions([name], [[1.0, 2.0]], orient=['FS'])
+        i = int(e.cell_index(name))
+        self.assertEqual(e.pos[i].tolist(), [1.0, 2.0])
+        self.assertEqual(int(e.orient[i]), 5)
+
+
+class TimingSettingsTest(unittest.TestCase):
+    """Timing constraints changed in memory (Design.set_timing, ideal_clocks, propagate_clocks, reset_timing), and
+    the limitations a result reports."""
+
+    def setUp(self):
+        self.d = _cpu(GCD)
+        self.d.load_reference()
+
+    def test_a_longer_period_and_back(self):
+        import os
+        d = self.d
+        tj = os.path.join(d.path, 'timing.json')
+        t0 = os.path.getmtime(tj)
+        base = d.timing().summary()
+        s = d.timing_settings()
+        for c in s['clocks'].values():
+            c['period'] *= 4; c['waveform'] = [x * 4 for x in c['waveform']]
+        d.set_timing(clocks=s['clocks'])
+        self.assertGreater(d.timing().worst_slack, base['worst_slack'] + 100)
+        self.assertEqual(d.timing_settings()['clocks'], s['clocks'])
+        d.reset_timing()
+        self.assertEqual(d.timing().summary(), base)
+        self.assertEqual(os.path.getmtime(tj), t0)                   # the files are not touched
+        with self.assertRaises(ValueError):
+            d.set_timing(no_such_setting=1)
+
+    def test_propagated_and_ideal_again(self):
+        d = self.d
+        base = d.timing().summary()
+        self.assertEqual(d.propagate_clocks(), ['core_clock'])
+        self.assertTrue(bool(d.timing().timer.prop_clk.any()))
+        self.assertEqual(d.ideal_clocks(), [])
+        self.assertEqual(d.timing().summary(), base)
+
+    def test_limitations_make_it_inexact(self):
+        import io
+        d = self.d
+        self.assertTrue(d.timing().summary()['exact'])
+        d._timing_over = {'unsupported': {'set_case_analysis': 2}}     # as an SDC with commands not applied
+        d._netlist_changed('test')
+        r = d.timing()
+        self.assertFalse(r.summary()['exact'])
+        self.assertEqual(r.limitations, ['SDC command set_case_analysis (2) not applied'])
+        out = io.StringIO()
+        r.report(file=out, path=False)
+        self.assertIn('not exact: SDC command set_case_analysis', out.getvalue())
 
 
 if __name__ == '__main__':

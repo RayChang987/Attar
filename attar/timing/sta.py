@@ -15,7 +15,6 @@ required time is OpenSTA's (the opening, the arrival while borrowing, or the clo
 passes nothing through a latch. Combinational loops are broken where OpenSTA's levelization breaks them. Not
 modeled: other path exceptions (set_false_path, ...), clock gating checks.
 """
-import json
 import re
 import math
 import os
@@ -34,6 +33,9 @@ from .ir import (S_NEG, S_NON, S_POS, T_CLEAR, T_COMB, T_FALL_EDGE, T_HOLD_F, T_
 warnings.filterwarnings('ignore', message='index_reduce')     # torch marks index_reduce beta; it is what we need
 LN9 = math.log(9.0)
 INF = float('inf')
+# the version of the timer's data for research code (TimingResult.graph, library, arrivals, parasitics, required;
+# TimingData.version): raised when a field changes meaning or shape, so code built on it can check what it reads
+TIMING_DATA_VERSION = 1
 
 
 def nldm(ix1, ix2, val, n, x, y):
@@ -188,7 +190,8 @@ def _first_compile_notice():
         cache = os.path.join(os.path.expanduser('~'), '.triton', 'cache')
     if not os.path.isdir(cache) or not os.listdir(cache):
         print('attar.timing: first GPU timing run on this machine: compiling its Triton kernels (a couple of minutes, '
-              'once; cached in %s)' % cache, flush=True)
+              'once; cached in %s; a fresh machine such as a new Colab runtime compiles again unless TRITON_CACHE_DIR '
+              'and TORCHINDUCTOR_CACHE_DIR point to a folder it keeps)' % cache, flush=True)
 
 
 def compile_fn(fn):
@@ -344,6 +347,12 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
 class Timer:
     """Build once per design (graph, levels, constraints); run() times a placement."""
 
+    def _limit(self, msg):
+        """A way this timer differs from OpenSTA on the design's inputs: warned, and listed in TimingResult.limitations
+        (summary()['exact'] is False)."""
+        self.limitations.append(msg)
+        warnings.warn('attar.timing.sta: ' + msg, stacklevel=3)
+
     def release(self, why):
         """Drop everything the timer holds (tables, buffers, CUDA graphs: their GPU memory goes back before the next
         timer is built). The timer can no longer run; anything that still holds it (a TimingResult) gets `why`."""
@@ -474,11 +483,13 @@ class Timer:
         if parasitics == 'global_routing' and routes is None:
             raise ValueError("parasitics='global_routing' needs routes= (attar.route.GlobalRoutes)")
         self.routes, self.via_res = routes, via_res
-        with open(os.path.join(d.path, 'timing.json')) as f:
-            self.info = info = json.load(f)
-        for k in (getattr(d, '_propagated', None) or ()):     # Design.propagate_clocks (after a clock tree is built)
-            if k in info['clocks']:
-                info['clocks'][k]['propagated'] = True
+        # timing.json with the design's in-memory changes (Design.set_timing, propagate_clocks, ideal_clocks)
+        self.info = info = d._timing_info()
+        # where this timer is known to differ from OpenSTA on these inputs (TimingResult.limitations)
+        self.limitations = ['SDC command %s (%d) not applied' % (k, v) for k, v in sorted((info.get('unsupported') or {}).items())]
+        libs = [x.get('name', '') for x in (info.get('sources') or {}).get('lib') or []]
+        if libs and all('_late' in x.lower() for x in libs):
+            self.limitations.append('hold checks use the Late library (the benchmark\'s Early library is not read)')
         # the cell data: from the design's library chain (bundle + local) or its timing.safetensors (attar.timing.ir.arrays)
         t, info['functions'], info['arc_when'] = timing_mod.arrays(d)
         a = d.raw
@@ -1175,8 +1186,8 @@ class Timer:
             self.plan['big_buf'] = (big, pins_t, torch.zeros(len(pins), 4, device=self.dev),
                                     torch.zeros(len(bn), 4, 3, device=self.dev), torch.zeros(len(bn), device=self.dev))
         elif big is not None and not steiner_big.available():
-            warnings.warn('attar.timing.sta: %d nets above %d pins use a lumped wire model (%s)'
-                          % (len(big), TREE_BUCKETS[-1][1], steiner_big.error()), stacklevel=2)
+            self._limit('%d nets above %d pins use a lumped wire model (%s)'
+                        % (len(big), TREE_BUCKETS[-1][1], steiner_big.error()))
         self.big_steiner = ev.deg > M.RMST_MAX_DEGREE
         self._iclk_pi = None
         if self.net_iclk.any():
@@ -1413,6 +1424,7 @@ class Timer:
             cks = self.ctr[ck, (self.l_type[a_i] == T_FALL_EDGE).long()]     # the clock pin's slew
             lc = [(self.l_lib[a_i], self.l_to[a_i], o_i, 2 * ck + edge, self.wf[ck, edge] + self.lat[ck], cks)]
             lsrc = [a_i.cpu().numpy()]
+            llat = [np.ones(len(a_i), bool)]                    # t0 includes the clock's latency
             lcell = cell_of[self.l_fr[a_i].cpu().numpy()]
             for i, e in enumerate(self.ex):
                 m = T(np.nonzero(np.isin(lcell, list(ex_from[i])))[0])
@@ -1420,8 +1432,10 @@ class Timer:
                     t0 = self.wf[ck[m], edge[m]] + (0.0 if e['ignore_clock_latency'] else self.lat[ck[m]])
                     lc.append((self.l_lib[a_i][m], self.l_to[a_i][m], o_i[m], torch.full_like(m, 2 * C + i), t0, cks[m]))
                     lsrc.append(lsrc[0][m.cpu().numpy()])
+                    llat.append(np.full(len(m), not e['ignore_clock_latency']))
             self.lc = tuple(torch.cat([x[j] for x in lc]) for j in range(6))
             self._lc_src = np.concatenate(lsrc)                 # l-selection index of each launch entry
+            self._lc_lat = np.concatenate(llat)
         else:
             self.lc = None
         # data net arcs grouped by driver: a driver's arcs expand to its loads (OpenSTA: gate delay + wire delay per arc)
@@ -1537,6 +1551,7 @@ class Timer:
         _lat_at: stage level (or 'end') -> (flat index, value) for the max and the min arrivals."""
         self._lat_pins = np.zeros(0, np.int64)
         self._lat_at = {}
+        self._ideal_pin_lat = None
         pl = self.info.get('pin_latency') or []
         if not pl:
             return
@@ -1545,12 +1560,19 @@ class Timer:
         cidx = {k: i for i, k in enumerate(self.clock_names)}
         src_lat = [float(c.get('source_latency', 0.0)) for c in self.clocks]
         slot, skipped = {}, 0
+        ideal = np.full(self.P, np.nan)
         for e in pl:
             p = int(e['pin'])
             cis = [cidx[e['clock']]] if e.get('clock') in cidx else ([int(self.clk_of[p])] if self.clk_of[p] >= 0 else [])
             for ci in cis:
                 if not self.prop_clk[ci]:
-                    skipped += 1                        # an ideal clock's pin latency: not modeled
+                    # an ideal clock's pin latency (OpenSTA: the ideal clock network delay at the pin is the pin's
+                    # latency instead of the clock's, at launch and at capture; e.g. pre-CTS timing of an SDC with
+                    # useful-skew pin latencies). Modeled for -rise and -fall, -min and -max alike
+                    if sorted(e['rf']) == [0, 1] and sorted(e['mm']) == ['max', 'min']:
+                        ideal[p] = float(e['value'])
+                    else:
+                        skipped += 1
                     continue
                 for rf in e['rf']:
                     edge = rf ^ int(self.par[p])
@@ -1559,8 +1581,17 @@ class Timer:
                     for mm in e['mm']:
                         s_[0 if mm == 'max' else 1] = v
         if skipped:
-            warnings.warn('attar.timing.sta: %d pin clock latencies on ideal clocks are not modeled' % skipped,
-                          stacklevel=2)
+            self._limit('%d pin clock latencies on ideal clocks with -rise / -fall / -min / -max are not modeled'
+                        % skipped)
+        if np.isfinite(ideal).any():
+            self._ideal_pin_lat = torch.as_tensor(ideal, device=dev, dtype=torch.float32)
+            if self.lc is not None:                     # launch: the pin's latency replaces the clock's
+                lib, to, orf, tag, t0, cks = self.lc
+                fr = self.l_fr[torch.as_tensor(self._lc_src, device=dev)]
+                v = self._ideal_pin_lat[fr]
+                ok = torch.isfinite(v) & torch.as_tensor(self._lc_lat, device=dev)
+                ck = torch.as_tensor(self.clk_of, device=dev)[fr].clamp(min=0)
+                self.lc = (lib, to, orf, tag, torch.where(ok, t0 - self.lat[ck] + v, t0), cks)
         if not slot:
             return
         keys = np.array(list(slot), np.int64).reshape(-1, 3)
@@ -1575,8 +1606,8 @@ class Timer:
         lf = self.c_fr[self.c_type == T_RISE_EDGE].cpu().numpy(), self.c_fr[self.c_type == T_FALL_EDGE].cpu().numpy()
         leaf[np.concatenate(lf)] = True
         if (~leaf[self._lat_pins]).any():
-            warnings.warn('attar.timing.sta: %d pin clock latencies on pins that are not register clock pins: the '
-                          'clock after them stays propagated' % int((~leaf[self._lat_pins]).sum()), stacklevel=2)
+            self._limit('%d pin clock latencies on pins that are not register clock pins: the clock after them '
+                        'stays propagated' % int((~leaf[self._lat_pins]).sum()))
         stage_lv = np.array([k for k in range(self.max_level + 1) if self.cb_lev[k] is not None], np.int64)
         pos = np.searchsorted(stage_lv, self.level[pins])          # the first stage at or after the pin's level
         at = np.where(pos < len(stage_lv), stage_lv[np.minimum(pos, max(len(stage_lv) - 1, 0))], -1)
@@ -1598,6 +1629,7 @@ class Timer:
         a latch); no CRPR, no set_max_time_borrow. _cb_fwd: per level the stage's (input rows, arrival mask)."""
         dev, P, C = self.dev, self.P, len(self.clocks)
         self._lq_n, self._lq_at, self._lq_chk = 0, {}, None
+        self._lq_sel = self._lq_en = np.zeros(0, np.int64)      # the clocked latch D -> Q arcs (c-selection), enables
         self._cb_fwd = [None if cb is None else (cb[1] * 2 + cb[4], cb[7], torch.zeros_like(cb[7]))
                         for cb in self.cb_lev]
         c = self._lq_c
@@ -1618,6 +1650,7 @@ class Timer:
         self._lq_n = len(c)
         D, Q = cfr[c], cto[c]
         E = np.array([en_of[int(q)][0] for q in Q]); orf_e = np.array([en_of[int(q)][1] for q in Q])
+        self._lq_sel, self._lq_en = c.astype(np.int64), E.astype(np.int64)
         ci = self.clk_of[E]; rf_e = orf_e ^ self.par[E]
         tag_e, tag_c = 2 * ci + rf_e, 2 * ci + (1 - rf_e)
         wf = self.wf.cpu().numpy(); per = np.array([cc['period'] for cc in self.clocks])
@@ -2008,6 +2041,10 @@ class Timer:
             A = self.amin if early else self.amax                         # (P, 2, NT)
             v = A[self.k_fr, self.k_crf, self.k_ctag] - self.launch_t[self.k_ctag]
             lat = torch.where(self.k_prop & torch.isfinite(v), v, lat)
+        pl = getattr(self, '_ideal_pin_lat', None)                 # an ideal clock's pin latency (_pin_latency_setup)
+        if pl is not None and len(self.k_lib):
+            v = pl[self.k_fr]
+            lat = torch.where(torch.isfinite(v) & ~self.k_prop, v, lat)
         return lat[:, None]
 
     def _cap_slew(self, slew):
@@ -2166,11 +2203,13 @@ class Timer:
 
 
 class TimingData:
-    """A read-only bundle of the timer's data (TimingResult.graph, library, arrivals, parasitics): attributes, copies
-    of the timer's tensors (changing them changes nothing in the timer)."""
+    """A read-only bundle of the timer's data (TimingResult.graph, library, arrivals, parasitics, required):
+    attributes, copies of the timer's tensors (changing them changes nothing in the timer); version:
+    TIMING_DATA_VERSION."""
 
     def __init__(self, what, **fields):
         self._what = what
+        self.version = TIMING_DATA_VERSION
         self.__dict__.update(fields)
 
     def __repr__(self):
@@ -2233,9 +2272,20 @@ class TimingResult:
         from .drv import check
         return check(self)
 
+    @property
+    def limitations(self):
+        """The known gaps that affect this timing (a list of str, empty when none): SDC commands not applied, pin
+        latencies not modeled, nets with a lumped wire model, a benchmark's Early library not read (hold checks on Late
+        delays). Each but the last was also warned when the timer was built."""
+        return list(self.timer.__dict__.get('limitations', []))
+
     def summary(self):
+        """WNS / TNS / worst slack / violations / endpoints (setup), WHS / THS / violations (hold), and exact: False
+        when a known gap of the timer or of the design's timing inputs affects these numbers (the reasons:
+        limitations)."""
         return {'wns': self.wns, 'tns': self.tns, 'worst_slack': self.worst_slack, 'setup_violations': self.violations,
-                'endpoints': int(len(self.endpoints)), 'whs': self.whs, 'ths': self.ths, 'hold_violations': self.hold_violations}
+                'endpoints': int(len(self.endpoints)), 'whs': self.whs, 'ths': self.ths, 'hold_violations': self.hold_violations,
+                'exact': not self.limitations}
 
     def report(self, endpoints=10, path=True, file=None):
         """Print (and return) a timing summary: WNS, TNS, violations, hold, the worst endpoints and the worst path.
@@ -2243,8 +2293,11 @@ class TimingResult:
         out = file or sys.stdout
         sm = self.summary()
         name = self.timer.d.manifest.get('design', '')
-        print('Timing of %s (%s clocks, parasitics: placement estimate)'
-              % (name, ', '.join(self.timer.clock_names) or 'no'), file=out)
+        print('Timing of %s (%s clocks, parasitics: %s)'
+              % (name, ', '.join(self.timer.clock_names) or 'no',
+                 'placement estimate' if self.timer.parasitics == 'placement' else 'global routes'), file=out)
+        for x in self.limitations:
+            print('  not exact: %s' % x, file=out)
         print('  setup: WNS %.2f ps, TNS %.2f ps, %d of %d endpoints violated (worst slack %.2f ps)'
               % (sm['wns'], sm['tns'], sm['setup_violations'], sm['endpoints'], sm['worst_slack']), file=out)
         print('  hold:  WHS %.2f ps, THS %.2f ps, %d violated' % (sm['whs'], sm['ths'], sm['hold_violations']), file=out)
@@ -2266,12 +2319,11 @@ class TimingResult:
         return sm
 
     def _pin_name(self, p):
-        d = self.timer.d
-        n = d.names
-        c = int(self.timer.p_cell_np[p]); m = int(d.raw['p_mpin'][p])
-        if self.timer._mp_names is None:
-            self.timer._mp_names = [x for ps in n['master_pins'] for x in ps]
-        return (n['cells'][c] if m < 0 else '%s/%s' % (n['cells'][c], self.timer._mp_names[m])).replace('\\', '')
+        return self.timer.d.pin_names([int(p)])[0]
+
+    def pin_names(self, pins):
+        """Pin indices -> names ('instance/PIN' or a port, as OpenSTA prints them; Design.pin_names)."""
+        return self.timer.d.pin_names(pins)
 
     def path(self, endpoint=None):
         """The worst path into an endpoint (default: the worst setup endpoint), as critical_paths picks it (the worst
@@ -2291,15 +2343,30 @@ class TimingResult:
     def clock_arrivals(self):
         """{register clock pin name: (arrival max rise, max fall, min rise, min fall, slew max rise, max fall,
         min rise, min fall)} (ps): a propagated clock's arrival at the pin (the latest / earliest over its tags,
-        OpenSTA's arrival_max_rise ...), an ideal clock's edge plus its latency."""
+        OpenSTA's arrival_max_rise ...), an ideal clock's edge plus its latency (the pin's own set_clock_latency where
+        one replaces the clock's) with the clock's set_clock_transition, as the timer launches and captures with them."""
         T = self.timer
-        pins = torch.unique(T.k_fr).tolist() if len(T.k_lib) else []
-        out = {}
-        for p in pins:
-            ax = T.amax[p].amax(1).tolist(); an = T.amin[p].amin(1).tolist()
-            sx = T.smax[p].tolist(); sn = T.smin[p].tolist()
-            out[self._pin_name(p)] = (ax[0], ax[1], an[0], an[1], sx[0], sx[1], sn[0], sn[1])
-        return out
+        pins = torch.unique(T.k_fr) if len(T.k_lib) else torch.zeros(0, dtype=torch.long, device=T.dev)
+        ax, an = T.amax[pins].amax(2), T.amin[pins].amin(2)
+        sx, sn = T.smax[pins].clone(), T.smin[pins].clone()
+        if len(pins) and len(T.clocks):
+            ck = torch.as_tensor(T.clk_of, device=T.dev)[pins]
+            par = torch.as_tensor(T.par, device=T.dev)[pins]
+            ideal = (ck >= 0) & ~torch.as_tensor(T.prop_clk, device=T.dev)[ck.clamp(min=0)]
+            c = ck.clamp(min=0)
+            lat = T.lat[c]
+            pl = T.__dict__.get('_ideal_pin_lat')                   # an ideal clock's pin latency, where modeled
+            if pl is not None:
+                lat = torch.where(torch.isfinite(pl[pins]), pl[pins], lat)
+            rf = torch.arange(2, device=T.dev)
+            t = T.wf[c[:, None], rf[None] ^ par[:, None]] + lat[:, None]     # the pin's rise / fall: the edge it sees
+            tr = T.ctr[c]
+            m = ideal[:, None]
+            ax, an = torch.where(m, t, ax), torch.where(m, t, an)
+            sx, sn = torch.where(m, tr, sx), torch.where(m, tr, sn)
+        names = self.timer.d.pin_names(pins)
+        v = torch.cat([ax, an, sx, sn], 1).tolist()
+        return {nm: tuple(x) for nm, x in zip(names, v)}
 
     def critical_paths(self, endpoints=None, violating=True, max_paths=None):
         """The worst path into each of many endpoints at once (batched on the timer's device): endpoints (pin
@@ -2368,11 +2435,42 @@ class TimingResult:
                                   a propagated clock network, latch D -> Q)
           l_from, l_to, l_lib, l_type, l_sense   launch arcs under ideal clocks: register clock pin -> output
           k_from, k_to, k_lib, k_type            setup / hold checks: register clock pin -> data pin
+          launch_arc, launch_rf   the launches under ideal clocks, one per launch arc (index into l_*) and output
+                                  transition with a table
+          launch_tag, launch_time, launch_slew
+                                  its tag (below), the time it launches at (the clock edge plus the clock's or the
+                                  pin's latency, ps) and the clock pin's slew (the clock's set_clock_transition)
+          tag_clock, tag_edge, tag_time (NT,)
+                                  arrivals are kept per launch tag (arrivals(per_tag=True), endpoint_required()): the
+                                  tag's clock (index into clock_names) and edge (0: the waveform's rise, 1: its fall),
+                                  -1 for the tags of path delay exceptions; the edge's time (ps)
+          n_loop (A_n,)           net arcs OpenSTA's levelization disables to break combinational loops (not searched;
+                                  they still load their net)
+          loop_from, loop_to, loop_lib   the cell arcs it disables (not among c_*)
+          latch_arcs, latch_enable       the clocked latch D -> Q arcs (indices into c_*; not searched as plain arcs:
+                                  data arriving while the latch is open passes, borrowing time, as OpenSTA's latches)
+                                  and their enable pins
           clock_of (P,)           the clock (index into clock_names) whose network reaches the pin, -1 none
-          clock_names, endpoints  the clocks; this result's constrained setup endpoints (pins)"""
+          clock_names, endpoints  the clocks; this result's constrained setup endpoints (pins)
+          version                 TIMING_DATA_VERSION"""
         T = self.timer
         dev = T.dev
         t = lambda x: torch.as_tensor(np.asarray(x), device=dev).clone()  # noqa: E731
+        i64 = lambda x: torch.as_tensor(np.asarray(x, np.int64), device=dev)  # noqa: E731
+        C, NT = len(T.clock_names), T.NT
+        tag_clock = torch.full((NT,), -1, dtype=torch.long, device=dev); tag_edge = tag_clock.clone()
+        tag_clock[:2 * C] = torch.arange(2 * C, device=dev) // 2; tag_edge[:2 * C] = torch.arange(2 * C, device=dev) % 2
+        if T.lc is not None:
+            _, _, orf, tag, t0, cks = T.lc
+            launch = dict(launch_arc=i64(T._lc_src), launch_rf=orf.clone(), launch_tag=tag.clone(),
+                          launch_time=t0.clone(), launch_slew=cks.clone())
+        else:
+            z = torch.zeros(0, dtype=torch.long, device=dev)
+            launch = dict(launch_arc=z, launch_rf=z.clone(), launch_tag=z.clone(),
+                          launch_time=torch.zeros(0, device=dev), launch_slew=torch.zeros(0, device=dev))
+        lib_id, a_fr, a_to = T._arcs_all[0], T._arcs_all[1], T._arcs_all[2]
+        la, ln = T.loop_edges
+        n_loop = torch.zeros(len(T.n_fr), dtype=torch.bool, device=dev); n_loop[i64(ln)] = True
         return TimingData('TimingGraph', level=t(T.level), net_driver=t(T.net_driver),
                           n_from=T.n_fr.clone(), n_to=T.n_to.clone(), n_net=T.n_net.clone(),
                           c_from=T.c_fr.clone(), c_to=T.c_to.clone(), c_lib=T.c_lib.clone(), c_type=T.c_type.clone(),
@@ -2380,6 +2478,9 @@ class TimingResult:
                           l_from=T.l_fr.clone(), l_to=T.l_to.clone(), l_lib=T.l_lib.clone(), l_type=T.l_type.clone(),
                           l_sense=T.l_sense.clone(),
                           k_from=T.k_fr.clone(), k_to=T.k_to.clone(), k_lib=T.k_lib.clone(), k_type=T.k_type.clone(),
+                          **launch, tag_clock=tag_clock, tag_edge=tag_edge, tag_time=T.launch_t.clone(),
+                          n_loop=n_loop, loop_from=i64(a_fr[la]), loop_to=i64(a_to[la]), loop_lib=i64(lib_id[la]),
+                          latch_arcs=i64(T._lq_sel), latch_enable=i64(T._lq_en),
                           clock_of=t(T.clk_of), clock_names=list(T.clock_names), endpoints=self.endpoints.clone())
 
     def library(self):
@@ -2410,16 +2511,45 @@ class TimingResult:
                           type=t(tt['a_type']), sense=t(tt['a_sense']), ix1=ix1, ix2=ix2, val=val, n=tn,
                           pin_cap=torch.cat([T.pin_cap, T.pin_cap_min], 1).clone(), lookup=lookup)
 
-    def arrivals(self):
+    def arrivals(self, per_tag=False):
         """The arrival times and slews of the last run of this result's timer, as path() (copies, ps; per pin,
         transition rise / fall):
-          max, min (P, 2)         the latest / earliest arrival over the launching clocks (-inf / inf: none arrives)
+          max, min (P, 2)         the latest / earliest arrival over the launch tags (-inf / inf: none arrives);
+                                  per_tag: (P, 2, NT), per launch tag (graph()'s tag_clock, tag_edge)
           slew_max, slew_min (P, 2)
           load, load_min (P, 2)   a driver pin's total load (wire and sink pins, fF; max / min pin capacitances),
                                   0 on other pins"""
         T = self.timer
-        return TimingData('Arrivals', max=T.amax.amax(2).clone(), min=T.amin.amin(2).clone(), slew_max=T.smax.clone(),
+        mx, mn = (T.amax.clone(), T.amin.clone()) if per_tag else (T.amax.amax(2).clone(), T.amin.amin(2).clone())
+        return TimingData('Arrivals', max=mx, min=mn, slew_max=T.smax.clone(),
                           slew_min=T.smin.clone(), load=T.load.clone(), load_min=T.load_min.clone())
+
+    def endpoint_required(self):
+        """The setup checks of the last run of this result's timer (copies, ps), one row per check and data transition:
+          pin, rf (R,)            the endpoint (a register data pin, an output port, a latch D pin) and its transition
+          required (R, NT)        the required time per launch tag (graph()'s tag_clock, tag_edge; inf where the
+                                  check does not apply to the tag): the capture edge, the capture clock's latency or
+                                  arrival, less the setup time from the data and clock slews and the uncertainty;
+                                  an output delay; a path delay exception's value (its own tag); a latch's, with
+                                  time borrowing
+          arrival (R, NT)         the latest arrival there per tag
+          slack (R,)              min over tags of required - arrival (inf: unconstrained). With propagated clocks
+                                  this is before the clock reconvergence pessimism removal; the result's setup slack
+                                  (per pin, the min over its rows) is after it.
+        A pin can have several rows (a register check and a path delay exception)."""
+        T = self.timer
+        rows, req = [], []
+        for r, q, _ in T._setup_required():
+            rows.append(r); req.append(q)
+        if rows:
+            rows, req = torch.cat(rows), torch.cat(req)
+        else:
+            rows = torch.zeros(0, dtype=torch.long, device=T.dev); req = torch.zeros(0, T.NT, device=T.dev)
+        arr = T.amax.reshape(T.P * 2, -1)[rows]
+        v = req - arr
+        v = torch.where(torch.isnan(v) | ~torch.isfinite(v), torch.full_like(v, INF), v)
+        return TimingData('EndpointRequired', pin=rows // 2, rf=rows % 2, required=req.clone(), arrival=arr.clone(),
+                          slack=v.amin(1) if len(v) else torch.zeros(0, device=T.dev))
 
     def parasitics(self):
         """The wire parasitics of the last run of this result's timer (copies). Variants v are the pin capacitances

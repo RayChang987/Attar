@@ -42,5 +42,65 @@ class LatchAccountingTest(unittest.TestCase):
         self.assertEqual((req[0, 1], sh[0, 1]), (5.0, 0.0))
 
 
+
+class IdealPinLatencyTest(unittest.TestCase):
+    """set_clock_latency on register clock pins of an ideal clock (pre-CTS timing of an SDC with useful-skew pin
+    latencies, e.g. the ICCAD 2025 contest SDCs without set_propagated_clock). OpenSTA: the ideal clock network delay
+    at such a pin is the pin's latency instead of the clock's latency l0, at launch and at capture. With latency v on
+    every register clock pin, register-to-register slacks do not move and an output port's moves by l0 - v (launch
+    earlier, the port's capture keeps l0); with v on one register only, its data pin's slack moves by v - l0.
+    The latencies are given in memory (Design.set_timing)."""
+
+    def test_ideal_pin_latency(self):
+        import warnings
+        from common import SMALL, need
+        d = need(SMALL)
+        d.restore('reference')
+        r0 = d.timing()
+        T = r0.timer
+        self.assertFalse(bool(T.prop_clk.any()))            # gcd's SDC: ideal clocks
+        regs = sorted(set(T.k_fr.cpu().numpy().tolist()))
+        cks = {int(T.clk_of[p]) for p in regs}
+        self.assertEqual(len(cks), 1)
+        ck = T.clock_names[cks.pop()]
+        c = T.info['clocks'][ck]
+        l0, v = float(c.get('latency', 0.0)), 10.0
+        self.assertGreater(abs(l0 - v), 1.0)
+        ep = r0.endpoints
+        s0 = r0.setup[ep].cpu().numpy()
+        kto, kfr, par = T.k_to.cpu().numpy(), T.k_fr.cpu().numpy(), np.asarray(T.par)
+        reg_ep = np.isin(ep.cpu().numpy(), kto)            # (T is released once the settings change)
+
+        def with_pins(pins, val):
+            d.set_timing(pin_latency=[{'pin': p, 'clock': ck, 'value': val, 'rf': [0, 1], 'mm': ['max', 'min']}
+                                      for p in pins])
+            with warnings.catch_warnings():
+                warnings.filterwarnings('error', message='.*pin clock latencies.*')     # no 'not modeled'
+                r = d.timing()
+            self.assertTrue(r.summary()['exact'])
+            return r, r.setup[ep].cpu().numpy() - s0
+
+        np.testing.assert_allclose(with_pins(regs, l0)[1], 0, atol=1e-4)     # the clock's own latency: no change
+        dl = with_pins(regs, v)[1]
+        np.testing.assert_allclose(dl[reg_ep], 0, atol=1e-4)
+        moved = np.abs(dl[~reg_ep]) > 1e-4
+        self.assertTrue(moved.any())
+        np.testing.assert_allclose(dl[~reg_ep][moved], l0 - v, atol=1e-4)
+        reg = regs[0]
+        r1, d1 = with_pins([reg], v)
+        own = np.isin(ep.cpu().numpy(), kto[kfr == reg])
+        np.testing.assert_allclose(d1[own], v - l0, atol=1e-4)
+        other = d1[~own][np.abs(d1[~own]) > 1e-4]
+        np.testing.assert_allclose(np.abs(other), abs(l0 - v), atol=1e-4)    # paths launched from reg only
+        # the register's clock arrival is the edge plus its own latency, the others' the clock's
+        ca = r1.clock_arrivals()
+        name = d.pin_names([reg])[0]
+        self.assertAlmostEqual(ca[name][0], c['waveform'][int(par[reg])] + v, places=3)
+        other_reg = d.pin_names([regs[1]])[0]
+        self.assertAlmostEqual(ca[other_reg][0], c['waveform'][int(par[regs[1]])] + l0, places=3)
+        d.reset_timing()
+        self.assertTrue(np.allclose(d.timing().setup[ep].cpu().numpy(), s0))
+
+
 if __name__ == '__main__':
     unittest.main()
