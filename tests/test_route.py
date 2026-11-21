@@ -102,6 +102,20 @@ class OpenROADRoutesTest(unittest.TestCase):
 
 
 class RouterTest(unittest.TestCase):
+    def test_pattern_costs_on_a_non_square_grid(self):
+        """Both pattern costs are computed for every branch; a mid on its own axis must not index past the other one."""
+        import torch
+        from attar.route.router import _Grid2D
+        for nx, ny in ((7, 3), (3, 7)):
+            G = _Grid2D(torch.ones(ny, nx - 1), torch.ones(nx, ny - 1), 'cpu')
+            seg = torch.tensor([[0, 0, nx - 1, ny - 1]])
+            G.usage(torch.zeros(0, 5, dtype=torch.long)); G.costs(0.5)
+            for t, m in ((0, nx - 1), (1, ny - 1)):
+                c = G.path(seg, torch.tensor([t]), torch.tensor([m]), via=2.0)
+                self.assertEqual(c.item(), (nx - 1) + (ny - 1) + 2.0)   # unit costs plus one bend's two vias
+            typ, mid = G.best(seg, margin=2, via=2.0)
+            self.assertEqual(G.path(seg, typ, mid, via=2.0).item(), (nx - 1) + (ny - 1) + 2.0)
+
     def test_gcd(self):
         d = need(GCD)
         d.load_reference()

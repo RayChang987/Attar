@@ -28,6 +28,12 @@ Timing
   Code that read `d._timer` internals (P05's differentiable timer, GRC-TDGR's arc gradients) can use these.
 - `attar.timing.steiner_big.pd_edges(..., drv=)`: root each tree at a given point (pd_rc's driver: the same tree).
 
+Routing
+- The global router failed with an IndexError on gcell grids wider than tall (`after_fp/iccad2025/des3`, 35 x 34):
+  pattern routing computes both L / Z costs of every branch and keeps one, and the discarded cost indexed the other
+  axis with the kept pattern's bend. Each cost now clamps the bend into its own axis; routes on grids that worked
+  before are unchanged (bit-identical on gcd and aes).
+
 ## 1.0.4
 
 **Upgrading.** The zoo's timing data changed: `after_fp/iccad2025` was distilled again (signal pins on DEF power /
