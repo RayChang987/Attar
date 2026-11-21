@@ -174,7 +174,8 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
       'pins'        the pin count, whatever the weights.
     deterministic: on the GPU, the same placement on every run with the same inputs and seed (float atomics otherwise
       add in any order, and timing feedback can amplify the difference into a different placement); slower
-      (kernels.deterministic_algorithms). On the CPU every run is the same already."""
+      (kernels.deterministic_algorithms). On the CPU every run with the same number of threads (torch.set_num_threads)
+      is the same already; another thread count sums in another order."""
     if deterministic and torch.device(d.device).type == 'cuda':
         args = {k: v for k, v in locals().items() if k != 'deterministic'}
         from ..kernels import deterministic_algorithms
@@ -260,7 +261,9 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
         if not ev.sync_weights() or precond != 'net_weight':
             return
         dw = (wmask - wmask0)[net]
-        npins.copy_(npins0.index_add(0, pin_mv[pin_ok], dw[pin_ok]))
+        # each cell's change summed first, then added to its pin count: the order of P11's patched copy (DREAMPlace's
+        # pin-weight sum), which adding pin by pin onto the count would round differently
+        npins.copy_(npins0 + torch.zeros_like(npins0).index_add_(0, pin_mv[pin_ok], dw[pin_ok]))
     cb_info = callback is not None and _takes_info(callback)
 
     # initial positions (lower-left): movable cells around the core center, fillers spread uniformly

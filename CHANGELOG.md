@@ -1,14 +1,21 @@
 # Changelog
 
-## Unreleased (branch gp-hooks-timing-api)
+## 1.0.5
+
+**Upgrading.** `naive.legalize` (and so `d.place()` and `naive.flow`) uses Abacus by default: placements differ from
+1.0.4's, mostly with less displacement and HPWL (`method='columns'` gives the 1.0.4 legalizer). It needs g++, like
+the other C++ helpers; without it the 1.0.4 legalizer runs with a warning. The zoo's 8 `after_fp/iccad2015` designs
+gained their Early libraries (`library_min`): fetch them again for hold checks on Early delays,
+`attar.fetch('after_fp/iccad2015', force=True)`. Without that they time as in 1.0.4 (the result's `limitations` says
+so), and 1.0.4 reads the new files unchanged.
 
 Placement
 - Net weights changed during global placement reach the placer. The callback documented in 1.0.4 ("update
   d.n_weight in place, the wirelength reads it at the next evaluation") had no effect: the wirelength read a copy of the
   weights made at the start. Now the Evaluator follows `d.n_weight` (in place or a new tensor) and
-  `naive.global_place` takes the callback's changes from the next evaluation, CUDA graphs included. On the CPU its
-  trajectory equals, bit for bit, the patched copy P11 (attar_DAC2026) had to keep for net-weighted timing-driven
-  placement.
+  `naive.global_place` takes the callback's changes from the next evaluation, CUDA graphs included. On the CPU (same
+  thread count) its trajectory equals, bit for bit, the patched copy P11 (attar_DAC2026) had to keep for net-weighted
+  timing-driven placement: superblue18, D25Nns, 573 iterations.
 - `global_place(..., precond='net_weight')` (default): the preconditioner adds, over a cell's pins, the change of
   their nets' weights since the start (DREAMPlace's sum of pin weights when weights start at 1), so cells on heavily
   weighted nets take proportionally smaller steps; `'pins'` keeps the pin count. A placement whose weights do not
@@ -43,8 +50,9 @@ Placement
   seed (under `torch.use_deterministic_algorithms`: scatter adds sorted, and `attar.kernels.cumsum`, a fixed-order
   scan, for the density map's prefix sums, which CUDA's cumsum adds in any order; cuBLAS products, one stream, are
   reproducible on the same GPU model). Slower: aes 2.9 -> 3.9 s, jpeg 3.8 -> 14 s on an RTX 3080 Ti. Timing feedback
-  amplifies the run-to-run noise of the default mode (one of four DATE'25-weighted superblue18 runs ended at TNS
-  -8.3e6 against -5.4e6), so compare methods with it.
+  amplifies the run-to-run noise of the default mode (DATE'25-weighted superblue18 runs end at TNS about -5.3e6 or,
+  when they drift at the first weight update, at -8.2e6 to -9.0e6; 6 of 7 runs drifted on an RTX 4090, 1 of 4 on
+  another GPU), so compare methods with it. On the CPU a run is reproducible with the same thread count.
 
 Timing
 - Early libraries: the min analysis (hold checks, earliest arrivals, the min side of propagated clocks) reads a
@@ -99,7 +107,10 @@ Design
 Examples
 - Four Colab notebooks in `examples/colab/`, listed in the README: the timing-driven placement demo (moved from
   `examples/`), LATTE (DAC 2026 timing-driven detailed placement), and the DAC 2026 hybrid net-pin weighting with its
-  DATE 2025 baseline on superblue18.
+  DATE 2025 baseline on superblue18. On 1.0.5 they need no patched copies of Attar: the P11 notebooks drop their copy
+  of the global placer, their Abacus and the relegalization step (1,930 -> 650 lines; the placement is bit-identical
+  to the copy's on the CPU), and LATTE drops its runtime patches and the pre-CTS design copy (`d.ideal_clocks()`;
+  the same results on des).
 
 Docs
 - docs/benchmarks.md: ICCAD 2015 timing against published (OpenTimer) numbers, and the GPU memory a superblue run
