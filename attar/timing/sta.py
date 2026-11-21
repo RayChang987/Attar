@@ -133,6 +133,16 @@ STATE = ('valid', 'k0', 'k1', 'k2', 'k3', 'k4', 'p1', 'p2', 't0', 'dt', 'vo_dela
          'derate')
 
 
+def _stack_tables(a, b):
+    """Two libraries' tables (A, 4, K...) one after the other, padded to the larger K (the sizes in t_n say how much
+    of each table is real)."""
+    if a.shape[2:] != b.shape[2:]:
+        k = [max(x, y) for x, y in zip(a.shape[2:], b.shape[2:])]
+        pad = lambda v: torch.nn.functional.pad(v, [p for i in reversed(range(len(k))) for p in (0, k[i] - v.shape[2 + i])])  # noqa: E731
+        a, b = pad(a), pad(b)
+    return torch.cat([a, b])
+
+
 def arc_eval(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr, steps=None):
     """OpenSTA's dmp_ceff_elmore gate delay for a batch of cell arcs (attar.timing.dmp.gate): gate delay, driver slew and the
     driver model each load's wire delay needs, packed as STATE columns. ctot: the driven net's total capacitance for
@@ -347,6 +357,17 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
 class Timer:
     """Build once per design (graph, levels, constraints); run() times a placement."""
 
+    def _min_arrays(self, d, t):
+        """The Early library's arrays for the min analysis (timing_mod.arrays_min), checked to line up arc for arc
+        with the Late ones in t; None without one (or, with a limitation, when they do not line up)."""
+        tmin = timing_mod.arrays_min(d)
+        if tmin is None:
+            return None
+        if not all(np.array_equal(t[k], tmin[k]) for k in timing_mod.ALIGN):
+            self._limit('the Early library does not line up with the Late one arc for arc: hold uses the Late one')
+            return None
+        return tmin
+
     def _limit(self, msg):
         """A way this timer differs from OpenSTA on the design's inputs: warned, and listed in TimingResult.limitations
         (summary()['exact'] is False)."""
@@ -371,8 +392,9 @@ class Timer:
         d = self.d
         a = d.raw
         t, functions, arc_when = timing_mod.arrays(d)
-        if len(t['a_master']) != self.t_n.shape[0]:
+        if len(t['a_master']) != self.n_lib:
             return False                                # new masters: their tables are not on the device
+        tmin = self._min_arrays(d, t) if self.lmin else None
         lib_id, fr, to, atype, asense_lib = self._arcs_all
         cells = np.unique(np.asarray(cells, np.int64))
         p_cell = self.p_cell_np
@@ -430,6 +452,8 @@ class Timer:
         # the pins' Liberty data, via resistance and location
         info = self.info
         cap, cap_min, ctp, sthr = self._pin_library(t, info, p_cell, p_mpin)
+        if tmin is not None:
+            cap_min = self._pin_library(tmin, info, p_cell, p_mpin)[1]
         dev = self.dev
         self.pin_cap.copy_(torch.as_tensor(cap, device=dev)); self.pin_cap_min.copy_(torch.as_tensor(cap_min, device=dev))
         self.pin_ctp.copy_(torch.as_tensor(ctp, device=dev)); self.sink_thr.copy_(torch.as_tensor(sthr, device=dev))
@@ -487,11 +511,12 @@ class Timer:
         self.info = info = d._timing_info()
         # where this timer is known to differ from OpenSTA on these inputs (TimingResult.limitations)
         self.limitations = ['SDC command %s (%d) not applied' % (k, v) for k, v in sorted((info.get('unsupported') or {}).items())]
-        libs = [x.get('name', '') for x in (info.get('sources') or {}).get('lib') or []]
-        if libs and all('_late' in x.lower() for x in libs):
-            self.limitations.append('hold checks use the Late library (the benchmark\'s Early library is not read)')
         # the cell data: from the design's library chain (bundle + local) or its timing.safetensors (attar.timing.ir.arrays)
         t, info['functions'], info['arc_when'] = timing_mod.arrays(d)
+        tmin = self._min_arrays(d, t)           # the min analysis's library (an Early library), or None: the same
+        libs = [x.get('name', '') for x in (info.get('sources') or {}).get('lib') or []]
+        if libs and all('_late' in x.lower() for x in libs) and tmin is None:
+            self.limitations.append('hold checks use the Late library (the benchmark\'s Early library is not read)')
         a = d.raw
         T = lambda x, dt=None: torch.as_tensor(np.asarray(x), device=dev, dtype=dt)
         p_cell = a['p_cell'].astype(np.int64); p_mpin = a['p_mpin'].astype(np.int64)
@@ -504,6 +529,8 @@ class Timer:
 
         ok = p_mpin >= 0
         cap, cap_min, ctp, sthr = self._pin_library(t, info, p_cell, p_mpin)
+        if tmin is not None:                    # the min analysis's pin capacitances: the Early library's
+            cap_min = self._pin_library(tmin, info, p_cell, p_mpin)[1]
         self.pin_cap, self.pin_cap_min = T(cap), T(cap_min)
         self.pin_ctp = T(ctp)
 
@@ -654,6 +681,17 @@ class Timer:
         self.t_thr = T(t['a_thr']) if 'a_thr' in t else T(np.tile(dflt, (len(t['a_master']), 1, 1)))
         self.sink_thr = T(sthr)
         self.t_val, self.t_n = T(t['a_val']), T(t['a_n'].astype(np.int64))
+        # an Early library: its tables after the Late ones; the min analysis reads Liberty arc a at a + lmin (the
+        # arcs line up one to one, ir.ALIGN). lmin = 0: one library for both analyses
+        self.n_lib, self.lmin = len(t['a_master']), 0
+        if tmin is not None:
+            thr_e = T(tmin['a_thr']) if 'a_thr' in tmin else T(np.tile(dflt, (len(tmin['a_master']), 1, 1)))
+            self.t_ix1, self.t_ix2, self.t_val = (_stack_tables(self.t_ix1, T(tmin['a_ix1'])),
+                                                  _stack_tables(self.t_ix2, T(tmin['a_ix2'])),
+                                                  _stack_tables(self.t_val, T(tmin['a_val'])))
+            self.t_n = torch.cat([self.t_n, T(tmin['a_n'].astype(np.int64))])
+            self.t_thr = torch.cat([self.t_thr, thr_e])
+            self.lmin = self.n_lib
 
         # clocks and constraints
         self.clocks = [c for _, c in clocks]
@@ -1916,11 +1954,12 @@ class Timer:
             n = len(lib)
             rows_ = torch.arange(n, device=dev)
             px, pn = pv[rows_, orf], pv[rows_, 2 + orf]                   # this transition's max / min pi models
-            thr = self.t_thr[lib, orf]
+            lib2 = torch.cat([lib, lib + self.lmin])                     # the min analysis: the Early library's arcs
+            thr = self.t_thr[lib2, torch.cat([orf, orf])]
             # max and min analysis in one batch; the total load is the pi model's (OpenSTA: c1 + c2)
             c2_ = lambda v: torch.cat([v, v])  # noqa: E731
-            args = (c2_(lib), c2_(orf), torch.cat([sx, sn]), torch.cat([px[:, 0] + px[:, 2], pn[:, 0] + pn[:, 2]]),
-                    torch.cat([px[:, 2], pn[:, 2]]), torch.cat([px[:, 1], pn[:, 1]]), torch.cat([thr, thr]))
+            args = (lib2, c2_(orf), torch.cat([sx, sn]), torch.cat([px[:, 0] + px[:, 2], pn[:, 0] + pn[:, 2]]),
+                    torch.cat([px[:, 2], pn[:, 2]]), torch.cat([px[:, 1], pn[:, 1]]), thr)
             if self.triton is not None:
                 dd, ds, stt = self.triton.gate(self.t_ix1, self.t_ix2, self.t_val, self.t_n32, *args)
             elif self.host is not None:
@@ -1970,7 +2009,7 @@ class Timer:
                     self._apply_lat(amax, amin, k)
                     self._apply_latch(amax, amin, smax, smin, k)
                 self._rec.append(self.triton.stage(self.tri_tables, lv, self.tri_sthr, pic, elc, self.tri_nto, amax,
-                                                   amin, smax, smin, self.precision))
+                                                   amin, smax, smin, self.precision, lmin=self.lmin))
                 self._load_arr(amax, amin, self._ld_lc if k is None else self._ld_lev[k], self._rec[-1][1],
                                self._rec[-1][3])
             self._apply_lat(amax, amin, 'end')
@@ -2019,7 +2058,7 @@ class Timer:
             cslew = self._cap_slew(self.smax)                   # (OCV: the check reads the opposite analysis's)
             for rf in (0, 1):
                 ok = self.t_n[self.k_lib, rf, 0] > 0
-                cmin = self._lookup(self.k_lib, rf, smin[self.k_to, rf], cslew)
+                cmin = self._lookup(self.k_lib + self.lmin, rf, smin[self.k_to, rf], cslew)   # hold: the min library
                 req_h = (lt[None] + self.rel_hold[:, self.k_ctag].T + lat + cmin[:, None] + self.unc_h[self.k_ck][:, None]
                          - self.k_ctp_max[:, None])
                 h = fin(amin[self.k_to, rf] - req_h)
@@ -2497,7 +2536,9 @@ class TimingResult:
           pin_cap (P, 4)          every pin's capacitance (fF): rise and fall for the max analysis, rise and fall for
                                   the min analysis (set_load for output ports)
           lookup(a, slot, x, y)   the timer's lookup of arcs a (tensor) in slot at x, y (bilinear, linear
-                                  extrapolation outside, OpenSTA's rule)"""
+                                  extrapolation outside, OpenSTA's rule)
+          min_offset              0, or with an Early library for the min analysis (hold, earliest arrivals) A: the
+                                  tables have 2A rows, Liberty arc a's Early tables at a + A (same arcs, same order)"""
         T = self.timer
         tt, _, _ = timing_mod.arrays(T.d)
         dev = T.dev
@@ -2509,7 +2550,8 @@ class TimingResult:
             return nldm(ix1[a, slot], ix2[a, slot], val[a, slot], tn[a, slot], x, y)
         return TimingData('TimingLibrary', master=t(tt['a_master']), from_pin=t(tt['a_from']), to_pin=t(tt['a_to']),
                           type=t(tt['a_type']), sense=t(tt['a_sense']), ix1=ix1, ix2=ix2, val=val, n=tn,
-                          pin_cap=torch.cat([T.pin_cap, T.pin_cap_min], 1).clone(), lookup=lookup)
+                          pin_cap=torch.cat([T.pin_cap, T.pin_cap_min], 1).clone(), lookup=lookup,
+                          min_offset=T.lmin)
 
     def arrivals(self, per_tag=False):
         """The arrival times and slews of the last run of this result's timer, as path() (copies, ps; per pin,

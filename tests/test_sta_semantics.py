@@ -3,6 +3,7 @@
 import unittest
 
 import numpy as np
+import torch
 
 from common import attar  # noqa: F401  (puts the checkout on the path)
 from attar.timing.ir import T_COMB
@@ -100,6 +101,57 @@ class IdealPinLatencyTest(unittest.TestCase):
         self.assertAlmostEqual(ca[other_reg][0], c['waveform'][int(par[regs[1]])] + l0, places=3)
         d.reset_timing()
         self.assertTrue(np.allclose(d.timing().setup[ep].cpu().numpy(), s0))
+
+
+
+class EarlyLibraryTest(unittest.TestCase):
+    """An Early library for the min analysis (OpenSTA's read_liberty -min; ICCAD 2015's): its tables after the Late
+    ones, read by the min lanes at Liberty arc + lmin and by hold checks. Here the Early arrays are given in memory
+    (attar.timing.ir.arrays_min patched): a copy of the Late ones changes nothing, halved delays move hold only."""
+
+    def _time(self, early):
+        from unittest import mock
+        from attar.timing import ir
+        from common import SMALL, need
+        d = need(SMALL)
+        d.restore('reference')
+        with mock.patch.object(ir, 'arrays_min', lambda d_: early(ir.arrays(d_)[0])):
+            r = d.timing()
+            return r, r.timer.lmin
+
+    def test_early_library(self):
+        import copy
+        r0, l0 = self._time(lambda t: None)
+        self.assertEqual(l0, 0)
+        same, l1 = self._time(lambda t: copy.deepcopy(t))
+        self.assertEqual(l1, len(r0.library().master))
+        for a, b in ((r0.setup, same.setup), (r0.hold, same.hold), (r0.timer.amin, same.timer.amin)):
+            self.assertTrue(torch.equal(a, b))
+        self.assertEqual(same.library().min_offset, l1)
+
+        def halved(t):
+            e = copy.deepcopy(t)
+            e['a_val'] = e['a_val'] * 0.5
+            return e
+        fast, _ = self._time(halved)
+        self.assertTrue(torch.equal(r0.setup, fast.setup))                  # the max analysis: the Late library
+        ok = torch.isfinite(r0.hold) & torch.isfinite(fast.hold)
+        self.assertTrue(bool((fast.hold[ok] != r0.hold[ok]).any()))
+        a0, a1 = r0.timer.amin, fast.timer.amin
+        m = torch.isfinite(a0) & torch.isfinite(a1) & (a0 > 0)
+        self.assertTrue(bool((a1[m] <= a0[m] + 1e-3).all()) and bool((a1[m] < a0[m]).any()))   # earlier
+        self.assertTrue(fast.summary()['exact'])
+
+    def test_a_library_that_does_not_line_up_is_not_used(self):
+        import copy
+
+        def other(t):
+            e = copy.deepcopy(t)
+            e['a_type'] = e['a_type'].copy(); e['a_type'][0] += 1
+            return e
+        r, lmin = self._time(other)
+        self.assertEqual(lmin, 0)
+        self.assertIn('Early library does not line up', ' '.join(r.limitations))
 
 
 if __name__ == '__main__':

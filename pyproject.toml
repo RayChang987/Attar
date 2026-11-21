@@ -51,6 +51,7 @@ include = ["attar*"]
 
 [tool.setuptools.package-data]
 "attar.timing" = ["csrc/*.cpp"]
+"attar.naive" = ["csrc/*.cpp"]
 
 [tool.ruff]
 line-length = 120

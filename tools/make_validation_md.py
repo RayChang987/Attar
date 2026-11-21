@@ -71,7 +71,7 @@ def main():
     ap.add_argument('--sta', default=os.path.join(R, 'sta', 'v20_p0.json'))
     ap.add_argument('--ng45', default=os.path.join(R, 'sta', 'ng45_v6_p0.json'))
     ap.add_argument('--ns3k', default=os.path.join(R, 'sta_ns3k', 'v8_p0.json'))
-    ap.add_argument('--iccad2015', default=os.path.join(R, 'sta_iccad2015', 'v2_p0.json'))
+    ap.add_argument('--iccad2015', default=os.path.join(R, 'sta_iccad2015', 'v3_early.json'))
     ap.add_argument('--iccad2025', default=os.path.join(R, 'iccad25_eval', 'v1.json'))
     ap.add_argument('--sizing-asap7', default=os.path.join(R, 'sizing', 'asap7_v2.json'))
     ap.add_argument('--sizing-ng45', default=os.path.join(R, 'sizing', 'ng45_v2.json'))
@@ -99,7 +99,7 @@ def main():
          '| Timing, ORFS asap7 | %d | %s |' % (len(sta), summary(sta).split('; ', 1)[1]),
          '| Timing, ORFS nangate45 | %d | %s |' % (len(ng), summary(ng).split('; ', 1)[1]),
          '| Timing, NS3K (Innovus kit, unbuffered netlists) | %d | %s |' % (len(ns), summary(ns).split('; ', 1)[1]),
-         '| Timing, ICCAD 2015 superblue (Late library) | %d | %s |' % (len(ic), summary(ic).split('; ', 1)[1]),
+         '| Timing, ICCAD 2015 superblue (Late and Early libraries) | %d | %s |' % (len(ic), summary(ic).split('; ', 1)[1]),
          '| Timing and power, ICCAD 2025 contest evaluation | %d | %s; power error max %.2f%% |'
          % (len(i25), summary(i25).split('; ', 1)[1], max(abs(e) for v in i25.values() for e in v['power_err_pct'])),
          '| Sizing (random swaps), asap7 | %d | %s |' % (len(sz7), summary(sz7).split('; ', 1)[1]),
@@ -135,12 +135,14 @@ def main():
     L += ['', '### NS3K', '']
     L += timing_table(ns, lambda d: 'after_fp/ns3k/' + d)
     L += ['', '### ICCAD 2015 (superblue)', '',
-          'At the contest\'s given placement (`tools/validate_sta_iccad2015.py`): the design\'s Late Liberty, its SDC '
-          '(the DREAMPlace 4.0 copy) and the contest wire RC (2.535 ohm, 0.16 fF per um). Both sides read the Late '
-          'library only, so hold is compared on Late delays; the Early library is not modeled. Endpoints OpenSTA '
+          'At the contest\'s given placement (`tools/validate_sta_iccad2015.py`): the design\'s Late Liberty (setup, '
+          'OpenSTA `read_liberty -max`) and Early Liberty (hold, `-min`), its SDC (the DREAMPlace 4.0 copy) and the '
+          'contest wire RC (2.535 ohm, 0.16 fF per um). Endpoints OpenSTA '
           'reports as unconstrained (infinite slack, up to 4% of them) are not listed by Attar; every constrained '
           'endpoint matches. The DEF handed to OpenROAD drops the TRACKS on metal7-9, which the superblue LEF does '
-          'not define.', '']
+          'not define.' + (' Run times are from the Late-only run on an idle GPU (%s): the Early library adds no work, and '
+          'the GPUs were shared during the Early run.' % next(iter(ic.values()))['times_from']
+          if 'times_from' in next(iter(ic.values())) else ''), '']
     L += timing_table(ic, lambda d: 'after_fp/iccad2015/' + d)
     L += ['', '### ICCAD 2025 (contest evaluation)', '',
           'Problem C\'s own scoring (`openRoad_eval_script/eval_def.tcl`) at each design\'s given placement '

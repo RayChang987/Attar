@@ -151,7 +151,7 @@ def _diverged(hist, best, window=50, threshold=0.05):
 def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins=None, seed=0,
                  verbose=True, log_every=50, snapshot='naive_gp', graphs=True, movable=None, macro_halo=0.0,
                  routability=False, route_args=None, extra=None, callback=None, callback_every=1,
-                 precond='net_weight'):
+                 precond='net_weight', deterministic=False):
     """Place the movable cells of d. Sets d.pos (the placement becomes a fact) and saves a snapshot.
     Returns a dict with the trajectory (iterations, HPWL, overflow, time).
 
@@ -171,7 +171,15 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
                     weights that start at 1, DREAMPlace's sum of the pin weights (PreconditionOp), so a cell on
                     heavily weighted nets takes proportionally smaller steps. Until the weights change it is the pin
                     count, so a placement without weight changes is the same as with 'pins'.
-      'pins'        the pin count, whatever the weights."""
+      'pins'        the pin count, whatever the weights.
+    deterministic: on the GPU, the same placement on every run with the same inputs and seed (float atomics otherwise
+      add in any order, and timing feedback can amplify the difference into a different placement); slower
+      (kernels.deterministic_algorithms). On the CPU every run is the same already."""
+    if deterministic and torch.device(d.device).type == 'cuda':
+        args = {k: v for k, v in locals().items() if k != 'deterministic'}
+        from ..kernels import deterministic_algorithms
+        with deterministic_algorithms():
+            return global_place(**args)
     from ..evaluator import Evaluator
     if precond not in ('net_weight', 'pins'):
         raise ValueError("precond: 'net_weight' or 'pins', not %r" % (precond,))

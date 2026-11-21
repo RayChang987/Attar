@@ -300,17 +300,18 @@ class Library:
         return {'classes': classes, 'buffers': sorted(bufs), 'inverters': sorted(invs)}
 
     # -- files --------------------------------------------------------------------------------------------------------
-    def save(self, folder):
+    def save(self, folder, stem='library'):
+        """<folder>/<stem>.safetensors and <stem>.json (stem 'library_min': a design's Early library)."""
         os.makedirs(folder, exist_ok=True)
-        st.save(os.path.join(folder, 'library.safetensors'), self.a, {'schema': SCHEMA})
-        with open(os.path.join(folder, 'library.json'), 'w') as f:
+        st.save(os.path.join(folder, stem + '.safetensors'), self.a, {'schema': SCHEMA})
+        with open(os.path.join(folder, stem + '.json'), 'w') as f:
             json.dump(self.meta, f)
         return folder
 
     @classmethod
-    def load(cls, folder):
-        a, _ = st.load(os.path.join(folder, 'library.safetensors'))
-        with open(os.path.join(folder, 'library.json')) as f:
+    def load(cls, folder, stem='library'):
+        a, _ = st.load(os.path.join(folder, stem + '.safetensors'))
+        with open(os.path.join(folder, stem + '.json')) as f:
             meta = json.load(f)
         return cls(a, meta)
 

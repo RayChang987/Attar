@@ -99,8 +99,9 @@ carried most of its TNS. The likely cause, not fully confirmed: the `lcb*` local
 OpenSTA's semantics their registers capture on the clock's falling edge, which leaves paths from input ports and to
 output ports half a cycle; OpenTimer appears not to apply this. Compare methods on one timer. The ranking of two
 published methods held under both (their TNS ratio was 1.48 under OpenTimer and 1.25 under Attar, over 8 designs),
-but Attar's absolute numbers on these designs cannot be compared with published ones. Only the Late library is read,
-so hold checks use Late delays, and a timing result lists that in `limitations` (`summary()['exact']` is False). A
+but Attar's absolute numbers on these designs cannot be compared with published ones. Hold checks read each
+design's Early library (manifest `library_min`), as OpenSTA's `read_liberty -min`; hold slacks match OpenSTA's within
+0.11-0.21 ps on average per endpoint ([validation](validation/timing_routing.md#iccad-2015-superblue)). A
 superblue run with global placement's CUDA graphs and the timer needs about 10 GB of GPU memory.
 
 **`before_fp`**: floorplan problems (the die, IO pins and macros are the answer):
@@ -120,7 +121,7 @@ superblue run with global placement's CUDA graphs and the timer needs about 10 G
 - ICCAD 2015: the given placements overlap (1.6k-41k cells), the DEF writes coordinates as decimals
   (`7214680.000000`), the LEF defines metal1-6 while the DEF has TRACKS on metal7-9 (OpenROAD's DEF parser stops
   on them), some IO pins sit just outside the die, and FIXED pinless blocks and INV_X1 cells that the Verilog never
-  names serve as obstacles. Timing reads the Late library (setup); the Early one (hold) is recorded, not modeled.
+  names serve as obstacles. Timing reads the Late library for setup and the Early one for hold (`library_min`).
   The Liberty has no `function` attributes, so there are no sizing classes (`d.resize`, buffering need them).
 - superblue (ISPD 2015 and ICCAD 2015): the fixed macros overlap each other as given (2-359 pairs per design).
 - ISPD 2018/2019: the DEFs contain FILLCELLs (`unplace()` sets them aside); ispd19_test3 has placed pads.

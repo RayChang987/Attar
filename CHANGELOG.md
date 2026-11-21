@@ -16,8 +16,47 @@ Placement
 - `callback(it, pos, info)`: a callback taking a third argument gets the iteration's `hpwl` (net-weighted, what the
   schedule follows), `overflow`, `lambda` and `gamma`.
 - `d.hpwl(weighted=False)`: the plain wire length of a net-weighted placement.
+- `naive.legalize` uses Abacus (Spindler et al., ISPD 2008) by default in the global mode (`method='abacus'`), in C++
+  (`attar/naive/csrc/abacus.cpp`, built with g++ on first use; without g++ it falls back to `'columns'`, the earlier
+  default, with a warning): per height class, cells in order of x go to the band and segment where their own
+  displacement is least, segments packed by cluster collapse; rails, fill, improve and the PDN repair as before.
+  Cells global placement leaves on fixed macros go to the nearest free space instead of wherever their column has
+  room (P11: 1-3 mm moves on superblue18). Against `'columns'` on the same global placements, all legal:
+
+  | design | HPWL after LG (columns -> abacus) | max displacement (um) | other |
+  |---|---|---|---|
+  | aes | +5.98% -> +4.78% | | mean 0.224 -> 0.192 um, LG 2.6 -> 1.9 s |
+  | jpeg | +13.66% -> +10.44% | | LG 13.7 -> 6.9 s |
+  | ibex | +9.52% -> +8.14% | | |
+  | cva6 | +11.25% -> +7.83% | 46.6 -> 10.4 (cells on macros) | TNS -8.54e4 -> -7.96e4 |
+  | ariane | +21.8% -> +9.1% | | WNS -815 -> -347, TNS -6.6e5 -> -2.7e5 |
+  | dynamic_node | +33.2% -> +14.75% | 96 -> 5.5 | |
+  | ethmac | | 192 -> 3.8 | |
+  | mgc_fft_a | +25.8% -> +11.8% | 699 -> 120 | |
+  | mgc_des_perf_a | | 551 -> 49 | |
+  | mgc_matrix_mult_b | +12.7% -> +8.4% | 783 -> 153 | LG 54 -> 79 s (host under load) |
+  | ac97_top | lower | | WNS -294 -> -345 (the one worse result) |
+  | superblue18 (745k cells, 653 macros) | +10.13% -> +2.74% | 3062 -> 317 | cells on macros mean 161 -> 16.7 um; WNS -24.1 -> -12.3 ns, TNS -7.82e6 -> -6.92e6; LG 393 -> 189 s |
+
+  `d.place()` and `naive.flow` results change accordingly.
+- `naive.global_place(d, deterministic=True)`: on the GPU, the same placement on every run with the same inputs and
+  seed (under `torch.use_deterministic_algorithms`: scatter adds sorted, and `attar.kernels.cumsum`, a fixed-order
+  scan, for the density map's prefix sums, which CUDA's cumsum adds in any order; cuBLAS products, one stream, are
+  reproducible on the same GPU model). Slower: aes 2.9 -> 3.9 s, jpeg 3.8 -> 14 s on an RTX 3080 Ti. Timing feedback
+  amplifies the run-to-run noise of the default mode (one of four DATE'25-weighted superblue18 runs ended at TNS
+  -8.3e6 against -5.4e6), so compare methods with it.
 
 Timing
+- Early libraries: the min analysis (hold checks, earliest arrivals, the min side of propagated clocks) reads a
+  design's own Early Liberty where it has one, as OpenSTA's `read_liberty -min`: manifest `library_min`, the cells in
+  `<design>/library_min.safetensors` (`attar.timing.ir.attach_min_library`; additive: older Attar ignores it). The
+  zoo's 8 ICCAD 2015 superblue designs have theirs now. The timer stacks the Early tables after the Late ones
+  (`TimingResult.library().min_offset`); its min lanes, on the CPU, the GPU's fused stage kernel and the per-op
+  path, read Liberty arc a at a + offset. Against OpenSTA with `-max` Late and `-min` Early at the ICCAD 2015
+  placements, hold slack MAE per endpoint (Late only before): superblue1 0.20 ps (67.9), superblue3 0.13 (52.1),
+  superblue4 0.11 (38.5), superblue5 0.15 (63.7), superblue7 0.16 (54.9), superblue10 0.21 (77.2), superblue16
+  0.17 (65.2), superblue18 0.18 (64.3); WHS 8.4 ps as OpenSTA on all 8 (14.9 before); setup unchanged.
+  Designs without an Early library time as before (bit-identical setup and hold slacks, CPU and GPU).
 - The timer's data for research code, read only (copies): `TimingResult.graph()` (levels, net / cell / launch / check
   arcs with their Liberty arcs, types and senses, which arcs the search follows, clock networks), `library()` (the
   NLDM tables per Liberty arc with their master and pins, every pin's rise / fall max / min capacitance, the
