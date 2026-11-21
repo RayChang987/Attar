@@ -33,8 +33,14 @@ print(attar.Evaluator(d).hpwl(), d.timing().wns)            # HPWL，以及與 O
 d.export('aes.def')                                         # 匯出回 OpenROAD、Innovus、ICC2 等
 ```
 
-設計會在首次使用時從 [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) 下載。GPU 上第一次執行時序分析會編譯 kernel（約兩分鐘，僅一次）。沒有 GPU？所有功能也都能在 CPU 上執行，或直接在 Colab 試用示範：
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/timing_driven_colab.ipynb)
+設計會在首次使用時從 [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) 下載。GPU 上第一次執行時序分析會編譯 kernel（約兩分鐘，每台機器一次；Colab 則是每個 runtime 一次，除非 `TRITON_CACHE_DIR` 與 `TORCHINDUCTOR_CACHE_DIR` 指向會保留的資料夾）。沒有 GPU？所有功能也都能在 CPU 上執行，或在 Colab 試用以下範例：
+
+| notebook | 內容 | 執行環境 |
+| --- | --- | --- |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/timing_driven_colab.ipynb) | 十五行的時序驅動擺置，即下方示範：先為線長擺置 cva6、做時序分析、如 OpenROAD 依 slack 為 net 加權、再擺置一次 | GPU（T4 即可）或 CPU |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/latte_on_attar.ipynb) | LATTE（DAC 2026）：以錨定在 Attar timer 上的可微分 timer 做時序驅動的 detailed placement，用 Attar 的 global routing 後的時序評估，在 ICCAD 2025 競賽設計上（英文） | CPU，約 4 分鐘 |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/p11_attar_superblue18.ipynb) | 時序驅動 global placement 的 net–pin 混合加權（DAC 2026），superblue18 | GPU |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/date25_attar_superblue18.ipynb) | 它的對照組 DATE 2025 pin 對加權，superblue18 | GPU |
 
 <div align="center">
 <img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="以十五行 Python 寫成的時序驅動擺置，在 cva6 與 swerv 上執行：先為線長擺置、做時序分析、依 slack 為 net 加權（如 OpenROAD 的全域擺置）、再擺置一次、再做時序分析" width="920">

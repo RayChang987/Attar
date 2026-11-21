@@ -33,8 +33,14 @@ print(attar.Evaluator(d).hpwl(), d.timing().wns)            # HPWL，以及与 O
 d.export('aes.def')                                         # 导出回 OpenROAD、Innovus、ICC2 等
 ```
 
-设计会在首次使用时从 [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) 下载。GPU 上第一次运行时序分析会编译 kernel（约两分钟，仅一次）。没有 GPU？所有功能也都能在 CPU 上运行，或直接在 Colab 试用演示：
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/timing_driven_colab.ipynb)
+设计会在首次使用时从 [Attar zoo](https://huggingface.co/datasets/RayChang987/attar-zoo) 下载。GPU 上第一次运行时序分析会编译 kernel（约两分钟，每台机器一次；Colab 则是每个 runtime 一次，除非 `TRITON_CACHE_DIR` 与 `TORCHINDUCTOR_CACHE_DIR` 指向会保留的文件夹）。没有 GPU？所有功能也都能在 CPU 上运行，或在 Colab 试用以下示例：
+
+| notebook | 内容 | 运行环境 |
+| --- | --- | --- |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/timing_driven_colab.ipynb) | 十五行的时序驱动布局，即下方演示：先为线长布局 cva6、做时序分析、如 OpenROAD 按 slack 为 net 加权、再布局一次 | GPU（T4 即可）或 CPU |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/latte_on_attar.ipynb) | LATTE（DAC 2026）：以锚定在 Attar timer 上的可微分 timer 做时序驱动的 detailed placement，用 Attar 的 global routing 后的时序评估，在 ICCAD 2025 竞赛设计上（英文） | CPU，约 4 分钟 |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/p11_attar_superblue18.ipynb) | 时序驱动 global placement 的 net–pin 混合加权（DAC 2026），superblue18（繁体中文） | GPU |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/date25_attar_superblue18.ipynb) | 它的对照组 DATE 2025 pin 对加权，superblue18（繁体中文） | GPU |
 
 <div align="center">
 <img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="以十五行 Python 写成的时序驱动布局，在 cva6 与 swerv 上运行：先为线长布局、做时序分析、按 slack 为 net 加权（如 OpenROAD 的全局布局）、再布局一次、再做时序分析" width="920">
