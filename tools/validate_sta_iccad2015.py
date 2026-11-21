@@ -2,12 +2,12 @@
 """Attar's timer against OpenSTA (OpenROAD in the ORFS image) on the ICCAD 2015 superblue designs, at the contest's
 given placement.
 
-  truth: OpenROAD reads the design's LEF, its Late Liberty, the DEF Attar exports (source frame + IR: the given
+  truth: OpenROAD reads the design's LEF, its Late Liberty (-max) and Early Liberty (-min), the DEF Attar exports (source frame + IR: the given
          placement and the Verilog's nets), the SDC and the contest wire RC (tools/distill_timing.iccad2015_inputs),
          runs estimate_parasitics -placement and dumps every endpoint's setup and hold slack. Cached in
-         orfs_runs/sta_iccad2015/<design>/.
+         orfs_runs/sta_iccad2015/<design>/early/ (the folder above it: the Late-only truth of earlier versions).
   attar: the zoo design (timing attached by tools/distill_timing.py iccad2015), timed at the same placement.
-Both read the Late library only (Attar models one library per arc), so hold is compared on Late delays too.
+Attar reads the Early library the zoo design carries (manifest library_min) for its min analysis, as OpenSTA's -min.
 usage: validate_sta_iccad2015.py <design> ... [--json out] [--device cuda:1]"""
 import argparse
 import json
@@ -59,6 +59,7 @@ def main():
                     shutil.copy(p, q)
             return q
         libs, sdc, rc, lefs = [here(p) for p in libs], here(sdc), here(rc), [here(p) for p in lefs]
+        early = [here(os.path.join(ICCAD15, design, design + '_Early.lib'))] if 'library_min' in d.manifest else []
         def_path = os.path.join(out, 'placed.def')
         if not os.path.exists(def_path):
             d.export(def_path)
@@ -67,7 +68,9 @@ def main():
             layers = {l.split()[1] for l in open(lefs[0]) if l.startswith('LAYER ')}
             txt = [l for l in open(def_path) if not (l.startswith('TRACKS ') and l.split()[-2] not in layers)]
             open(def_path, 'w').writelines(txt)
-        ref, meta = VN.truth(design, out, lefs, libs, def_path, sdc, rc)
+        tdir = os.path.join(out, 'early') if early else out
+        os.makedirs(tdir, exist_ok=True)
+        ref, meta = VN.truth(design, tdir, lefs, libs, def_path, sdc, rc, libs_min=early)
         sync = torch.cuda.synchronize if dev.startswith('cuda') else (lambda: None)
         from attar.timing.sta import Timer
         T = Timer(d); res = T.run(); sync()
@@ -75,7 +78,7 @@ def main():
         for _ in range(3):
             t = time.time(); res = T.run(); sync(); sec = min(sec, time.time() - t)
         r, *_ = compare(res.endpoint_slacks(), ref)
-        r.update({'attar_s': sec, 'ref_s': meta['seconds'], 'ref_worst_reported': meta['worst_slack'],
+        r.update({'early_library': bool(early), 'exact': res.summary()['exact'], 'attar_s': sec, 'ref_s': meta['seconds'], 'ref_worst_reported': meta['worst_slack'],
                   'unsupported_sdc': json.load(open(os.path.join(d.path, 'timing.json')))['unsupported']})
         rows[design] = r
         f = lambda v, p='%.3f': '-' if v is None else p % v  # noqa: E731

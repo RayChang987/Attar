@@ -3,6 +3,7 @@
 import unittest
 
 import numpy as np
+import torch
 
 from common import attar  # noqa: F401  (puts the checkout on the path)
 from attar.timing.ir import T_COMB
@@ -40,6 +41,117 @@ class LatchAccountingTest(unittest.TestCase):
         self.assertEqual((req[1, 0], sh[1, 0]), (10.0, -10.0))
         # launched at 0 into a latch open while low (opens at 5, closes at 10)
         self.assertEqual((req[0, 1], sh[0, 1]), (5.0, 0.0))
+
+
+
+class IdealPinLatencyTest(unittest.TestCase):
+    """set_clock_latency on register clock pins of an ideal clock (pre-CTS timing of an SDC with useful-skew pin
+    latencies, e.g. the ICCAD 2025 contest SDCs without set_propagated_clock). OpenSTA: the ideal clock network delay
+    at such a pin is the pin's latency instead of the clock's latency l0, at launch and at capture. With latency v on
+    every register clock pin, register-to-register slacks do not move and an output port's moves by l0 - v (launch
+    earlier, the port's capture keeps l0); with v on one register only, its data pin's slack moves by v - l0.
+    The latencies are given in memory (Design.set_timing)."""
+
+    def test_ideal_pin_latency(self):
+        import warnings
+        from common import SMALL, need
+        d = need(SMALL)
+        d.restore('reference')
+        r0 = d.timing()
+        T = r0.timer
+        self.assertFalse(bool(T.prop_clk.any()))            # gcd's SDC: ideal clocks
+        regs = sorted(set(T.k_fr.cpu().numpy().tolist()))
+        cks = {int(T.clk_of[p]) for p in regs}
+        self.assertEqual(len(cks), 1)
+        ck = T.clock_names[cks.pop()]
+        c = T.info['clocks'][ck]
+        l0, v = float(c.get('latency', 0.0)), 10.0
+        self.assertGreater(abs(l0 - v), 1.0)
+        ep = r0.endpoints
+        s0 = r0.setup[ep].cpu().numpy()
+        kto, kfr, par = T.k_to.cpu().numpy(), T.k_fr.cpu().numpy(), np.asarray(T.par)
+        reg_ep = np.isin(ep.cpu().numpy(), kto)            # (T is released once the settings change)
+
+        def with_pins(pins, val):
+            d.set_timing(pin_latency=[{'pin': p, 'clock': ck, 'value': val, 'rf': [0, 1], 'mm': ['max', 'min']}
+                                      for p in pins])
+            with warnings.catch_warnings():
+                warnings.filterwarnings('error', message='.*pin clock latencies.*')     # no 'not modeled'
+                r = d.timing()
+            self.assertTrue(r.summary()['exact'])
+            return r, r.setup[ep].cpu().numpy() - s0
+
+        np.testing.assert_allclose(with_pins(regs, l0)[1], 0, atol=1e-4)     # the clock's own latency: no change
+        dl = with_pins(regs, v)[1]
+        np.testing.assert_allclose(dl[reg_ep], 0, atol=1e-4)
+        moved = np.abs(dl[~reg_ep]) > 1e-4
+        self.assertTrue(moved.any())
+        np.testing.assert_allclose(dl[~reg_ep][moved], l0 - v, atol=1e-4)
+        reg = regs[0]
+        r1, d1 = with_pins([reg], v)
+        own = np.isin(ep.cpu().numpy(), kto[kfr == reg])
+        np.testing.assert_allclose(d1[own], v - l0, atol=1e-4)
+        other = d1[~own][np.abs(d1[~own]) > 1e-4]
+        np.testing.assert_allclose(np.abs(other), abs(l0 - v), atol=1e-4)    # paths launched from reg only
+        # the register's clock arrival is the edge plus its own latency, the others' the clock's
+        ca = r1.clock_arrivals()
+        name = d.pin_names([reg])[0]
+        self.assertAlmostEqual(ca[name][0], c['waveform'][int(par[reg])] + v, places=3)
+        other_reg = d.pin_names([regs[1]])[0]
+        self.assertAlmostEqual(ca[other_reg][0], c['waveform'][int(par[regs[1]])] + l0, places=3)
+        d.reset_timing()
+        self.assertTrue(np.allclose(d.timing().setup[ep].cpu().numpy(), s0))
+
+
+
+class EarlyLibraryTest(unittest.TestCase):
+    """An Early library for the min analysis (OpenSTA's read_liberty -min; ICCAD 2015's): its tables after the Late
+    ones, read by the min lanes at Liberty arc + lmin and by hold checks. Here the Early arrays are given in memory
+    (attar.timing.ir.arrays_min patched): a copy of the Late ones changes nothing, halved delays move hold only."""
+
+    def _time(self, early):
+        from unittest import mock
+        from attar.timing import ir
+        from common import SMALL, need
+        d = need(SMALL)
+        d.restore('reference')
+        with mock.patch.object(ir, 'arrays_min', lambda d_: early(ir.arrays(d_)[0])):
+            r = d.timing()
+            return r, r.timer.lmin
+
+    def test_early_library(self):
+        import copy
+        r0, l0 = self._time(lambda t: None)
+        self.assertEqual(l0, 0)
+        same, l1 = self._time(lambda t: copy.deepcopy(t))
+        self.assertEqual(l1, len(r0.library().master))
+        for a, b in ((r0.setup, same.setup), (r0.hold, same.hold), (r0.timer.amin, same.timer.amin)):
+            self.assertTrue(torch.equal(a, b))
+        self.assertEqual(same.library().min_offset, l1)
+
+        def halved(t):
+            e = copy.deepcopy(t)
+            e['a_val'] = e['a_val'] * 0.5
+            return e
+        fast, _ = self._time(halved)
+        self.assertTrue(torch.equal(r0.setup, fast.setup))                  # the max analysis: the Late library
+        ok = torch.isfinite(r0.hold) & torch.isfinite(fast.hold)
+        self.assertTrue(bool((fast.hold[ok] != r0.hold[ok]).any()))
+        a0, a1 = r0.timer.amin, fast.timer.amin
+        m = torch.isfinite(a0) & torch.isfinite(a1) & (a0 > 0)
+        self.assertTrue(bool((a1[m] <= a0[m] + 1e-3).all()) and bool((a1[m] < a0[m]).any()))   # earlier
+        self.assertTrue(fast.summary()['exact'])
+
+    def test_a_library_that_does_not_line_up_is_not_used(self):
+        import copy
+
+        def other(t):
+            e = copy.deepcopy(t)
+            e['a_type'] = e['a_type'].copy(); e['a_type'][0] += 1
+            return e
+        r, lmin = self._time(other)
+        self.assertEqual(lmin, 0)
+        self.assertIn('Early library does not line up', ' '.join(r.limitations))
 
 
 if __name__ == '__main__':

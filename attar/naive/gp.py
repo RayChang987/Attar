@@ -12,6 +12,7 @@
 Fillers occupy the white space up to `target_density`. Fixed cells and macros are static charge. Movable macros are
 treated as big cells (no macro legalization here).
 """
+import inspect
 import math
 import time
 
@@ -125,6 +126,17 @@ class Electrostatics:
         return psi, ex, ey
 
 
+def _takes_info(callback):
+    """True if callback can take a third positional argument (the iteration's metrics)."""
+    try:
+        ps = list(inspect.signature(callback).parameters.values())
+    except (TypeError, ValueError):                 # builtins and the like: the two-argument form
+        return False
+    if any(p.kind == p.VAR_POSITIONAL for p in ps):
+        return True
+    return sum(p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) for p in ps) >= 3
+
+
 def _diverged(hist, best, window=50, threshold=0.05):
     """DREAMPlace's divergence check (NonLinearPlace.check_divergence): once the overflow has been below 0.25, the
     last `window` iterations average an HPWL more than 1.2 x threshold above the best solution's and an overflow more
@@ -138,20 +150,39 @@ def _diverged(hist, best, window=50, threshold=0.05):
 
 def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins=None, seed=0,
                  verbose=True, log_every=50, snapshot='naive_gp', graphs=True, movable=None, macro_halo=0.0,
-                 routability=False, route_args=None, extra=None, callback=None, callback_every=1):
+                 routability=False, route_args=None, extra=None, callback=None, callback_every=1,
+                 precond='net_weight', deterministic=False):
     """Place the movable cells of d. Sets d.pos (the placement becomes a fact) and saves a snapshot.
     Returns a dict with the trajectory (iterations, HPWL, overflow, time).
 
     Hooks for a user's objective terms (timing-driven placement and the like):
       extra(pos) -> (value, grad): a term added to the objective at every evaluation; pos (C, 2) the lower-left of
         every cell (as d.pos; the movable ones at the iterate), grad (C, 2) its gradient with respect to pos (only
-        the movable cells' rows are used). Added after the wirelength and density, with the same preconditioner (the
-        cell's pin count + lambda x area). Called outside the CUDA graph: it may sync, call d.timing(pos), etc.
-      callback(it, pos) every callback_every iterations, after the step: e.g. time the placement (d.timing(pos)) and
-        update d.n_weight in place (the wirelength reads it at the next evaluation) or the extra term's state.
-        Returning True stops the placement there.
-    Net weights (d.n_weight) weigh the wirelength as they are when each evaluation runs."""
+        the movable cells' rows are used). Added after the wirelength and density, with the same preconditioner as
+        theirs. Called outside the CUDA graph: it may sync, call d.timing(pos), etc.
+      callback(it, pos) or callback(it, pos, info) every callback_every iterations, after the step: e.g. time the
+        placement (d.timing(pos)) and change the net weights (d.n_weight, in place or a new tensor) or the extra
+        term's state. info: this iteration's {'hpwl' (the net-weighted HPWL the schedule follows), 'overflow',
+        'lambda', 'gamma'}. Returning True stops the placement there.
+    Net weights: the wirelength (and the HPWL that drives the density weight's schedule, as DREAMPlace's) weighs each
+    net by d.n_weight; weights changed in the callback take effect from the next evaluation.
+    precond: the per-cell preconditioner, lambda x area plus
+      'net_weight'  the cell's pin count plus, over its pins, the change of their nets' weights since the start: with
+                    weights that start at 1, DREAMPlace's sum of the pin weights (PreconditionOp), so a cell on
+                    heavily weighted nets takes proportionally smaller steps. Until the weights change it is the pin
+                    count, so a placement without weight changes is the same as with 'pins'.
+      'pins'        the pin count, whatever the weights.
+    deterministic: on the GPU, the same placement on every run with the same inputs and seed (float atomics otherwise
+      add in any order, and timing feedback can amplify the difference into a different placement); slower
+      (kernels.deterministic_algorithms). On the CPU every run is the same already."""
+    if deterministic and torch.device(d.device).type == 'cuda':
+        args = {k: v for k, v in locals().items() if k != 'deterministic'}
+        from ..kernels import deterministic_algorithms
+        with deterministic_algorithms():
+            return global_place(**args)
     from ..evaluator import Evaluator
+    if precond not in ('net_weight', 'pins'):
+        raise ValueError("precond: 'net_weight' or 'pins', not %r" % (precond,))
     if movable is None:
         d.require('global_place')
     dev = d.device
@@ -217,6 +248,20 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
     pins = torch.zeros(len(d.flags), device=dev).index_add_(0, d.p_cell, torch.ones_like(d.p_cell, dtype=torch.float32))
     npins = torch.cat([pins[mv], torch.zeros(n_fill, device=dev)])
     area_all = nodes_size.prod(1)
+    # net weights changed by the callback: the wirelength's (ev.wmask, read in place by the CUDA graphs) and the
+    # preconditioner's pin weights ('net_weight': the pin count plus each pin's net weight change since the start)
+    npins0, wmask0 = npins.clone(), wmask.clone()
+    mv_of = torch.full((len(d.flags),), -1, dtype=torch.long, device=dev)
+    mv_of[mv] = torch.arange(n_mov, device=dev)
+    pin_mv = mv_of[cell]                                   # per pin (as cell / net): its movable index, or -1
+    pin_ok = pin_mv >= 0
+
+    def refresh_weights():
+        if not ev.sync_weights() or precond != 'net_weight':
+            return
+        dw = (wmask - wmask0)[net]
+        npins.copy_(npins0.index_add(0, pin_mv[pin_ok], dw[pin_ok]))
+    cb_info = callback is not None and _takes_info(callback)
 
     # initial positions (lower-left): movable cells around the core center, fillers spread uniformly
     ctr = torch.tensor([(cx0 + cx1) / 2, (cy0 + cy1) / 2], device=dev)
@@ -409,7 +454,12 @@ def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins
                 prev_hpwl = None
                 continue
         if callback is not None and it % max(1, int(callback_every)) == 0:
-            if callback(it, full_pos(u[:n_mov]).detach()):
+            args = (it, full_pos(u[:n_mov]).detach())
+            if cb_info:
+                args += ({'hpwl': hp, 'overflow': ov, 'lambda': lam.item(), 'gamma': gamma.item()},)
+            stop = callback(*args)
+            refresh_weights()
+            if stop:
                 hist['stopped_by_callback'] = it
                 if best is None or ov < best[0]:
                     best = (ov, hp, it, u.clone())

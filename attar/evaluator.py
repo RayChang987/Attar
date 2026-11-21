@@ -81,10 +81,12 @@ class Evaluator:
 
     # -- shared state ---------------------------------------------------------------------------------------------------
     def _prepare(self):
-        """Pin offsets from the cell lower-left and the net index; redone when orientations change."""
+        """Pin offsets from the cell lower-left and the net index; redone when orientations change. The net weights
+        follow d.n_weight on every call (sync_weights)."""
         d = self.d
         key = (id(d.pin_off), id(d.size))
         if key == self._key:
+            self.sync_weights()
             return
         self._key = key
         self.cell = d.p_cell
@@ -94,12 +96,29 @@ class Evaluator:
         self.net = d.p_net
         self.E = len(self.deg)
         self.wmask = torch.where(self.deg >= 2, d.n_weight, torch.zeros_like(d.n_weight))
+        self._w_seen = (d.n_weight, d.n_weight._version)
         self.idx4 = d.p_net[:, None].expand(-1, 4).contiguous()
         self.init = torch.full((self.E, 4), -float('inf'), device=self.dev)
         self._fn = self._hpwl_nets
         if self.compile:
             self._fn = torch.compile(self._hpwl_nets, mode='max-autotune-no-cudagraphs')
         self._graph = None
+
+    def sync_weights(self):
+        """The net weights as d.n_weight has them now, into wmask in place (CUDA graphs captured on wmask keep reading
+        it). A change is seen by the tensor's identity and version counter: an in-place write (d.n_weight[k] = w,
+        d.n_weight.mul_(2)) or a new tensor (d.n_weight = w). Returns True if the weights changed."""
+        w = self.d.n_weight
+        seen, ver = self._w_seen
+        if w is seen and w._version == ver:
+            return False
+        if w.shape != self.wmask.shape:              # the netlist changed (nets added): everything again
+            self._key = None
+            self._prepare()
+            return True
+        self.wmask.copy_(torch.where(self.deg >= 2, w, torch.zeros_like(w)))
+        self._w_seen = (w, w._version)
+        return True
 
     def _pins(self, pos):
         return (self.d.pos if pos is None else pos)[self.cell] + self.off

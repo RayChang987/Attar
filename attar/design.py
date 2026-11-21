@@ -9,6 +9,7 @@ The Design holds the state and answers questions about it; the larger jobs live 
 through its methods: status.py (status, summary), export.py (DEF write-back), sizing.py (resize), netlist.py
 (edit: buffers, clones, nets), sta.py
 (timing), routing.py (GROV), viz.py (plot), naive (engines)."""
+import copy
 import difflib
 import gzip
 import json
@@ -563,11 +564,15 @@ class Design:
         return torch.tensor(step, device=dev), torch.as_tensor(off, device=dev, dtype=torch.float32)
 
     # -- wirelength ---------------------------------------------------------------------------------------------------
-    def hpwl(self, pos=None, per_net=False, exclude_clock=False):
-        """Pin-based HPWL in microns (a 0-d tensor; no host sync). pos: evaluate these positions instead."""
+    def hpwl(self, pos=None, per_net=False, exclude_clock=False, weighted=True):
+        """Pin-based HPWL in microns (a 0-d tensor; no host sync). pos: evaluate these positions instead.
+        weighted: each net times its weight (d.n_weight, as the placer sees it); False: the plain wire length, e.g.
+        to report a net-weighted (timing-driven) placement."""
         self.require('hpwl', ignore=('placement',) if pos is not None else ())
         lo, hi = M.net_bbox(self.pin_pos(pos), self.p_net, len(self.n_weight))
-        w = (hi - lo).sum(1) * self.n_weight
+        w = (hi - lo).sum(1)
+        if weighted:
+            w = w * self.n_weight
         mask = self.n_mask & ((self.n_flags & 1) == 0) if exclude_clock else self.n_mask
         w = torch.where(mask, w, torch.zeros_like(w))
         return w if per_net else w.sum()
@@ -619,14 +624,14 @@ class Design:
     def propagate_clocks(self, clocks=None):
         """Time the clocks given (names; default: every clock with a source pin) as propagated, through their clock
         trees, as the SDC command set_propagated_clock (for a design whose clock trees are built: attar.naive.cts).
-        The timer is rebuilt on the next timing()."""
-        import json as _json
-        with open(os.path.join(self.path, 'timing.json')) as f:
-            cl = _json.load(f)['clocks']
-        names = [k for k, c in cl.items() if c.get('sources')] if clocks is None else list(clocks)
-        self._propagated = sorted(set(getattr(self, '_propagated', None) or ()) | set(names))
-        self._netlist_changed('clocks were set to propagated')
-        return self._propagated
+        The timer is rebuilt on the next timing(). Returns the propagated clocks."""
+        return self._clock_mode(clocks, True)
+
+    def ideal_clocks(self, clocks=None):
+        """Time the clocks given (names; default: every clock with a source pin) as ideal (pre-CTS: the clock edge
+        plus its latency at every register, no clock tree), undoing an SDC's set_propagated_clock or propagate_clocks().
+        The timer is rebuilt on the next timing(). Returns the clocks still propagated."""
+        return self._clock_mode(clocks, False)
 
     def drv(self, pos=None):
         """Electrical design rules at pos (default: the current placement): max slew, max capacitance and max fanout
@@ -733,6 +738,163 @@ class Design:
             with gzip.open(os.path.join(self.path, 'names.json.gz'), 'rt') as f:
                 self._names = json.load(f)
         return self._names
+
+    # Index spaces. cells (N): DEF components, then IO pins as zero-size terminals (d.names['cells'], d.pos);
+    # pins (P): CSR over nets by d.n_ptr (d.p_cell, d.p_net; names: pin_names()); nets (E): d.names['nets'];
+    # masters: d.names['masters'] (d.raw['c_master'] per cell, -1 for an IO pin); master pins: every master's pins
+    # concatenated, master m's are d.raw['m_pin_ptr'][m] ... [m + 1] (d.raw['p_mpin'] per pin, -1 for an IO pin), their
+    # names d.names['master_pins'][m] (a list per master: index it with p_mpin - m_pin_ptr[m]); Liberty arcs and timing
+    # arcs: TimingResult.library() and graph().
+    def pin_names(self, pins=None):
+        """Pin names as OpenROAD and OpenSTA print them: 'instance/PIN' for a cell pin, the port name for an IO pin (DEF
+        escapes removed). pins: pin indices (default: every pin). A list of str."""
+        a, n = self.raw, self.names
+        key = (len(a['p_cell']), len(n['cells']))
+        if getattr(self, '_pin_names', None) is None or self._pin_names[0] != key:
+            mp = [x for ps in n['master_pins'] for x in ps]
+            cells = [c.replace('\\', '') for c in n['cells']]
+            self._pin_names = (key, [cells[c] if m < 0 else '%s/%s' % (cells[c], mp[m])
+                                     for c, m in zip(a['p_cell'].tolist(), a['p_mpin'].tolist())], None)
+        names = self._pin_names[1]
+        if pins is None:
+            return list(names)
+        return [names[p] for p in torch.as_tensor(pins).flatten().tolist()]
+
+    def pin_index(self, names):
+        """Pin names -> pin indices (a long tensor on the design's device): 'instance/PIN' or a port, as pin_names()
+        gives them; OpenTimer's 'instance:PIN' is accepted too. Unknown names: KeyError."""
+        self.pin_names([])
+        key, lst, idx = self._pin_names
+        if idx is None:
+            idx = {nm: i for i, nm in enumerate(lst)}
+            self._pin_names = (key, lst, idx)
+        return self._lookup(idx, names, 'pin', lambda s: s[:s.rfind(':')] + '/' + s[s.rfind(':') + 1:] if ':' in s else s)
+
+    def cell_index(self, names):
+        """Instance (or IO pin) names -> cell indices (a long tensor on the design's device). Unknown names: KeyError."""
+        cells = self.names['cells']
+        if getattr(self, '_cell_id', None) is None or len(self._cell_id) < len(cells):
+            self._cell_id = {nm: i for i, nm in enumerate(cells)}
+        if getattr(self, '_cell_id_plain', None) is None or self._cell_id_plain[0] != len(cells):
+            self._cell_id_plain = (len(cells), {nm.replace('\\', ''): i for i, nm in enumerate(cells)})
+        idx = self._cell_id
+        return self._lookup(idx, names, 'cell', lambda s: s, self._cell_id_plain[1])
+
+    def _lookup(self, idx, names, what, alt, plain=None):
+        out = []
+        for s in [names] if isinstance(names, str) else names:
+            i = idx.get(s)
+            if i is None:
+                i = idx.get(alt(s))
+            if i is None and plain is not None:
+                i = plain.get(s.replace('\\', ''))
+            if i is None:
+                near = difflib.get_close_matches(s, list(idx)[:200000], n=1)
+                raise KeyError('%s: no %s %r%s' % (self.manifest.get('design'), what, s,
+                                                     '; did you mean %r?' % near[0] if near else ''))
+            out.append(i)
+        return torch.tensor(out, dtype=torch.long, device=self.device)
+
+    def set_positions(self, names, xy, orient=None):
+        """Place cells given by name (or index): xy (n, 2) their lower-left corners in microns, as d.pos; orient: DEF
+        orientations ('N', 'FS', ...) or ids (attar.io.deffile.ORIENTS), default unchanged. Other cells keep theirs.
+        The placement becomes a fact once every movable cell is placed (it already is when one was loaded)."""
+        c = names.to(self.device) if isinstance(names, torch.Tensor) else (
+            self.cell_index(names) if len(names) and isinstance(names[0], str) else
+            torch.as_tensor(np.asarray(names, np.int64), device=self.device))
+        pos = self._pos.detach().clone()
+        pos[c] = torch.as_tensor(xy, device=self.device, dtype=pos.dtype).reshape(-1, 2)
+        if orient is not None:
+            from .io.deffile import ORIENT_ID
+            o = [ORIENT_ID[x] if isinstance(x, str) else int(x) for x in orient]
+            self.orient = self.orient.clone()
+            self.orient[c] = torch.as_tensor(o, device=self.device, dtype=self.orient.dtype)
+        self._pos = pos
+        self.placed = self.placed.clone()
+        self.placed[c] = True
+        self._placement = bool(self.placed[self.movable].all())
+        self.update_orient()
+        return self
+
+    def read_placement(self, def_path, fixed=False):
+        """Positions and orientations of the cells by name from a DEF's COMPONENTS (e.g. another placer's result:
+        DREAMPlace, OpenROAD, Innovus), in that DEF's units. fixed: also move cells that are fixed here (default:
+        movable cells only). UNPLACED components are skipped. Returns counts: {'placed', 'unplaced_in_def',
+        'not_in_design', 'missing'} ('missing': movable cells the DEF does not place; they keep their positions)."""
+        from .io.deffile import read_def, ORIENT_ID
+        df = read_def(def_path)
+        u = 1.0 / float(df['dbu'] or self.dbu)
+        cells = self.names['cells']
+        if getattr(self, '_cell_id_plain', None) is None or self._cell_id_plain[0] != len(cells):
+            self._cell_id_plain = (len(cells), {nm.replace('\\', ''): i for i, nm in enumerate(cells)})
+        idx = self._cell_id_plain[1]
+        can = (self.movable if not fixed else (self.flags & TERMINAL) == 0).cpu().numpy()
+        sel, xy, ori = [], [], []
+        unplaced = not_in = 0
+        for name, _m, status, x, y, o in df['comps']:
+            i = idx.get(name.replace('\\', ''))
+            if i is None:
+                not_in += 1
+                continue
+            if status == 'UNPLACED':
+                unplaced += 1
+                continue
+            if can[i]:
+                sel.append(i); xy.append((x * u, y * u)); ori.append(ORIENT_ID.get(o, 0))
+        if sel:
+            self.set_positions(sel, xy, ori)
+        got = np.zeros(len(can), bool); got[sel] = True
+        return {'placed': len(sel), 'unplaced_in_def': unplaced, 'not_in_design': not_in,
+                'missing': int((self.movable.cpu().numpy() & ~got).sum())}
+
+    # -- timing settings: timing.json's constraints, editable in memory ------------------------------------------
+    _TIMING_FIXED = ('functions', 'arc_when', 'sources', 'units', 'missing_cells', 'unsupported', 'io_layer')
+
+    def _timing_info(self):
+        """timing.json with this design's in-memory changes (set_timing, propagate_clocks, ideal_clocks)."""
+        with open(os.path.join(self.path, 'timing.json')) as f:
+            info = json.load(f)
+        for k, v in (getattr(self, '_timing_over', None) or {}).items():
+            info[k] = copy.deepcopy(v)
+        return info
+
+    def timing_settings(self):
+        """The constraints the timer reads (a copy to edit and give back to set_timing): timing.json's 'clocks' (per
+        clock: period, waveform, sources, latency, source_latency, uncertainty, transition, propagated), 'input_delay',
+        'output_delay', 'input_transition', 'load', 'clock_groups', 'path_delays', 'pin_latency', 'limits', 'rc', ...
+        (attar.io.sdc's form; pins and ports by cell / pin index), with this design's changes."""
+        self.require('sta')
+        return {k: v for k, v in self._timing_info().items() if k not in self._TIMING_FIXED}
+
+    def set_timing(self, **settings):
+        """Change the timing constraints in memory, e.g. s = d.timing_settings(); s['clocks']['clk']['period'] = 300;
+        d.set_timing(clocks=s['clocks']). Each keyword replaces that entry of timing_settings() whole; the files stay
+        as they are. The timer is rebuilt on the next timing(). reset_timing() goes back to the files."""
+        known = self.timing_settings()
+        bad = sorted(set(settings) - set(known))
+        if bad:
+            raise ValueError('set_timing: unknown settings %s (known: %s)' % (bad, ', '.join(sorted(known))))
+        self._timing_over = dict(getattr(self, '_timing_over', None) or {})
+        self._timing_over.update({k: copy.deepcopy(v) for k, v in settings.items()})
+        self._netlist_changed('the timing settings changed')
+        return self
+
+    def reset_timing(self):
+        """Forget set_timing / propagate_clocks / ideal_clocks: the timing files' constraints again."""
+        self._timing_over = {}
+        self._netlist_changed('the timing settings were reset')
+        return self
+
+    def _clock_mode(self, clocks, propagated):
+        cl = self.timing_settings()['clocks']
+        names = [k for k, c in cl.items() if c.get('sources')] if clocks is None else list(clocks)
+        bad = [k for k in names if k not in cl]
+        if bad:
+            raise KeyError('no clock %s (clocks: %s)' % (bad, ', '.join(cl)))
+        for k in names:
+            cl[k]['propagated'] = propagated
+        self.set_timing(clocks=cl)
+        return sorted(k for k, c in cl.items() if c.get('propagated'))
 
     # -- output: plot, DEF write-back ---------------------------------------------------------------------------
     def plot(self, path=None, **kw):

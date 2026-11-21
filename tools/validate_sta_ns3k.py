@@ -114,10 +114,12 @@ def inputs(src, work):
     return lefs, libs
 
 
-def truth(design, out_dir, lefs, libs, def_path, sdc, rc):
+def truth(design, out_dir, lefs, libs, def_path, sdc, rc, libs_min=()):
+    """OpenSTA's endpoint slacks (cached in out_dir). libs_min: Early libraries, read with -min (libs then with -max)."""
     tsv = os.path.join(out_dir, 'truth.tsv'); meta = os.path.join(out_dir, 'truth.json')
     if not (os.path.exists(tsv) and os.path.exists(meta)):
-        tcl = [DUMP_TCL] + ['read_lef %s' % w(l) for l in lefs] + ['read_liberty %s' % w(l) for l in libs] + [
+        tcl = [DUMP_TCL] + ['read_lef %s' % w(l) for l in lefs] + ['read_liberty %s%s' % ('-max ' if libs_min else '', w(l)) for l in libs] + [
+            'read_liberty -min %s' % w(l) for l in libs_min] + [
             'read_def %s' % w(def_path), 'read_sdc %s' % w(sdc), 'source %s' % w(rc),
             'set t0 [clock milliseconds]', 'estimate_parasitics -placement',
             'set wns [sta::worst_slack -max]', 'set tns [sta::total_negative_slack -max]',

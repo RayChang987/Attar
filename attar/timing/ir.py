@@ -143,14 +143,14 @@ def find_bundle(ir_dir, name):
 _BUNDLES = {}
 
 
-def _load_library(folder):
-    """A cell library, loaded once per process and file version (a library fetched again, attar.fetch(force=True),
-    is read again)."""
+def _load_library(folder, stem='library'):
+    """A cell library (<folder>/<stem>.safetensors), loaded once per process and file version (a library fetched
+    again, attar.fetch(force=True), is read again)."""
     from .library import Library
-    f = os.path.join(folder, 'library.safetensors')
-    key = (os.path.abspath(folder), os.path.getmtime(f) if os.path.exists(f) else None)
+    f = os.path.join(folder, stem + '.safetensors')
+    key = (os.path.abspath(folder), stem, os.path.getmtime(f) if os.path.exists(f) else None)
     if key not in _BUNDLES:
-        _BUNDLES[key] = Library.load(folder)
+        _BUNDLES[key] = Library.load(folder, stem)
     return _BUNDLES[key]
 
 
@@ -185,6 +185,98 @@ def arrays(d, c_master=None):
                                               d.raw['m_pin_ptr'], used)
     d._timing_arrays = (key, (t, functions, arc_when))
     return t, functions, arc_when
+
+
+def chain_min(ir_dir, manifest):
+    """The library chain of the min analysis (hold, earliest arrivals), when the design has one of its own (manifest
+    'library_min': an Early library, e.g. ICCAD 2015's; its local cells in ir_dir/library_min.safetensors), else
+    None."""
+    ref = manifest.get('library_min')
+    if not ref:
+        return None
+    out = []
+    if ref.get('local'):
+        out.append(_load_library(ir_dir, 'library_min'))
+    if ref.get('bundle'):
+        out.append(_load_library(find_bundle(ir_dir, ref['bundle'])))
+    return out
+
+
+ALIGN = ('a_master', 'a_from', 'a_to', 'a_type', 'a_sense', 'a_n')     # what must match arc for arc across libraries
+
+
+def arrays_min(d):
+    """The min analysis's arrays (as arrays(d)) from the design's Early library chain (chain_min), or None when it has
+    none: the timer then uses one library for both analyses. Same masters and arcs as arrays(d), arc for arc."""
+    ch = chain_min(d.path, d.manifest)
+    if ch is None:
+        return None
+    from .library import design_arrays
+    cm = d.raw['c_master']
+    used = set(np.unique(np.asarray(cm)[np.asarray(cm) >= 0]).tolist())
+    key = (len(d.names['masters']), tuple(sorted(used)))
+    hit = getattr(d, '_timing_arrays_min', None)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    t, _, _, _ = design_arrays(ch, d.names['masters'], d.names['master_pins'], d.raw['m_pin_ptr'], used)
+    d._timing_arrays_min = (key, t)
+    return t
+
+
+def attach_min_library(ir_dir, lib_paths, bundle=None):
+    """Give a design (timing attached, with a library chain) an Early library for the min analysis: lib_paths its
+    Liberty files, bundle a shared folder (zoo/libraries/<name>) holding the standard cells among them; the others go
+    to ir_dir/library_min. Additive: the manifest gains 'library_min', nothing else changes (older Attar ignores it).
+    Refused unless every arc lines up with the design's Late library (ALIGN) and the bundle gives the same arrays as
+    the files themselves. The local cells go to ir_dir/library_min.safetensors and .json (flat files, as the zoo
+    release packs a design folder). Returns the manifest entry."""
+    from .library import Library, design_arrays
+    with gzip.open(os.path.join(ir_dir, 'names.json.gz'), 'rt') as f:
+        names = json.load(f)
+    a, _ = st.load(os.path.join(ir_dir, 'core.safetensors'))
+    with open(os.path.join(ir_dir, 'manifest.json')) as f:
+        m = json.load(f)
+    if 'library' not in m:
+        raise ValueError('%s: no library chain (attach timing with a bundle first)' % ir_dir)
+    masters, mpins = names['masters'], names['master_pins']
+    m_ptr = a['m_pin_ptr'].astype(np.int64)
+    used = set(a['c_master'][a['c_master'] >= 0].tolist())
+    late, _, _, _ = design_arrays(chain(ir_dir, m), masters, mpins, m_ptr, used)
+    own = Library.build(lib_paths, source_ref=source_ref, power=False)
+    tens, _, _, _ = design_arrays([own], masters, mpins, m_ptr, used)
+    bad = [k for k in ALIGN if not np.array_equal(late[k], tens[k])]
+    if bad:
+        raise ValueError('%s: the Early library does not line up with the Late one (%s)' % (ir_dir, ', '.join(bad)))
+    for f in ('library_min.safetensors', 'library_min.json'):
+        if os.path.exists(os.path.join(ir_dir, f)):
+            os.remove(os.path.join(ir_dir, f))
+    ref = {'local': [os.path.basename(p) for p in lib_paths]}
+    chain_ = [own]
+    if bundle is not None:
+        B = _load_library(bundle)
+        have = {r.get('sha256') for r in B.meta['sources']['lib']}
+        refs = own.meta['sources']['lib']
+        local = [p for p, r in zip(lib_paths, refs) if r.get('sha256') not in have]
+        L = Library.build(local, source_ref=source_ref, name='local') if local else None
+        chain_ = ([L] if L else []) + [B]
+        ref = {'bundle': B.meta['name'], 'sha256': source_ref(os.path.join(bundle, 'library.safetensors'))['sha256'],
+               'local': [os.path.basename(p) for p in local]}
+    else:
+        L = Library.build(lib_paths, source_ref=source_ref, name='local')
+        chain_ = [L]
+    t2, _, _, _ = design_arrays(chain_, masters, mpins, m_ptr, used)
+    eq = lambda x, y: x.shape == y.shape and bool(np.all((x == y) | (np.isnan(x) & np.isnan(y))  # noqa: E731
+                                                            if x.dtype.kind == 'f' else x == y))
+    if not all(k in t2 and eq(tens[k], t2[k]) for k in tens):
+        raise ValueError('%s: the Early bundle gives other arrays than the Liberty files' % ir_dir)
+    if L is not None:
+        L.save(ir_dir, 'library_min')
+    m['library_min'] = ref
+    mf = os.path.join(ir_dir, 'manifest.json')
+    with open(mf + '.tmp', 'w') as f:                # a new file: a hard link to it elsewhere (zoo_hub) keeps the old
+        json.dump(m, f, indent=1)
+    os.replace(mf + '.tmp', mf)
+    return ref
 
 
 def pin_locations(d):

@@ -38,7 +38,7 @@ def _build():
                       ctypes.c_float, P, P, P, ctypes.c_int]
         f.restype = ctypes.c_int
         f = lib.attar_pd_edges
-        f.argtypes = [ctypes.c_int, P, P, P, ctypes.c_float, P, P, P, ctypes.c_int]
+        f.argtypes = [ctypes.c_int, P, P, P, ctypes.c_float, P, P, P, ctypes.c_int, P]
         f.restype = ctypes.c_int
         _LIB = lib
     except Exception as e:  # noqa: BLE001  (no compiler: the caller falls back)
@@ -73,10 +73,12 @@ def pd_rc(x, y, ptr, drv, cap, rv, r, c, dbu, alpha=0.3, threads=None):
     return elm, pi, length
 
 
-def pd_edges(x, y, ptr, alpha=0.0, threads=None):
+def pd_edges(x, y, ptr, alpha=0.0, threads=None, drv=None):
     """Per net (CSR ptr over points, x / y int): the edges of OpenROAD's Prim-Dijkstra tree over its points
-    (steinerized; alpha 0: a rectilinear minimum spanning tree, steinerized), zero-length ones dropped. Returns
-    (edges (K, 4) int32 as x0, y0, x1, y1, net (K,) int64)."""
+    (steinerized; alpha 0: a rectilinear minimum spanning tree, steinerized), zero-length ones dropped, from the root
+    outward (each edge's first point is nearer the root). drv: per net the root's index within the net (pd_rc's driver:
+    with the same alpha, the same tree as pd_rc's); default its first point. Returns (edges (K, 4) int32 as x0, y0,
+    x1, y1, net (K,) int64)."""
     lib = _build()
     if lib is None:
         raise RuntimeError('attar.timing.steiner_big unavailable: %s' % _ERR)
@@ -86,8 +88,10 @@ def pd_edges(x, y, ptr, alpha=0.0, threads=None):
     cnt = np.zeros(E, np.int64)
     p = lambda a: a.ctypes.data_as(ctypes.c_void_p)  # noqa: E731
     th = int(threads or torch.get_num_threads() or 1)
-    lib.attar_pd_edges(E, p(ptr), p(x), p(y), float(alpha), p(cnt), None, None, th)
+    dv = None if drv is None else np.ascontiguousarray(drv, np.int64)
+    dp = None if dv is None else p(dv)
+    lib.attar_pd_edges(E, p(ptr), p(x), p(y), float(alpha), p(cnt), None, None, th, dp)
     off = np.concatenate([[0], np.cumsum(cnt)]).astype(np.int64)
     out = np.zeros((int(off[-1]), 4), np.int32)
-    lib.attar_pd_edges(E, p(ptr), p(x), p(y), float(alpha), p(cnt), p(off), p(out), th)
+    lib.attar_pd_edges(E, p(ptr), p(x), p(y), float(alpha), p(cnt), p(off), p(out), th, dp)
     return out, np.repeat(np.arange(E, dtype=np.int64), cnt)

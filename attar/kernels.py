@@ -6,7 +6,50 @@ with two non-zeros. So a whole map of overlaps is: scatter 4 corners x 4 entries
 (nx+1, ny+1) array, then one 2D cumulative sum. Integrating a field over rectangles is the transpose: suffix-sum
 the field once, gather the same 16 entries per rectangle. Both are O(#rects + #bins).
 """
+import contextlib
+import warnings
+
 import torch
+
+
+@contextlib.contextmanager
+def deterministic_algorithms():
+    """Run the block with torch.use_deterministic_algorithms on, so that GPU results do not change from run to run
+    (scatter adds sorted; kernels.cumsum a fixed-order scan). cuBLAS products are let through: on one stream they are
+    bitwise reproducible on GPUs of the same model (NVIDIA's cuBLAS documentation, "Results reproducibility"; the
+    CUBLAS_WORKSPACE_CONFIG that PyTorch asks for concerns several streams sharing a workspace). Any other operation
+    without a deterministic implementation is reported in one warning after the block."""
+    prev, prev_w = torch.are_deterministic_algorithms_enabled(), torch.is_deterministic_algorithms_warn_only_enabled()
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            yield
+    finally:
+        torch.use_deterministic_algorithms(prev, warn_only=prev_w)
+    other = set()
+    for w in caught:
+        m = str(w.message)
+        if 'does not have a deterministic implementation' in m or 'this operation is not deterministic' in m:
+            if 'CuBLAS' not in m:
+                other.add(m.split(',')[0])
+        else:
+            warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+    if other:
+        warnings.warn('attar: not deterministic in this run: %s' % '; '.join(sorted(other)), stacklevel=3)
+
+
+def cumsum(x, dim):
+    """x.cumsum(dim), reproducible on the GPU when torch.use_deterministic_algorithms is on (CUDA's cumsum adds in no
+    fixed order): then a Hillis-Steele scan, log2(n) steps of elementwise adds in a fixed order."""
+    if not (x.is_cuda and torch.are_deterministic_algorithms_enabled()):
+        return x.cumsum(dim)
+    x = x.movedim(dim, -1)
+    n, k = x.shape[-1], 1
+    while k < n:
+        x = torch.cat([x[..., :k], x[..., k:] + x[..., :-k]], -1)
+        k *= 2
+    return x.movedim(-1, dim)
 
 
 class Grid:
@@ -65,14 +108,14 @@ class Grid:
         idx, w = c
         D = torch.zeros((self.nx + 1) * (self.ny + 1), device=self.device, dtype=w.dtype)
         D.index_add_(0, idx.reshape(-1), (w * value[:, None]).reshape(-1))
-        return D.view(self.nx + 1, self.ny + 1).cumsum(0).cumsum(1)[:self.nx, :self.ny]
+        return cumsum(cumsum(D.view(self.nx + 1, self.ny + 1), 0), 1)[:self.nx, :self.ny]
 
     def integrate_c(self, fields, c):
         """fields (K, nx, ny) -> (N, K) integrals of each field over each rectangle."""
         idx, w = c
         K = fields.shape[0]
         R = torch.zeros(K, self.nx + 1, self.ny + 1, device=self.device, dtype=fields.dtype)
-        R[:, :self.nx, :self.ny] = fields.flip(1).flip(2).cumsum(1).cumsum(2).flip(1).flip(2)
+        R[:, :self.nx, :self.ny] = cumsum(cumsum(fields.flip(1).flip(2), 1), 2).flip(1).flip(2)
         g = R.view(K, -1)[:, idx]                       # (K, N, 16)
         return (g * w[None]).sum(2).T
 
@@ -95,13 +138,13 @@ class Grid:
             m = D.view(self.nx + 1, W).cumsum(0).cumsum(1)[:self.nx, :self.ny].to(self.device)
         else:
             D.index_add_(0, torch.cat(idx), torch.cat(val))
-            m = D.view(self.nx + 1, W).cumsum(0).cumsum(1)[:self.nx, :self.ny]
+            m = cumsum(cumsum(D.view(self.nx + 1, W), 0), 1)[:self.nx, :self.ny]
         return m if out is None else out.add_(m)
 
     def integrate(self, field, x0, y0, x1, y1):
         """sum_ij overlap_area(rect_r, bin_ij) * field[i, j] for every rectangle r."""
         R = torch.zeros(self.nx + 1, self.ny + 1, device=self.device, dtype=field.dtype)
-        R[:self.nx, :self.ny] = field.flip(0).flip(1).cumsum(0).cumsum(1).flip(0).flip(1)   # suffix sums
+        R[:self.nx, :self.ny] = cumsum(cumsum(field.flip(0).flip(1), 0), 1).flip(0).flip(1)   # suffix sums
         Rf = R.view(-1); W = self.ny + 1
         X, Y = self._corners(x0, y0, x1, y1)
         tot = torch.zeros_like(x0)

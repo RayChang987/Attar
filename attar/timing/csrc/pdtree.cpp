@@ -400,10 +400,11 @@ int attar_pd_rc(int n_nets, const int64_t* ptr, const int64_t* drv, const int32_
 }
 
 // Per net (CSR ptr over points): the Prim-Dijkstra tree's edges (steinerized, alpha) between the points and its
-// Steiner points, as (x0, y0, x1, y1), from the first point outward. Pass 1 (out == nullptr): counts per net into
-// cnt; pass 2: writes the edges at the offsets the caller made from cnt. Zero-length edges are dropped.
+// Steiner points, as (x0, y0, x1, y1), from the root outward: the net's point drv[k] (attar_pd_rc's driver: the same
+// tree), or its first point when drv is null. Pass 1 (out == nullptr): counts per net into cnt; pass 2: writes the
+// edges at the offsets the caller made from cnt. Zero-length edges are dropped.
 int attar_pd_edges(int n_nets, const int64_t* ptr, const int32_t* x, const int32_t* y, float alpha, int64_t* cnt,
-                   const int64_t* off, int32_t* out, int threads) {
+                   const int64_t* off, int32_t* out, int threads, const int64_t* drv) {
 #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
   for (int k = 0; k < n_nets; ++k) {
     const int64_t b = ptr[k];
@@ -416,9 +417,10 @@ int attar_pd_edges(int n_nets, const int64_t* ptr, const int32_t* x, const int32
     });
     vector<int> X(n), Y(n);
     int root = 0;
+    const int64_t want = drv ? drv[k] : 0;
     for (int i = 0; i < n; ++i) {
       X[i] = x[b + ord[i]]; Y[i] = y[b + ord[i]];
-      if (ord[i] == 0) root = i;
+      if (ord[i] == want) root = i;
     }
     Graph g;
     vector<int> PX, PY;

@@ -225,14 +225,12 @@ class Edit:
         """Nets the edit leaves alone: those the source marks USE CLOCK and those driven by a clock source port."""
         if self._clk is not None:
             return self._clk
-        import json
         import os
         d = self.d
         out = set(np.nonzero(d.raw['n_flags'] & N_CLOCK)[0].tolist())
         tj = os.path.join(d.path, 'timing.json')
         if os.path.exists(tj):
-            with open(tj) as f:
-                clocks = json.load(f).get('clocks', {})
+            clocks = d._timing_info().get('clocks', {})     # with Design.set_timing's changes
             src = {int(c) for ck in clocks.values() for c in ck.get('sources', [])}
             pc = d.raw['p_cell']
             out |= {int(d.p_net[p]) for p in np.nonzero(np.isin(pc, list(src)))[0]}

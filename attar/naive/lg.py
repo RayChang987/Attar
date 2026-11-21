@@ -165,7 +165,7 @@ def _solve_class(gx, gy, w, NB, band_y, band_h, roff, seg_row, s0, s1, sw, col_c
 
 
 def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, verbose=True, snapshot='naive_lg',
-             macro_halo=0.0, cells=None, incremental=None):
+             macro_halo=0.0, cells=None, incremental=None, method=None):
     """Legalize the movable standard cells of d in place (d.pos, d.orient). Returns statistics.
 
     Two modes (stats['mode']):
@@ -179,8 +179,24 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
     cells: movable cells to legalize again even if legal (bool mask over the cells or indices), e.g. the cells an
     optimizer moved or resized; giving it selects the incremental mode unless incremental=False.
     incremental: None (default) chooses: incremental when `cells` is given or when at least half of the movable cells
-    are legal where they stand (a placement to repair, not to make); True / False force a mode."""
+    are legal where they stand (a placement to repair, not to make); True / False force a mode.
+    method (global mode): how each height class goes onto its bands before fill, improve and the PDN repair:
+      'abacus'   (default) Abacus (Spindler et al., ISPD 2008; attar/naive/csrc/abacus.cpp, on the host): cells in order of x, each
+                 to the band and segment where its own displacement is least, segments packed by cluster collapse.
+                 Cells that global placement left on fixed macros go to the nearest free space rather than wherever
+                 their column has room. Needs g++ (built once into ~/.cache/attar); without it the default falls
+                 back to 'columns' with a warning.
+      'columns'  column balancing, segment spill, isotonic packing (the module docstring): batched on the device; the
+                 default before 1.0.5. col_cells, max_rounds and window apply to it only."""
     d.require('legalize')
+    if method is None:
+        from .abacus import available, error
+        method = 'abacus' if available() else 'columns'
+        if method == 'columns':
+            import warnings
+            warnings.warn("naive.legalize: Abacus needs g++ (%s); using method='columns'" % error(), stacklevel=2)
+    if method not in ('columns', 'abacus'):
+        raise ValueError("method: 'columns' or 'abacus', not %r" % (method,))
     t0 = time.time()
     dev = d.device
     hb, ys, rx0, rx1, sw, rorient = _base_rows(d)
@@ -217,6 +233,7 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
             incremental = cells is not None or int(move.sum()) * 2 <= len(mv)
     incremental = bool(incremental)
     stats['mode'] = 'incremental' if incremental else 'global'
+    stats['method'] = method
     if not incremental:
         move[:] = True
     stats['moved_cells'] = int(move.sum())
@@ -291,8 +308,12 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
         gx = ((pos0[cls, 0] - gx0) / sw).double()
         wsites = (size[cls, 0] / sw).ceil().double()
         st = {}
-        band, xb, unfit = _solve_class(gx, pos0[cls, 1], wsites, NB, band_y, hb * k, roff_band, seg_row, s0, s1, sw,
-                                       col_cells, max_rounds, window, dev, st)
+        if method == 'abacus':
+            from .abacus import solve_class
+            band, xb, unfit = solve_class(gx, pos0[cls, 1].double(), wsites, band_y, roff_band, seg_row, s0, s1, sw)
+        else:
+            band, xb, unfit = _solve_class(gx, pos0[cls, 1], wsites, NB, band_y, hb * k, roff_band, seg_row, s0, s1,
+                                           sw, col_cells, max_rounds, window, dev, st)
         pos[cls, 0] = (rx0[band_rows[band]] + xb * sw).float()
         pos[cls, 1] = band_y[band]
         placed[sel] = ~unfit

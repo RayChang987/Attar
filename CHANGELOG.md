@@ -1,5 +1,118 @@
 # Changelog
 
+## Unreleased (branch gp-hooks-timing-api)
+
+Placement
+- Net weights changed during global placement reach the placer. The callback documented in 1.0.4 ("update
+  d.n_weight in place, the wirelength reads it at the next evaluation") had no effect: the wirelength read a copy of the
+  weights made at the start. Now the Evaluator follows `d.n_weight` (in place or a new tensor) and
+  `naive.global_place` takes the callback's changes from the next evaluation, CUDA graphs included. On the CPU its
+  trajectory equals, bit for bit, the patched copy P11 (attar_DAC2026) had to keep for net-weighted timing-driven
+  placement.
+- `global_place(..., precond='net_weight')` (default): the preconditioner adds, over a cell's pins, the change of
+  their nets' weights since the start (DREAMPlace's sum of pin weights when weights start at 1), so cells on heavily
+  weighted nets take proportionally smaller steps; `'pins'` keeps the pin count. A placement whose weights do not
+  change is the same as before (bit-identical on the CPU).
+- `callback(it, pos, info)`: a callback taking a third argument gets the iteration's `hpwl` (net-weighted, what the
+  schedule follows), `overflow`, `lambda` and `gamma`.
+- `d.hpwl(weighted=False)`: the plain wire length of a net-weighted placement.
+- `naive.legalize` uses Abacus (Spindler et al., ISPD 2008) by default in the global mode (`method='abacus'`), in C++
+  (`attar/naive/csrc/abacus.cpp`, built with g++ on first use; without g++ it falls back to `'columns'`, the earlier
+  default, with a warning): per height class, cells in order of x go to the band and segment where their own
+  displacement is least, segments packed by cluster collapse; rails, fill, improve and the PDN repair as before.
+  Cells global placement leaves on fixed macros go to the nearest free space instead of wherever their column has
+  room (P11: 1-3 mm moves on superblue18). Against `'columns'` on the same global placements, all legal:
+
+  | design | HPWL after LG (columns -> abacus) | max displacement (um) | other |
+  |---|---|---|---|
+  | aes | +5.98% -> +4.78% | | mean 0.224 -> 0.192 um, LG 2.6 -> 1.9 s |
+  | jpeg | +13.66% -> +10.44% | | LG 13.7 -> 6.9 s |
+  | ibex | +9.52% -> +8.14% | | |
+  | cva6 | +11.25% -> +7.83% | 46.6 -> 10.4 (cells on macros) | TNS -8.54e4 -> -7.96e4 |
+  | ariane | +21.8% -> +9.1% | | WNS -815 -> -347, TNS -6.6e5 -> -2.7e5 |
+  | dynamic_node | +33.2% -> +14.75% | 96 -> 5.5 | |
+  | ethmac | | 192 -> 3.8 | |
+  | mgc_fft_a | +25.8% -> +11.8% | 699 -> 120 | |
+  | mgc_des_perf_a | | 551 -> 49 | |
+  | mgc_matrix_mult_b | +12.7% -> +8.4% | 783 -> 153 | LG 54 -> 79 s (host under load) |
+  | ac97_top | lower | | WNS -294 -> -345 (the one worse result) |
+  | superblue18 (745k cells, 653 macros) | +10.13% -> +2.74% | 3062 -> 317 | cells on macros mean 161 -> 16.7 um; WNS -24.1 -> -12.3 ns, TNS -7.82e6 -> -6.92e6; LG 393 -> 189 s |
+
+  `d.place()` and `naive.flow` results change accordingly.
+- `naive.global_place(d, deterministic=True)`: on the GPU, the same placement on every run with the same inputs and
+  seed (under `torch.use_deterministic_algorithms`: scatter adds sorted, and `attar.kernels.cumsum`, a fixed-order
+  scan, for the density map's prefix sums, which CUDA's cumsum adds in any order; cuBLAS products, one stream, are
+  reproducible on the same GPU model). Slower: aes 2.9 -> 3.9 s, jpeg 3.8 -> 14 s on an RTX 3080 Ti. Timing feedback
+  amplifies the run-to-run noise of the default mode (one of four DATE'25-weighted superblue18 runs ended at TNS
+  -8.3e6 against -5.4e6), so compare methods with it.
+
+Timing
+- Early libraries: the min analysis (hold checks, earliest arrivals, the min side of propagated clocks) reads a
+  design's own Early Liberty where it has one, as OpenSTA's `read_liberty -min`: manifest `library_min`, the cells in
+  `<design>/library_min.safetensors` (`attar.timing.ir.attach_min_library`; additive: older Attar ignores it). The
+  zoo's 8 ICCAD 2015 superblue designs have theirs now. The timer stacks the Early tables after the Late ones
+  (`TimingResult.library().min_offset`); its min lanes, on the CPU, the GPU's fused stage kernel and the per-op
+  path, read Liberty arc a at a + offset. Against OpenSTA with `-max` Late and `-min` Early at the ICCAD 2015
+  placements, hold slack MAE per endpoint (Late only before): superblue1 0.20 ps (67.9), superblue3 0.13 (52.1),
+  superblue4 0.11 (38.5), superblue5 0.15 (63.7), superblue7 0.16 (54.9), superblue10 0.21 (77.2), superblue16
+  0.17 (65.2), superblue18 0.18 (64.3); WHS 8.4 ps as OpenSTA on all 8 (14.9 before); setup unchanged.
+  Designs without an Early library time as before (bit-identical setup and hold slacks, CPU and GPU).
+- The timer's data for research code, read only (copies): `TimingResult.graph()` (levels, net / cell / launch / check
+  arcs with their Liberty arcs, types and senses, which arcs the search follows, clock networks), `library()` (the
+  NLDM tables per Liberty arc with their master and pins, every pin's rise / fall max / min capacitance, the
+  timer's own table lookup), `arrivals()` (latest / earliest arrival and slew per pin and transition, driver loads),
+  `parasitics()` (per net the wire capacitance and the driver's pi model, per net arc the Elmore delay, the pin
+  locations the parasitics used) and `trees(nets=None)` (the estimate-parasitics Steiner trees, rooted at the
+  driver: exactly the trees the timer reduced, their length times the unit capacitance is its wire capacitance).
+  Code that read `d._timer` internals (P05's differentiable timer, GRC-TDGR's arc gradients) can use these.
+- `attar.timing.steiner_big.pd_edges(..., drv=)`: root each tree at a given point (pd_rc's driver: the same tree).
+- More of the timer's data, so differentiable timers need none of its private fields: `graph()` adds the launches
+  under ideal clocks (arc, output transition, tag, launch time, clock slew), the launch tags (clock, edge, time), the
+  net and cell arcs disabled to break combinational loops, and the clocked latch D -> Q arcs with their enables;
+  `arrivals(per_tag=True)` keeps arrivals per launch tag; `endpoint_required()` gives every setup check's required
+  time and arrival per tag (its slack before CRPR; per pin their minimum is the setup slack with ideal clocks). Every
+  bundle carries `version` (`attar.timing.sta.TIMING_DATA_VERSION`, 1).
+- Pin clock latencies on ideal clocks (`set_clock_latency` on register clock pins of a clock that is not
+  `set_propagated_clock`: pre-CTS timing of an SDC with useful-skew pin latencies, e.g. the ICCAD 2025 SDCs without
+  their `set_propagated_clock`) are modeled, as OpenSTA does: the pin's latency replaces the clock's at launch and at
+  capture. Before, they were ignored with a warning. Only pin latencies given for both transitions and both min / max
+  (the common form); others are still listed as not modeled. Checked against OpenROAD on the ICCAD 2025 IWLS designs
+  (in the LATTE reproduction).
+- `TimingResult.clock_arrivals()` gave -inf / inf at the register clock pins of ideal clocks. It now gives what the
+  timer uses there: the clock edge plus its latency, and the clock's transition.
+- Known gaps are reported: `TimingResult.limitations` lists what makes a timing differ from OpenSTA's on the
+  design's constraints (SDC commands not applied, pin clock latencies not modeled, nets with a lumped wire model)
+  and a benchmark's Early library not read (ICCAD 2015: hold on Late delays). `summary()['exact']` is False when
+  there is one, and `report()` prints them. Before, the first three were a warning only.
+- Timing constraints editable in memory: `d.timing_settings()` (a copy of `timing.json`'s constraints),
+  `d.set_timing(clocks=..., input_delay=..., ...)`, `d.reset_timing()`, and `d.ideal_clocks()`, the reverse of
+  `d.propagate_clocks()`. The files are not touched; the timer is rebuilt on the next `timing()`.
+- `report()` names the parasitics (it said "placement estimate" for global-routing parasitics too).
+
+Design
+- Names: `d.pin_names(pins=None)` ('instance/PIN', ports by name, as OpenSTA prints them), `d.pin_index(names)`
+  (OpenTimer's 'instance:PIN' too), `d.cell_index(names)`, `TimingResult.pin_names(pins)`. The index spaces (cells,
+  pins, nets, masters, master pins, Liberty and timing arcs) are described in docs/api.md.
+- Placements from other tools: `d.read_placement(def_path, fixed=False)` takes positions and orientations by
+  component name from a DEF (any DBU); `d.set_positions(names, xy, orient=None)` sets them directly.
+
+Examples
+- Four Colab notebooks in `examples/colab/`, listed in the README: the timing-driven placement demo (moved from
+  `examples/`), LATTE (DAC 2026 timing-driven detailed placement), and the DAC 2026 hybrid net-pin weighting with its
+  DATE 2025 baseline on superblue18.
+
+Docs
+- docs/benchmarks.md: ICCAD 2015 timing against published (OpenTimer) numbers, and the GPU memory a superblue run
+  needs. docs/features.md: the known gaps of the global placer against DREAMPlace and of the legalizer on cells left
+  on macros. README: keeping the compiled kernels across Colab runtimes (`TRITON_CACHE_DIR`,
+  `TORCHINDUCTOR_CACHE_DIR`), also said by the first-compile notice.
+
+Routing
+- The global router failed with an IndexError on gcell grids wider than tall (`after_fp/iccad2025/des3`, 35 x 34):
+  pattern routing computes both L / Z costs of every branch and keeps one, and the discarded cost indexed the other
+  axis with the kept pattern's bend. Each cost now clamps the bend into its own axis; routes on grids that worked
+  before are unchanged (bit-identical on gcd and aes).
+
 ## 1.0.4
 
 **Upgrading.** The zoo's timing data changed: `after_fp/iccad2025` was distilled again (signal pins on DEF power /

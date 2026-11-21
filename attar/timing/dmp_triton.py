@@ -463,18 +463,20 @@ def dmp_load_kernel(state_p, elm_p, rise_p, lthr_p, wire_o, slew_o, N, RIT: tl.c
 
 @triton.jit(do_not_specialize=['N', 'NT', 'K'])
 def stage_gate_kernel(ix1, ix2, val, nn, tthr, lib_p, fi_p, t_p, orf_p, net_p, t0_p, tag_p, s0_p, arr_p, pi_p,
-                      amax, amin, smax, smin, st_o, N,
+                      amax, amin, smax, smin, st_o, N, LMIN,
                       NT, K, NIT: tl.constexpr, RIT: tl.constexpr, BLOCK: tl.constexpr, MODE: tl.constexpr):
     """One level's arcs, 2N lanes (max analysis, then min): DMP gate delay and driver slew, the driver pin's arrivals
     (per tag) and slews by float atomics, and per lane the row its loads need (STATE + delay, arr) in st_o.
     fi < 0: a launch arc (arrival t0 into tag at its clock pin, slew s0: the clock's transition). arr bit 0 clear: an arc
     of delay calculation only (its slews count, as every arc's in OpenSTA's graph delay calculation; no arrivals);
-    bit 1: an arc that does not annotate its loads (a latch D -> Q arc, GraphDelayCalc::annotateDelaysSlews)."""
+    bit 1: an arc that does not annotate its loads (a latch D -> Q arc, GraphDelayCalc::annotateDelaysSlews).
+    LMIN: the min lanes read Liberty arc lib + LMIN (an Early library's tables after the Late ones; 0: one library)."""
     l = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = l < 2 * N
     mn = l >= N
     c = tl.where(mn, l - N, l)
     lib = tl.load(lib_p + c, mask=mask, other=0)
+    lib = lib + tl.where(mn, LMIN, 0)
     fi = tl.load(fi_p + c, mask=mask, other=-1)
     t = tl.load(t_p + c, mask=mask, other=0)
     orf = tl.load(orf_p + c, mask=mask, other=0)
@@ -589,11 +591,12 @@ def load(state, elmore, rise, lthr):
     return w, s
 
 
-def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin, precision='double'):
+def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin, precision='double', lmin=0):
     """One level of the timer on the GPU: stage_gate_kernel then stage_load_kernel. tables: (ix1, ix2, val, n32, thr);
     lev: the level's static arrays (lib, fi, t, orf, net, t0, tag, ea, en, s0, arr); precision: see MODES. Returns the
     gate delay of every arc (N,) and wire delay of every load (M,), float32, of the max analysis then of the min:
-    (dmax, wmax, dmin, wmin), for required times and CRPR."""
+    (dmax, wmax, dmin, wmin), for required times and CRPR. lmin: where the min analysis's tables start (Liberty arc
+    a of the min lanes is a + lmin)."""
     mode = MODES[precision]
     ix1, ix2, val, n32, thr = tables
     lib, fi, t, orf, net, t0, tag, ea, en, s0, arr = lev
@@ -605,7 +608,7 @@ def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin, precision='do
     NT = amax.shape[1]
     st = torch.empty(2 * N, 20, device=amax.device, dtype=torch.float64 if mode == 2 else torch.float32)
     stage_gate_kernel[(triton.cdiv(2 * N, BLOCK),)](ix1, ix2, val, n32, thr, lib, fi, t, orf, net, t0, tag, s0, arr, pi,
-                                                    amax, amin, smax, smin, st, N,
+                                                    amax, amin, smax, smin, st, N, int(lmin),
                                                     NT=NT, K=ix1.shape[-1], NIT=NEWTON_MAX_ITER, RIT=ROOT_N, BLOCK=BLOCK,
                                                     MODE=mode)
     if M:

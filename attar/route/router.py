@@ -160,12 +160,14 @@ class _Grid2D:
 
     def path(self, seg, typ, mid, over=False, via=0.0):
         ax, ay, bx, by = seg.unbind(1)
-        m = mid
-        c0 = self.h(ay, ax, m, over) + self.v(m, ay, by, over) + self.h(by, m, bx, over)
-        c1 = self.v(ax, ay, m, over) + self.h(m, ax, bx, over) + self.v(bx, m, by, over)
+        # mid is a column for type 0 and a row for type 1; both costs are computed and one is kept, so each formula
+        # clamps mid into its own axis (the discarded one would otherwise index past the grid when nx != ny)
+        m0, m1 = mid.clamp(max=self.nx - 1), mid.clamp(max=self.ny - 1)
+        c0 = self.h(ay, ax, m0, over) + self.v(m0, ay, by, over) + self.h(by, m0, bx, over)
+        c1 = self.v(ax, ay, m1, over) + self.h(m1, ax, bx, over) + self.v(bx, m1, by, over)
         if via:
-            c0 = c0 + via * (ay != by) * ((m != ax).float() + (m != bx).float())
-            c1 = c1 + via * (ax != bx) * ((m != ay).float() + (m != by).float())
+            c0 = c0 + via * (ay != by) * ((m0 != ax).float() + (m0 != bx).float())
+            c1 = c1 + via * (ax != bx) * ((m1 != ay).float() + (m1 != by).float())
         return torch.where(typ == 0, c0, c1)
 
     def best(self, seg, margin, via, chunk=1 << 22):
