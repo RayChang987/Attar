@@ -563,11 +563,15 @@ class Design:
         return torch.tensor(step, device=dev), torch.as_tensor(off, device=dev, dtype=torch.float32)
 
     # -- wirelength ---------------------------------------------------------------------------------------------------
-    def hpwl(self, pos=None, per_net=False, exclude_clock=False):
-        """Pin-based HPWL in microns (a 0-d tensor; no host sync). pos: evaluate these positions instead."""
+    def hpwl(self, pos=None, per_net=False, exclude_clock=False, weighted=True):
+        """Pin-based HPWL in microns (a 0-d tensor; no host sync). pos: evaluate these positions instead.
+        weighted: each net times its weight (d.n_weight, as the placer sees it); False: the plain wire length, e.g.
+        to report a net-weighted (timing-driven) placement."""
         self.require('hpwl', ignore=('placement',) if pos is not None else ())
         lo, hi = M.net_bbox(self.pin_pos(pos), self.p_net, len(self.n_weight))
-        w = (hi - lo).sum(1) * self.n_weight
+        w = (hi - lo).sum(1)
+        if weighted:
+            w = w * self.n_weight
         mask = self.n_mask & ((self.n_flags & 1) == 0) if exclude_clock else self.n_mask
         w = torch.where(mask, w, torch.zeros_like(w))
         return w if per_net else w.sum()

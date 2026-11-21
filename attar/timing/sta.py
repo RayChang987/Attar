@@ -1790,6 +1790,7 @@ class Timer:
         crpr: with propagated clocks, remove clock reconvergence pessimism from register checks (OpenSTA's default,
         attar.timing.crpr; after the replay, eager); False: as OpenSTA's sta::set_crpr_enabled 0."""
         pos = self.d.pos if pos is None else pos
+        self._last_pos = pos.detach().clone()          # the run's placement (TimingResult.parasitics / trees)
         self._sync_pins()
         if self.parasitics == 'global_routing':
             self._gr_update()
@@ -1835,6 +1836,7 @@ class Timer:
         if elm is None:
             elm = torch.zeros(len(self.n_fr), 4, device=dev)
         self._elm = elm                                       # the run's wire delays, for required()
+        self._cw = cw                                         # the run's wire capacitance per net (parasitics())
         # loads per driver pin (net wire cap + sink pin caps), max and min pin capacitances
         net_load = torch.zeros(len(self.d.n_ptr) - 1, 2, device=dev)
         net_load.index_add_(0, self.n_net, self.pin_cap[self.n_to])
@@ -2163,9 +2165,29 @@ class Timer:
         return prev, wire
 
 
+class TimingData:
+    """A read-only bundle of the timer's data (TimingResult.graph, library, arrivals, parasitics): attributes, copies
+    of the timer's tensors (changing them changes nothing in the timer)."""
+
+    def __init__(self, what, **fields):
+        self._what = what
+        self.__dict__.update(fields)
+
+    def __repr__(self):
+        def show(v):
+            if torch.is_tensor(v):
+                return '%s %s' % (tuple(v.shape), str(v.dtype).replace('torch.', ''))
+            if isinstance(v, (list, tuple)):
+                return '%d items' % len(v)
+            return type(v).__name__ if callable(v) else repr(v)
+        return '<%s: %s>' % (self._what, ', '.join('%s %s' % (k, show(v)) for k, v in self.__dict__.items()
+                                                   if not k.startswith('_')))
+
+
 class TimingResult:
     """Per-endpoint setup / hold slack (ps; inf where not constrained) and their summaries; per-pin and per-net
-    setup slack on demand (pin_slack, net_slack)."""
+    setup slack on demand (pin_slack, net_slack); the timer's graph, library tables, arrivals and wire parasitics
+    (graph, library, arrivals, parasitics, trees), read only, for research code built on the timer."""
 
     def __init__(self, timer, setup, hold):
         self.timer = timer
@@ -2331,6 +2353,118 @@ class TimingResult:
             cur = torch.where(live, par[cur.clamp(min=0)].long(), cur)
         rows = nodes // NT
         return CriticalPaths(self, ep, sl, ptr, rows, A.reshape(-1)[nodes], wire[rows], nodes % NT)
+
+    # -- the timer's data, read only ---------------------------------------------------------------------------------
+    def graph(self):
+        """The timing graph (copies on the timer's device; pins are the design's pin indices, nets its nets). Fields:
+          level (P,)              each pin's level over net and combinational arcs (Kahn; the search runs level by level)
+          net_driver (E,)         each net's driver pin, -1 where it has none (or several)
+          n_from, n_to, n_net     net arcs (A_n,): driver pin -> sink pin, and the net
+          c_from, c_to, c_lib     cell arcs (A_c,) of the delay calculation: combinational, and the launch arcs of
+                                  propagated clocks; c_lib the arc's Liberty arc (library())
+          c_type, c_sense         its timing type and the sense the search uses (ir.T_*, ir.S_*; a constant input
+                                  narrows the Liberty sense, c_sense_lib)
+          c_searched              False where the arc only sets slews (ideal clock network, constants, a data pin into
+                                  a propagated clock network, latch D -> Q)
+          l_from, l_to, l_lib, l_type, l_sense   launch arcs under ideal clocks: register clock pin -> output
+          k_from, k_to, k_lib, k_type            setup / hold checks: register clock pin -> data pin
+          clock_of (P,)           the clock (index into clock_names) whose network reaches the pin, -1 none
+          clock_names, endpoints  the clocks; this result's constrained setup endpoints (pins)"""
+        T = self.timer
+        dev = T.dev
+        t = lambda x: torch.as_tensor(np.asarray(x), device=dev).clone()  # noqa: E731
+        return TimingData('TimingGraph', level=t(T.level), net_driver=t(T.net_driver),
+                          n_from=T.n_fr.clone(), n_to=T.n_to.clone(), n_net=T.n_net.clone(),
+                          c_from=T.c_fr.clone(), c_to=T.c_to.clone(), c_lib=T.c_lib.clone(), c_type=T.c_type.clone(),
+                          c_sense=T.c_sense.clone(), c_sense_lib=T.c_sense_lib.clone(), c_searched=T.c_arr.clone(),
+                          l_from=T.l_fr.clone(), l_to=T.l_to.clone(), l_lib=T.l_lib.clone(), l_type=T.l_type.clone(),
+                          l_sense=T.l_sense.clone(),
+                          k_from=T.k_fr.clone(), k_to=T.k_to.clone(), k_lib=T.k_lib.clone(), k_type=T.k_type.clone(),
+                          clock_of=t(T.clk_of), clock_names=list(T.clock_names), endpoints=self.endpoints.clone())
+
+    def library(self):
+        """The cell library the timer looks up (copies). Per Liberty arc a (graph()'s c_lib, l_lib, k_lib):
+          master (A,)             the arc's master (d.names['masters'])
+          from_pin, to_pin (A,)   its related and output (or constrained) pin, as master pin indices (d.raw['m_pin_ptr']
+                                  ranges; names in d.names['master_pins'])
+          type, sense (A,)        ir.T_*, ir.S_*
+          ix1, ix2 (A, 4, K), val (A, 4, K, K), n (A, 4, 2)
+                                  NLDM tables padded to K x K, n the real sizes (0: no table); slots of a delay arc
+                                  cell_rise, cell_fall, rise_transition, fall_transition on (input slew ps, load fF),
+                                  of a check rise_constraint, fall_constraint on (constrained, related pin transition);
+                                  values in ps (ir.DELAY_SLOTS, ir.CHECK_SLOTS)
+          pin_cap (P, 4)          every pin's capacitance (fF): rise and fall for the max analysis, rise and fall for
+                                  the min analysis (set_load for output ports)
+          lookup(a, slot, x, y)   the timer's lookup of arcs a (tensor) in slot at x, y (bilinear, linear
+                                  extrapolation outside, OpenSTA's rule)"""
+        T = self.timer
+        tt, _, _ = timing_mod.arrays(T.d)
+        dev = T.dev
+        t = lambda x: torch.as_tensor(np.asarray(x).astype(np.int64), device=dev)  # noqa: E731
+        ix1, ix2, val, tn = T.t_ix1.clone(), T.t_ix2.clone(), T.t_val.clone(), T.t_n.clone()
+
+        def lookup(a, slot, x, y):
+            a = torch.as_tensor(a, device=dev, dtype=torch.long)
+            return nldm(ix1[a, slot], ix2[a, slot], val[a, slot], tn[a, slot], x, y)
+        return TimingData('TimingLibrary', master=t(tt['a_master']), from_pin=t(tt['a_from']), to_pin=t(tt['a_to']),
+                          type=t(tt['a_type']), sense=t(tt['a_sense']), ix1=ix1, ix2=ix2, val=val, n=tn,
+                          pin_cap=torch.cat([T.pin_cap, T.pin_cap_min], 1).clone(), lookup=lookup)
+
+    def arrivals(self):
+        """The arrival times and slews of the last run of this result's timer, as path() (copies, ps; per pin,
+        transition rise / fall):
+          max, min (P, 2)         the latest / earliest arrival over the launching clocks (-inf / inf: none arrives)
+          slew_max, slew_min (P, 2)
+          load, load_min (P, 2)   a driver pin's total load (wire and sink pins, fF; max / min pin capacitances),
+                                  0 on other pins"""
+        T = self.timer
+        return TimingData('Arrivals', max=T.amax.amax(2).clone(), min=T.amin.amin(2).clone(), slew_max=T.smax.clone(),
+                          slew_min=T.smin.clone(), load=T.load.clone(), load_min=T.load_min.clone())
+
+    def parasitics(self):
+        """The wire parasitics of the last run of this result's timer (copies). Variants v are the pin capacitances
+        the reduction used: rise, fall (max analysis), rise, fall (min analysis), as OpenSTA reduces per transition.
+          kind                    'placement' (estimate_parasitics -placement) or 'global_routing'
+          wire_cap (E,)           each net's wire capacitance (fF; 0 on ideal clock nets)
+          pi (E, 4, 3)            each net's driver pi model per variant: near C (fF), R (kohm), far C (fF)
+          elmore (A_n, 4)         each net arc's (graph() n_from -> n_to) Elmore delay per variant (ps), from the
+                                  driver through the wire and the sink's via
+          pin_xy (P, 2)           where the parasitics put each pin (um): OpenROAD's location (the mean of its LEF
+                                  rectangles' centers) at the run's placement"""
+        T = self.timer
+        cw = T._cw if T._cw is not None else torch.zeros(len(T.d.n_ptr) - 1, device=T.dev)
+        pi = T.pi if T.pi is not None else torch.zeros(len(cw), 4, 3, device=T.dev)
+        return TimingData('Parasitics', kind=T.parasitics, wire_cap=cw.clone(), pi=pi.clone(), elmore=T._elm.clone(),
+                          pin_xy=T.ev._pins(T._last_pos).clone())
+
+    def trees(self, nets=None):
+        """The Steiner trees of the placement parasitics at the run's pin locations (parasitics().pin_xy): OpenROAD's
+        estimate_parasitics tree (Prim-Dijkstra, alpha 0.3, steinerized; attar.timing.steiner_big), rooted at the
+        driver, as the timer reduces it on every net that can carry a data arrival. nets: which (default: every net
+        with a driver and two pins or more). Returns (edges (K, 4) um as x0, y0, x1, y1, each edge's first point
+        nearer the driver; net (K,)), tensors on the timer's device."""
+        T = self.timer
+        if T.parasitics != 'placement':
+            raise ValueError('trees(): the timer uses global-routing parasitics; its wires are the routes')
+        from . import steiner_big
+        if not steiner_big.available():
+            raise RuntimeError('attar.timing.steiner_big unavailable: %s' % steiner_big.error())
+        d = T.d
+        ptr = d.n_ptr.cpu().numpy().astype(np.int64)
+        deg = ptr[1:] - ptr[:-1]
+        drv = np.asarray(T.net_driver)
+        if nets is None:
+            nets = np.nonzero((drv >= 0) & (deg >= 2))[0]
+        else:
+            nets = np.asarray(torch.as_tensor(nets).cpu(), np.int64)
+            nets = nets[(drv[nets] >= 0) & (deg[nets] >= 2)]
+        cnt = deg[nets]
+        pins = np.repeat(ptr[nets] - np.concatenate([[0], np.cumsum(cnt)[:-1]]), cnt) + np.arange(int(cnt.sum()))
+        q = torch.round(T.ev._pins(T._last_pos) * d.dbu).cpu().numpy()[pins]
+        sub = np.concatenate([[0], np.cumsum(cnt)]).astype(np.int64)
+        e, k = steiner_big.pd_edges(q[:, 0], q[:, 1], sub, alpha=0.3, drv=drv[nets] - ptr[nets])
+        return (torch.as_tensor(e.astype(np.float64) / d.dbu, device=T.dev, dtype=torch.float32),
+                torch.as_tensor(nets[k], device=T.dev))
 
     def endpoint_slacks(self, names=True):
         """{endpoint name ('inst/PIN' or port): (setup slack, hold slack)}."""

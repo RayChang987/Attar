@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased (branch gp-hooks-timing-api)
+
+Placement
+- Net weights changed during global placement reach the placer. The callback documented in 1.0.4 ("update
+  d.n_weight in place, the wirelength reads it at the next evaluation") had no effect: the wirelength read a copy of the
+  weights made at the start. Now the Evaluator follows `d.n_weight` (in place or a new tensor) and
+  `naive.global_place` takes the callback's changes from the next evaluation, CUDA graphs included. On the CPU its
+  trajectory equals, bit for bit, the patched copy P11 (attar_DAC2026) had to keep for net-weighted timing-driven
+  placement.
+- `global_place(..., precond='net_weight')` (default): the preconditioner adds, over a cell's pins, the change of
+  their nets' weights since the start (DREAMPlace's sum of pin weights when weights start at 1), so cells on heavily
+  weighted nets take proportionally smaller steps; `'pins'` keeps the pin count. A placement whose weights do not
+  change is the same as before (bit-identical on the CPU).
+- `callback(it, pos, info)`: a callback taking a third argument gets the iteration's `hpwl` (net-weighted, what the
+  schedule follows), `overflow`, `lambda` and `gamma`.
+- `d.hpwl(weighted=False)`: the plain wire length of a net-weighted placement.
+
+Timing
+- The timer's data for research code, read only (copies): `TimingResult.graph()` (levels, net / cell / launch / check
+  arcs with their Liberty arcs, types and senses, which arcs the search follows, clock networks), `library()` (the
+  NLDM tables per Liberty arc with their master and pins, every pin's rise / fall max / min capacitance, the
+  timer's own table lookup), `arrivals()` (latest / earliest arrival and slew per pin and transition, driver loads),
+  `parasitics()` (per net the wire capacitance and the driver's pi model, per net arc the Elmore delay, the pin
+  locations the parasitics used) and `trees(nets=None)` (the estimate-parasitics Steiner trees, rooted at the
+  driver: exactly the trees the timer reduced, their length times the unit capacitance is its wire capacitance).
+  Code that read `d._timer` internals (P05's differentiable timer, GRC-TDGR's arc gradients) can use these.
+- `attar.timing.steiner_big.pd_edges(..., drv=)`: root each tree at a given point (pd_rc's driver: the same tree).
+
 ## 1.0.4
 
 **Upgrading.** The zoo's timing data changed: `after_fp/iccad2025` was distilled again (signal pins on DEF power /
