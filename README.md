@@ -38,11 +38,12 @@ timing run on a GPU compiles its kernels (about two minutes, once per machine; i
 `TRITON_CACHE_DIR` and `TORCHINDUCTOR_CACHE_DIR` point to a folder that persists). No GPU? Everything also runs on the CPU, or try
 the examples in Colab:
 
-| notebook | what it runs | runtime |
-| --- | --- | --- |
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/timing_driven_colab.ipynb) | Timing-driven placement in fifteen lines, the demo below: place cva6 for wirelength, time it, weight nets by slack as OpenROAD does, place again | GPU (a T4 is enough) or CPU |
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/latte_on_attar.ipynb) | LATTE (DAC 2026), timing-driven detailed placement, step by step: a differentiable timer anchored on Attar's, independent sets, Adam with CAWP, judged after Attar's global routing, on an ICCAD 2025 contest design | CPU, about 5 minutes |
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/p11_attar_superblue18.ipynb) | Timing-driven global placement by weighting, step by step: DATE 2025's pin-pair weights and the DAC 2026 hybrid net-pin weights built on Attar's timer and placer, both run on superblue18 (745k cells) and compared | GPU |
+| notebook | what it runs |
+| --- | --- |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/timing_driven_colab.ipynb) | Timing-driven placement in fifteen lines, the demo below: place cva6 for wirelength, time it, weight nets by slack as OpenROAD does, place again |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/latte_on_attar.ipynb) | LATTE (DAC 2026), timing-driven detailed placement, step by step: a differentiable timer anchored on Attar's, independent sets, Adam with CAWP, judged after Attar's global routing, on an ICCAD 2025 contest design |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/p11_attar_superblue18.ipynb) | The DAC 2026 hybrid net-pin weighting for timing-driven global placement, step by step: DATE 2025's pin pairs plus net weights derived from a delay model, built on Attar's timer and placer, on superblue18 (745k cells) |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/date25_attar_superblue18.ipynb) | DATE 2025's pin-pair weighting for timing-driven global placement, step by step, on superblue18 |
 
 <div align="center">
 <img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="Timing-driven placement written in fifteen lines of Python, run on cva6 and swerv: place for wirelength, time it, weight the nets by their slack as OpenROAD's global placement does, place again, time it" width="920">

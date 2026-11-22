@@ -16,13 +16,13 @@ Routing
 
 Examples
 - The Colab notebooks are in English and walk through their methods step by step, each piece in its own cell with
-  its explanation. `p11_attar_superblue18.ipynb` now holds both methods (DATE 2025's pin-pair weights and the DAC
-  2026 net-pin weights, run one after the other and compared); `date25_attar_superblue18.ipynb` is gone. Its DATE25
-  pin pairs are updated at every timing update: the code the notebooks came from kept the pairs of the first update
-  only, which made DATE25 end at TNS -5.3e6 or, more often, -8.2e6 to -9.0e6 on superblue18; updated, it ends near
-  -3.45e6, and P11 near -2.59e6 (1.33x). `latte_on_attar.ipynb` splits LATTE into its differentiable timer, the
-  independent sets, the set optimizer and the round loop, with a check that the timer equals the exact one at the
-  anchor; its results are unchanged.
+  its explanation. `p11_attar_superblue18.ipynb` (the DAC 2026 net-pin weighting) and `date25_attar_superblue18.ipynb`
+  (DATE 2025's pin-pair weighting) are independent of each other. Their DATE25 pin pairs are updated at every timing
+  update: the code they came from kept the pairs of the first update only, which made DATE25 end at TNS -5.3e6 or,
+  more often, -8.2e6 to -9.0e6 on superblue18; updated, it ends near -3.45e6, and P11 near -2.59e6.
+  `latte_on_attar.ipynb` splits LATTE into its differentiable timer, the independent sets, the set optimizer and the
+  round loop, with a check that the timer equals the exact one at the anchor; its results are unchanged. The README
+  lists the notebooks without a runtime column.
 
 Docs
 - docs/features.md: the global placer's gap to DREAMPlace in a timing-driven loop is withdrawn. It came from a
