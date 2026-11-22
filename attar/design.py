@@ -20,6 +20,7 @@ import torch
 
 from .io import export as _export, st
 from . import metrics as M, paths
+from .gpu import explain_oom
 from .timing import sizing as _sizing
 from .io.distill import ASIDE, FIXED, MACRO, PLACED, TERMINAL, PHYSICAL  # noqa: F401
 from .facts import BLOCKED, CAPABILITIES, FACTS, MissingFacts, infer_facts, upgrade_facts
@@ -430,6 +431,7 @@ class Design:
         from .naive import floorplan
         return floorplan(self, utilization=utilization, aspect_ratio=aspect_ratio, verbose=verbose, **kw)
 
+    @explain_oom('d.place')
     def place(self, verbose=True, **kw):
         """Place the standard cells: global placement, then legalization (attar.naive.place)."""
         from .naive import place
@@ -594,6 +596,7 @@ class Design:
         return torch.where(self.n_mask, w, torch.zeros_like(w)).sum()
 
     # -- timing and routing congestion --------------------------------------------------------------------------------
+    @explain_oom('d.timing')
     def timing(self, pos=None, crpr=True, routes=None):
         """Static timing at pos (default: the current placement): an attar.timing.sta.TimingResult with per-endpoint setup /
         hold slack, WNS / TNS. Needs the 'timing' fact (attar.timing.ir.attach). The timer is built once per design and
@@ -616,6 +619,7 @@ class Design:
             self._timer = Timer(self)
         return self._timer.run(pos, crpr=crpr)
 
+    @explain_oom('d.global_route')
     def global_route(self, pos=None, verbose=True, **kw):
         """Global routing at pos (default: the current placement) on OpenROAD's gcell grid and capacities: attar.route.
         global_route (pattern routing with negotiated rip-up and reroute, then layer assignment). Returns (routes, stats):
@@ -640,12 +644,14 @@ class Design:
         The timer is rebuilt on the next timing(). Returns the clocks still propagated."""
         return self._clock_mode(clocks, False)
 
+    @explain_oom('d.drv')
     def drv(self, pos=None):
         """Electrical design rules at pos (default: the current placement): max slew, max capacitance and max fanout
         per pin, as OpenSTA's report_check_types -max_slew -max_capacitance -max_fanout (attar.timing.drv.DrvResult:
         .summary(), .report(), .violators(kind)). Times the design first (d.timing)."""
         return self.timing(pos).drv()
 
+    @explain_oom('d.power')
     def power(self, pos=None):
         """Power at pos (default: the current placement), as OpenSTA's report_power: per instance internal,
         switching and leakage power (W) from propagated activities, the timer's slews and estimated parasitics

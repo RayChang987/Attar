@@ -757,7 +757,6 @@ class Timer:
         if parasitics == 'global_routing':
             self._gr_setup()
         self._graph = None
-        self._warming = False
         self._ws = None                              # placement wires for the CUDA graph: (cw, elm, pi), static
         self.use_graph = self.dev.type == 'cuda'
         from . import dmp
@@ -1997,13 +1996,9 @@ class Timer:
             if self._graph is None:
                 self._pos_buf = pos.detach().clone()
                 st_ = torch.cuda.Stream(); st_.wait_stream(torch.cuda.current_stream())
-                self._warming = True                    # warm-up results are dropped: no host trees for them
-                try:
-                    with torch.cuda.stream(st_):
-                        for _ in range(2):
-                            self._run_core(self._pos_buf)
-                finally:
-                    self._warming = False
+                with torch.cuda.stream(st_):                # warm-up before the capture (results dropped)
+                    for _ in range(2):
+                        self._run_core(self._pos_buf)
                 torch.cuda.current_stream().wait_stream(st_)
                 g = torch.cuda.CUDAGraph()
                 with torch.cuda.graph(g):

@@ -24,6 +24,7 @@ from ..rules.rails import base_rows as _base_rows
 from .rowops import BIG, _first, _locate, _pack, _segment_broadcast, _segments
 from ..rules import pdn as PDN
 from .space import _Space, _fill, _improve
+from ..gpu import explain_oom
 
 
 def _solve_class(gx, gy, w, NB, band_y, band_h, roff, seg_row, s0, s1, sw, col_cells, max_rounds, window, dev, stats):
@@ -164,6 +165,7 @@ def _solve_class(gx, gy, w, NB, band_y, band_h, roff, seg_row, s0, s1, sw, col_c
     return band, xo, out
 
 
+@explain_oom('naive.legalize')
 def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, verbose=True, snapshot='naive_lg',
              macro_halo=0.0, cells=None, incremental=None, method=None):
     """Legalize the movable standard cells of d in place (d.pos, d.orient). Returns statistics.

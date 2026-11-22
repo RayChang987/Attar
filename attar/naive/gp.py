@@ -21,6 +21,7 @@ import torch
 from ..io.distill import ASIDE, MACRO, TERMINAL
 from .. import metrics as M
 from ..kernels import Grid, default_bins
+from ..gpu import explain_oom
 
 
 def _graph(fn, example):
@@ -148,6 +149,7 @@ def _diverged(hist, best, window=50, threshold=0.05):
     return (wl - best[1]) / best[1] > threshold * 1.2 and (ov - best[0]) / max(best[0], 1e-9) > threshold
 
 
+@explain_oom('naive.global_place')
 def global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, bins=None, seed=0,
                  verbose=True, log_every=50, snapshot='naive_gp', graphs=True, movable=None, macro_halo=0.0,
                  routability=False, route_args=None, extra=None, callback=None, callback_every=1,

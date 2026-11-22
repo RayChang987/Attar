@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.0.6
+
+**Upgrading.** Nothing to do: results are the same as 1.0.5's (timing bit for bit), only faster when a design is
+timed or routed again after a change. `d.global_route(previous=routes)` is new and opt-in. The zoo is unchanged.
+
+Errors
+- A CUDA out-of-memory error in `d.timing`, `d.place`, `d.global_route`, `d.drv`, `d.power`, `naive.global_place`,
+  `naive.legalize` or `naive.detailed_place` says which step ran out on which design, how much of the GPU was free and
+  held by other processes, and the ways out (free memory, a larger GPU, `device='cpu'`): `attar.gpu.GPUOutOfMemory`,
+  still a `torch.cuda.OutOfMemoryError`.
 
 Timing
 - Timing with global-route parasitics (`d.timing(routes=...)`) is 9-17x faster on large designs, with bit-identical

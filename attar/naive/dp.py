@@ -38,6 +38,7 @@ from ..rules import pdn as PDN
 from ..rules import rails as RL
 from ..rules.rails import base_rows as _base_rows
 from .rowops import BIG, _locate, _segments
+from ..gpu import explain_oom
 
 SKIP_NETS = 100               # dpo skipNetsLargerThanThis_: nets with this many pins or more are not costed
 MIRROR = {0: 4, 5: 1}         # N -> FN, FS -> S: a cell mirrored left-right stays mirrored where it goes
@@ -617,6 +618,7 @@ def _flip_pass(S, stats, max_batches=50):
     return gained
 
 
+@explain_oom('naive.detailed_place')
 def detailed_place(d, ops=('gs', 'vs', 'ro', 'flip'), passes=10, tol=0.01, window=3, seed=1, verbose=True,
                    snapshot='naive_dp'):
     """Improve the wirelength of d's legal placement, keeping it legal (module docstring). ops: the dpo passes to run,
