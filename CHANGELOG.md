@@ -38,7 +38,7 @@ Routing
   rerouted nets' parasitics. superblue18: 16-25 s -> 4.6-4.8 s for a new route after 0.1-1 % of the cells moved,
   timing 3.5 s; netcard_fast after 0.1 %: 12 -> 3.6 s (after 1 % about as long as a full route: its new branches
   need as many negotiation rounds). A full route is unchanged (the same segments).
-- `d.global_route()` on designs whose tech stops at four routing layers (the ICCAD 2015 superblue designs: metal1-4)
+- `d.global_route()` on designs whose tech stops at four routing layers (ICCAD 2015 superblue18: metal1-4)
   failed choosing the IO pins' layers (`export.pin_layers` looked for a horizontal layer above the third only); it
   now takes the highest horizontal layer with a vertical one above.
 

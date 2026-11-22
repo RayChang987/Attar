@@ -11,7 +11,7 @@ from attar import naive
 | --- | --- |
 | `attar.zoo(suite=None, remote=False, root=None)` | names `<mode>/<suite>/<design>` of the distilled designs (`'after_fp/ispd2005/adaptec1'`, ...; `suite`: a prefix such as `'before_fp'` or `'after_fp/ns3k'`) in the local zoo, or on the Hugging Face Hub |
 | `attar.load(name_or_path, device='cpu', download=True, root=None)` | a `Design`; a zoo name missing locally is downloaded first |
-| `attar.fetch(*names, root=None)` | download designs or whole suites (`'ispd2015'`) into the local zoo; everything when no name is given |
+| `attar.fetch(*names, root=None, force=False)` | download designs or whole suites (`'after_fp/ispd2015'`) into the local zoo, with the shared cell libraries they use; everything when no name is given; `force=True` downloads again what is already there (after a zoo update) |
 | `attar.distill(def_path, lef_paths, out_dir, lib_paths=(), ...)` | distill a LEF/DEF design; returns the manifest |
 
 The zoo is `zoo/` in a source checkout, else `~/.cache/attar/zoo`; `root=` picks another folder. Attar reads no
@@ -72,7 +72,7 @@ names; an unknown fact, capability, metric or snapshot raises `KeyError` with th
 
 | function | key arguments |
 | --- | --- |
-| `global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, movable=None, macro_halo=0, routability=False, route_args=None, extra=None, callback=None, callback_every=1, precond='net_weight', deterministic=False)` | hooks for research objectives (timing-driven placement): `extra(pos) -> (value, grad)` adds a term at every evaluation (pos and grad (C, 2) as `d.pos`; same preconditioner as the wirelength; called outside the CUDA graph, so it may time the design); `callback(it, pos)` or `callback(it, pos, info)` every `callback_every` iterations (`info`: the iteration's `hpwl`, `overflow`, `lambda`, `gamma`; e.g. `d.timing(pos)`, then change `d.n_weight`, in place or a new tensor, or the extra term's state: the wirelength uses the new weights from the next evaluation; returning True stops); `precond`: `'net_weight'` adds each pin's net weight change since the start to the cell's pin count (DREAMPlace's sum of pin weights), `'pins'` keeps the pin count; `deterministic=True`: on the GPU, the same placement on every run (sorted scatter adds and a fixed-order prefix sum under `torch.use_deterministic_algorithms`, `attar.kernels.deterministic_algorithms`; jpeg 3.8 s -> 14 s on an RTX 3080 Ti); the CPU is deterministic already |
+| `global_place(d, target_density=0.9, stop_overflow=0.07, max_iters=2000, movable=None, macro_halo=0, routability=False, route_args=None, extra=None, callback=None, callback_every=1, precond='net_weight', deterministic=False)` | hooks for research objectives (timing-driven placement): `extra(pos) -> (value, grad)` adds a term at every evaluation (pos and grad (C, 2) as `d.pos`; same preconditioner as the wirelength; called outside the CUDA graph, so it may time the design); `callback(it, pos)` or `callback(it, pos, info)` every `callback_every` iterations (`info`: the iteration's `hpwl`, `overflow`, `lambda`, `gamma`; e.g. `d.timing(pos)`, then change `d.n_weight`, in place or a new tensor, or the extra term's state: the wirelength uses the new weights from the next evaluation; returning True stops); `precond`: `'net_weight'` adds each pin's net weight change since the start to the cell's pin count (DREAMPlace's sum of pin weights), `'pins'` keeps the pin count; `deterministic=True`: on the GPU, the same placement on every run (sorted scatter adds and a fixed-order prefix sum under `torch.use_deterministic_algorithms`, `attar.kernels.deterministic_algorithms`; jpeg 3.8 s -> 14 s on an RTX 3080 Ti); on the CPU a run repeats with the same number of threads |
 | `legalize(d, max_rounds=5, window=8, improve=True, passes=3, macro_halo=0, cells=None, incremental=None, method=None)` | `stats['mode']`: `global` (every cell placed again) or `incremental` (OpenROAD dpl's incremental legalization: cells legal where they stand keep their place; the others, and the `cells` given, go to the nearest free spot, tallest first). `incremental=None` chooses incremental when `cells` is given or at least half of the cells are legal; a legal input comes out unchanged. `method` (global mode): `'abacus'`, the default (Abacus, `attar/naive/csrc/abacus.cpp` built with g++ on first use: cells in x order to the band and segment where their own displacement is least, segments packed by cluster collapse; cells left on fixed macros go to the nearest free space; without g++ the default falls back to `'columns'` with a warning) or `'columns'` (column balancing, segment spill, isotonic packing; batched on the device; `max_rounds` and `window` apply to it only); fill, improve and the PDN repair follow either |
 | `detailed_place(d, ops=('gs', 'vs', 'ro', 'flip'), passes=10, tol=0.01, window=3, seed=1)` | wirelength improvement of a legal placement after OpenROAD's `improve_placement` (dpo): global swap, vertical swap, local reordering (windows of 3), cell flipping, on nets of 2..99 pins; candidates applied in batches that share no cell, net or free span, so every gain is exact. Not ported: dpo's neighbour shifting, adjacent swaps, independent-set matching, random moves |
 | `place(d, target_density=None, gp_args=None, lg_args=None, macro_halo=0)` | |
@@ -90,6 +90,14 @@ and handed to a flow that draws the power grid):
 
 Each engine checks its facts first (`MissingFacts` otherwise) and writes its answer back into the design.
 
+## Errors
+
+| error | when |
+| --- | --- |
+| `attar.facts.MissingFacts` | an engine or metric is called without the facts it needs; the message lists them and how to get them |
+| `attar.gpu.GPUOutOfMemory` | CUDA ran out of memory in `d.timing`, `place`, `global_route`, `drv`, `power`, `naive.global_place`, `legalize` or `detailed_place`; the message says which step, on which design, how much of the GPU was free and held by other processes, and the ways out (free memory, a larger GPU, `device='cpu'`). A `torch.cuda.OutOfMemoryError`, so handlers of that still catch it |
+| `KeyError`, `FileNotFoundError` | an unknown fact, capability, metric, snapshot or design: the message lists the known ones or the closest names |
+
 ## Where the code is
 
 | module | what |
@@ -99,9 +107,10 @@ Each engine checks its facts first (`MissingFacts` otherwise) and writes its ans
 | `attar/netlist.py` | netlist edits (`Edit`: buffers, clones, cells, nets, pins; `debuffer`; `check`) |
 | `attar/evaluator.py`, `metrics.py`, `kernels.py` | metrics and the tensor kernels they share with the engines |
 | `attar/hub.py`, `paths.py` | the zoo: where it lives, downloads from the Hugging Face Hub |
+| `attar/gpu.py` | `GPUOutOfMemory` and the `explain_oom` decorator |
 | `attar/viz.py` | `plot` |
 | `attar/io/` | raw files in and out: `lef.py`, `deffile.py`, `bookshelf.py`, `fpformats.py`, `liberty.py`, `sdc.py`, `st.py` (safetensors); `distill.py` (LEF/DEF to the IR), `export.py` (DEF write-back into the source frame) |
-| `attar/timing/` | `ir.py` (the timing fact), `library.py` (cell libraries), `sta.py` (static timing, ideal and propagated clocks), `crpr.py` (clock reconvergence pessimism removal), `drv.py` (design rules), `power.py` (power), `dmp.py` / `dmp_triton.py` (delay calculation), `steiner*.py` + `csrc/` (placement parasitics), `grpar.py` (global-routing parasitics), `sizing.py` (`resize`, `equivalents`) |
+| `attar/timing/` | `ir.py` (the timing fact), `library.py` (cell libraries), `sta.py` (static timing, ideal and propagated clocks), `crpr.py` (clock reconvergence pessimism removal), `drv.py` (design rules), `power.py` (power), `dmp.py` / `dmp_triton.py` (delay calculation), `steiner*.py` (placement parasitics), `grpar.py` (global-routing parasitics), `sizing.py` (`resize`, `equivalents`); `csrc/` holds the C++ built with g++ on first use: `pdtree.cpp` (OpenROAD's Steiner trees), `dmp.cpp` (the driver model on the CPU), `activity.cpp` (power's activity propagation) |
 | `attar/route/` | `groutes.py` (`GlobalRoutes`; OpenROAD's routes and grt's pin model as explicit inputs), `router.py` (`global_route`) |
 | `attar/rules/` | `routing.py` (global-routing capacity and overflow), `rails.py` (power-rail parity), `pdn.py` (PDN blockages) |
-| `attar/naive/` | engines: `floorplan.py` (die, IO, macros), `gp.py`, `lg.py`, `flow.py` (`floorplan`, `place`) |
+| `attar/naive/` | engines: `floorplan.py` (die, IO, macros), `macro_lp.py` (macro legalization by LP), `bstar.py` (B*-tree packing), `gp.py`, `lg.py` + `abacus.py` / `csrc/abacus.cpp` + `rowops.py`, `space.py`, `dp.py` (detailed placement), `cts.py`, `flow.py` (`floorplan`, `place`) |

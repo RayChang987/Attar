@@ -57,7 +57,7 @@ cva6 的 WNS 由 -195 ps 改善至 -75 ps，在 RTX 3080 Ti 上僅需 2.2 秒。
 
 ## 內容總覽
 
-<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="三張卡片的路線圖。資料：zoo 內 262 個設計。引擎（已完成）：晶片尺寸、封裝、巨集擺置、IO 擺置、全域擺置、合法化、PDN 感知優化、細部擺置、時脈樹合成、全域繞線、閘尺寸調整、緩衝器插入與複製、移除緩衝器；尚未：延遲平衡時脈樹。評估（已完成）：HPWL、Steiner 線長、合法性、位移、密度溢位、RUDY、全域繞線溢位、setup/hold 時序、GR 寄生、傳播時脈與 CRPR、slew／電容／fanout 限制、功耗；尚未：被擋 pin 檢查。留給你的 P&R 工具：PDN 合成、細部繞線、繞線 DRC、sign-off" width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="三張卡片的路線圖。資料：zoo 內 262 個設計。引擎（已完成）：晶片尺寸、區塊緊密排列（packing）、巨集擺置、IO 擺置、全域擺置、合法化、PDN 感知優化、細部擺置、時脈樹合成、全域繞線、閘尺寸調整、緩衝器插入與複製、移除緩衝器；尚未：延遲平衡時脈樹。評估（已完成）：HPWL、Steiner 線長、合法性、位移、密度溢位、RUDY、全域繞線溢位、setup/hold 時序、GR 寄生、傳播時脈與 CRPR、slew／電容／fanout 限制、功耗；尚未：被擋 pin 檢查。留給你的 P&R 工具：PDN 合成、細部繞線、繞線 DRC、sign-off" width="100%"></p>
 
 所有引擎與評估器，以及它們對比 OpenROAD 與 OpenSTA 的精確度：
 [docs/features.md](https://github.com/RayChang987/Attar/blob/main/docs/features.md).
@@ -93,10 +93,10 @@ Attar 如同量產流程，在電源網格（power grid）處將實體設計一�
 
 <table>
 <tr>
-<td colspan="2"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_floorplan.gif" alt="Floorplan 模式：GSRC n100 在 85% 區塊面積下規劃兩次：GP 加 LP 合法化會讓 5 個巨集落在核心外（不合法），B*-tree 封裝則全部放入（合法）"></td>
+<td colspan="2"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_floorplan.gif" alt="Floorplan 模式：GSRC n100 在 85% 區塊面積下規劃兩次：GP 加 LP 合法化會讓 5 個巨集落在核心外（不合法），B*-tree packing 則全部放入（合法）"></td>
 </tr>
 <tr>
-<td colspan="2"><sub><b>Floorplan</b> GSRC n100：B*-tree 封裝在 5.1 秒內將 100 個區塊全部放入核心。</sub></td>
+<td colspan="2"><sub><b>Floorplan</b> GSRC n100：B*-tree packing 在 5.1 秒內將 100 個區塊全部放入核心。</sub></td>
 </tr>
 <tr>
 <td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_grov.png" alt="cva6 擺置後，依 OpenROAD gcell 的全域繞線負載著色"></td>
@@ -108,11 +108,11 @@ Attar 如同量產流程，在電源網格（power grid）處將實體設計一�
 </tr>
 <tr>
 <td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_placed.png" alt="ariane136 合法化後：合法，含 rail 與 PDN"></td>
-<td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/fp_n300.png" alt="GSRC n300 以 B*-tree 封裝完成 floorplan，標示區塊與 IO pin 之間最強的連線"></td>
+<td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/fp_n300.png" alt="GSRC n300 以 B*-tree packing 完成 floorplan，標示區塊與 IO pin 之間最強的連線"></td>
 </tr>
 <tr>
 <td><sub><b>合法擺置</b> ariane136，含 rail 與 PDN，2.4 秒。</sub></td>
-<td><sub><b>Floorplan</b> GSRC n300：300 個區塊、569 個 IO pin，43 秒封裝完成。</sub></td>
+<td><sub><b>Floorplan</b> GSRC n300：300 個區塊、569 個 IO pin，43 秒完成 packing。</sub></td>
 </tr>
 </table>
 

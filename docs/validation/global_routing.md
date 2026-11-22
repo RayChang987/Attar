@@ -19,26 +19,25 @@ Truth: OpenSTA after `estimate_parasitics -global_routing` on the same routes, a
 
 | design | pins | pin gcell = grt | loop nets | wire C (per net / total) | wire R (per net / total) | setup Pearson | setup MAE ps | max ps | WNS ours / OpenSTA ps | TNS err | hold MAE ps | re-time |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| asap7 aes | 42,885 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.001 | 0.02 | -9.37 / -9.38 | 0.07% | 0.00 | 267 ms |
-| asap7 gcd | 1,218 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.001 | 0.00 | -34.89 / -34.89 | 0.00% | 0.00 | 8 ms |
-| asap7 jpeg | 184,248 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.002 | 0.07 | -95.50 / -95.50 | 0.01% | 0.00 | 66 ms |
-| asap7 ethmac | 193,857 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.020 | 0.28 | -84.87 / -84.87 | 0.00% | 0.00 | 57 ms |
-| asap7 cva6 | 420,842 | 100% | 2 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.021 | 18.71 | -62.80 / -62.81 | 0.03% | 0.00 | 171 ms |
-| asap7 swerv | 365,817 | 100% | 2 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.021 | 0.97 | -110.48 / -110.48 | 0.06% | 0.00 | 184 ms |
-| asap7 dynamic_node | 49,055 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.005 | 0.11 | -35.19 / -35.19 | 0.24% | 0.00 | 41 ms |
-| asap7 riscv32i-mock-sram | 35,930 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.023 | 0.22 | -64.45 / -64.49 | 0.09% | 0.00 | 46 ms |
-| asap7 picorv32 | 64,774 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.003 | 0.07 | -136.16 / -136.16 | 0.02% | 0.00 | 44 ms |
-| nangate45 gcd | 1,947 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -153.90 / -153.90 | 0.00% | 0.00 | 9 ms |
-| nangate45 ibex | 55,364 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 0.99732 | 0.524 | 1055 | 29.56 / 29.55 | – | 0.00 | 32 ms |
-| nangate45 jpeg | 193,096 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.01 | -82.88 / -82.88 | 0.00% | 0.00 | 49 ms |
-| nangate45 tinyRocket | 101,959 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.007 | 0.16 | -117.33 / -117.33 | 0.00% | 0.00 | 38 ms |
-| nangate45 picorv32 | 60,295 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -311.20 / -311.20 | 0.00% | 0.00 | 26 ms |
+| asap7 aes | 42,885 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -9.38 / -9.38 | 0.00% | 0.00 | 26 ms |
+| asap7 gcd | 1,218 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -34.89 / -34.89 | 0.00% | 0.00 | 10 ms |
+| asap7 jpeg | 184,248 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -95.50 / -95.50 | 0.00% | 0.00 | 79 ms |
+| asap7 ethmac | 193,857 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -84.87 / -84.87 | 0.00% | 0.00 | 67 ms |
+| asap7 cva6 | 420,842 | 100% | 2 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.005 | 18.69 | -62.81 / -62.81 | 0.00% | 0.00 | 202 ms |
+| asap7 swerv | 365,817 | 100% | 2 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -110.48 / -110.48 | 0.00% | 0.00 | 216 ms |
+| asap7 dynamic_node | 49,055 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -35.19 / -35.19 | 0.00% | 0.00 | 45 ms |
+| asap7 riscv32i-mock-sram | 35,930 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -64.49 / -64.49 | 0.00% | 0.00 | 56 ms |
+| asap7 picorv32 | 64,774 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -136.16 / -136.16 | 0.00% | 0.00 | 53 ms |
+| nangate45 gcd | 1,947 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -153.90 / -153.90 | 0.00% | 0.00 | 17 ms |
+| nangate45 ibex | 55,364 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | 29.56 / 29.55 | – | 0.00 | 39 ms |
+| nangate45 jpeg | 193,096 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -82.88 / -82.88 | 0.00% | 0.00 | 59 ms |
+| nangate45 tinyRocket | 101,959 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -117.33 / -117.33 | 0.00% | 0.00 | 46 ms |
+| nangate45 picorv32 | 60,295 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -311.20 / -311.20 | 0.00% | 0.00 | 31 ms |
 
-Re-time: one `Timer.run()` on an RTX 3080 Ti (GPU 1), the networks reduced once per set of pin capacitances.
-Residuals: nangate45 ibex, one clock-gate latch D pin (latches are not modeled; the placement-parasitics timer has
-the same residual there, table in [timing_routing.md](timing_routing.md)); cva6, a few endpoints behind its two nets
-whose route closes a resistor loop: OpenSTA reduces a loop over its depth-first tree, Attar over a breadth-first one
-(the same tree wherever there is no loop). Nangate45 has no `set_layer_rc -via`: its cut resistances are the LEF's
+Re-time: one `Timer.run()` on an RTX 3080 Ti (GPU 1, shared with other jobs; `--device cuda`, the script's default
+is the CPU), the networks reduced once per set of pin capacitances (Attar 1.0.6).
+Residual: cva6, a few endpoints behind its two nets whose route closes a resistor loop: OpenSTA reduces a loop over
+its depth-first tree, Attar over a breadth-first one (the same tree wherever there is no loop). Nangate45 has no `set_layer_rc -via`: its cut resistances are the LEF's
 (`RESISTANCE`), which the zoo stores with the routing fact (`routing.cut_res`) and the timer uses by itself; the
 table was made from the zoo alone (no `via_res=`, no `adjustment=`).
 

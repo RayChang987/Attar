@@ -3,14 +3,16 @@
 For the maintainers. A release is a version on PyPI, a git tag, and (when the data changed) the zoo on the Hub.
 
 1. **Version.** Set `__version__` in `attar/__init__.py` (the only place it lives) and add a section to
-   `CHANGELOG.md`.
+   `CHANGELOG.md`. The Colab notebooks install a pinned version (`!pip install -q attar==<version>` in
+   `examples/colab/*.ipynb`): pin the new one, and the README's tests badge to the count of step 2.
 2. **Check.** `ruff check attar tests tools examples experiments` and `python -m unittest discover -s tests` (with the
    local zoo) both pass.
-3. **Build.** `rm -rf dist && python -m build`, then `twine check dist/*`. The wheel must hold
-   `attar/timing/csrc/pdtree.cpp` (`unzip -l dist/*.whl | grep csrc`).
+3. **Build.** `rm -rf dist && python -m build`, then `twine check dist/*`. The wheel must hold the C++
+   sources built on first use: `attar/timing/csrc/{pdtree,dmp,activity}.cpp` and `attar/naive/csrc/abacus.cpp`
+   (`unzip -l dist/*.whl | grep csrc`).
 4. **Try it as a user.** Install the wheel into a clean environment (a fresh venv, or a `python:3.x` container) and
    run `attar.load` on a zoo design, `d.place()`, `d.hpwl()`, `d.timing_report()` and `d.export()`, without a
-   Hugging Face token.
+   Hugging Face token. Run the Colab notebooks from the wheel too (a GPU of 16 GB or less, as Colab's T4).
 5. **TestPyPI first.** `twine upload --repository testpypi dist/*`, then
    `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ attar` in a clean
    environment.

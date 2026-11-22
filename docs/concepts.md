@@ -17,8 +17,11 @@ A design is a set of *facts*. Each fact has a *provenance*: the source it came f
 | `floorplan.io` | IO pin locations on the die boundary |
 | `floorplan.macros` | macro and fixed-cell locations |
 | `rows` | placement rows: origin, site width, height, orientation |
-| `constraints` | fence regions, placement blockages (not stored yet) |
-| `routing`, `timing`, `die_stack` | routing resources, Liberty/SDC, 3D die stack (not stored yet) |
+| `constraints` | fence regions, placement blockages (counted, not stored yet) |
+| `routing` | what blocks routing capacity: pin and OBS shapes, special nets on the routing layers; the routing layer range, adjustments and cut resistances |
+| `timing` | Liberty arcs and pin capacitances, clocks, I/O delays (from the design's Liberty and SDC) |
+| `library` | a shared cell library (`zoo/libraries/<name>`): every cell of the platform corner with its Liberty data, for sizing and buffering |
+| `die_stack` | 3D die stack (not stored yet) |
 | `cell_library` | the cells are instances of a real cell library (LEF macros): the result can go back to DEF |
 | `tracks` | routing tracks per layer and the routing layer of every macro pin (macro pins go on their tracks) |
 | `pdn` | PDN metal (wires, vias) on the three lowest routing layers: signal pins keep clear of it |
@@ -34,7 +37,11 @@ Each *capability* (an engine or a metric) requires a set of facts:
 | `io_place` | netlist, floorplan.die |
 | `macro_place` | ... + floorplan.io |
 | `global_place` | ... + floorplan.io, floorplan.macros |
-| `legalize` | ... + rows, placement |
+| `legalize`, `detailed_place` | netlist, cell_geometry, pin_offsets, floorplan.die, rows, placement |
+| `global_route` | netlist, cell_geometry, pin_offsets, floorplan.die, routing, placement |
+| `sta` | netlist, pin_direction, timing (wire parasitics need a placement) |
+| `resize`, `netlist_edit` | netlist, cell_library, pin_offsets, timing, library |
+| `gr_overflow` | netlist, pin_offsets, placement, floorplan.die, tracks, routing |
 | `export` | netlist, cell_library, def_frame |
 
 `d.capabilities()`, `d.missing('global_place')` and `d.require('legalize')` answer the questions; `d.status()`
@@ -150,8 +157,13 @@ The basic set of engines: simple, tensorized and fast, each one a starting point
 | engine | method |
 | --- | --- |
 | `global_place` | ePlace/DREAMPlace electrostatics: WA wirelength, DCT Poisson solve, Nesterov with backtracking, CUDA graphs; rolls back to the best solution if it diverges. Optional: a keep-out band around macros (`macro_halo`), and routability (`routability=True`: DREAMPlace's cell inflation from RUDY over the track capacity the source flow's router uses) |
-| `legalize` | multi-row-height, power-rail aware: bands of rows per (height, rails) class, parallel isotonic packing, a fill step, and parallel displacement improvement; then signal pins clear of the PDN (fact `pdn`, above) |
+| `legalize` | multi-row-height, power-rail aware: bands of rows per (height, rails) class, each class placed by Abacus (C++, by default; `method='columns'`: batched column balancing and isotonic packing), a fill step, parallel displacement improvement; then signal pins clear of the PDN (fact `pdn`, above). `cells=`: only those cells move (incremental) |
 | `place` | `global_place` + `legalize`, at the source's own target density (ORFS: the density its global placement used) |
+| `detailed_place` | OpenROAD dpo's moves (global swap, vertical swap, local reordering, flipping), batched on the GPU, keeping the placement legal |
+| `cts` | buffered clock trees on the ideal clock nets, balanced on the propagated-clock timer |
+
+Timing, routing and netlist edits are methods of the design: `d.timing()`, `d.global_route()`, `d.resize()`,
+`d.edit()`, `d.debuffer()` ([api.md](api.md)).
 
 For `before_fp` problems:
 

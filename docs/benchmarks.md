@@ -8,7 +8,7 @@ by what the user solves:
   pins and the macros are the answer. A result with a cell library is written back as a DEF for a flow that draws
   the power grid; Attar draws no power grid itself.
 - **`after_fp`, placement problems.** The die, IO pins, macros and the power grid are given; the cells are the
-  answer (timing optimization and global routing later).
+  answer, then their sizes, buffers, clock trees and global routes.
 
 Each design is a folder `<mode>/<suite>/<design>` with `core.safetensors` (integer arrays), `names.json.gz`, `tech_profile.safetensors` and
 `manifest.json` (facts, provenance, counts, source hashes).
@@ -27,7 +27,7 @@ python tools/zoo_release.py      # checks manifests, packs zoo_hub/, writes inde
 hf upload-large-folder RayChang987/attar-zoo zoo_hub/ --repo-type dataset
 ```
 
-On the hub the arrays and large JSON files are zstd-compressed (`<file>.zst`, level 19: 4.0 GB becomes 771 MB);
+On the hub the arrays and large JSON files are zstd-compressed (`<file>.zst`, level 19: 4.8 GB becomes 1.1 GB);
 `attar.fetch` / `attar.load` decompress them on download, so a local zoo always holds the plain files. `zoo_hub/`
 mirrors the zoo: unchanged files are not compressed again, and files the zoo no longer has are removed from it. The
 upload does not delete files on the hub; remove stale ones there with `hf repo-files delete`.
@@ -119,8 +119,8 @@ superblue run with global placement's CUDA graphs and the timer needs about 10 G
 
 - ICCAD 2025: 11 of 13 inputs have every cell in N orientation, also in FS rows, so they are rail-illegal as given.
 - ICCAD 2015: the given placements overlap (1.6k-41k cells), the DEF writes coordinates as decimals
-  (`7214680.000000`), the LEF defines metal1-6 while the DEF has TRACKS on metal7-9 (OpenROAD's DEF parser stops
-  on them), some IO pins sit just outside the die, and FIXED pinless blocks and INV_X1 cells that the Verilog never
+  (`7214680.000000`), the LEFs define metal1-6 (superblue18 metal1-4) while the DEFs have TRACKS above them (OpenROAD's DEF
+  parser stops on them), some IO pins sit just outside the die, and FIXED pinless blocks and INV_X1 cells that the Verilog never
   names serve as obstacles. Timing reads the Late library for setup and the Early one for hold (`library_min`).
   The Liberty has no `function` attributes, so there are no sizing classes (`d.resize`, buffering need them).
 - superblue (ISPD 2015 and ICCAD 2015): the fixed macros overlap each other as given (2-359 pairs per design).
