@@ -43,6 +43,66 @@ class ReduceTest(unittest.TestCase):
         self.assertEqual(loops, 0)
         self.assertAlmostEqual(pi[0, 0, 0] + pi[0, 0, 2], k * c + cap, places=9)   # near + far = total C
 
+    def test_random_trees_against_a_recursive_reference(self):
+        """Branching trees of many depths (one deep enough that a pass per depth over all nodes was the bottleneck),
+        and a net without a driver: Elmore delay at every pin and the pi moments, against a per-net recursion."""
+        rng = np.random.default_rng(1)
+        node_net, node_cap, ra, rb, rr, pin_node, drv, sink_pins = [], [], [], [], [], [], [], []
+        N = 0
+        trees = []                                            # (first node, parent list) per net
+        for e, n in enumerate((1, 2, 7, 40, 600, 3)):
+            parent = [-1] + [int(rng.integers(max(0, k - 3), k)) for k in range(1, n)]   # deep, some branching
+            if e == 4:
+                parent = [-1] + list(range(n - 1))                                       # a 600-node chain
+            trees.append((N, parent))
+            node_net += [e] * n
+            node_cap += rng.uniform(0.1, 2.0, n).tolist()
+            for k in range(1, n):
+                ra.append(N + parent[k]); rb.append(N + k); rr.append(float(rng.uniform(0.01, 0.5)))
+            pin_node.append(N); drv.append(len(pin_node) - 1 if e != 5 else -1)          # net 5: no driver
+            for k in rng.choice(n, size=min(n, 3), replace=False):
+                pin_node.append(N + int(k)); sink_pins.append(len(pin_node) - 1)
+            N += n
+        E = len(trees)
+        net = {'node_net': np.array(node_net), 'node_cap': np.array(node_cap), 'res_a': np.array(ra, np.int64),
+               'res_b': np.array(rb, np.int64), 'res_r': np.array(rr), 'pin_node': np.array(pin_node, np.int64),
+               'wire_cap': np.bincount(node_net, node_cap, minlength=E)}
+        P = len(pin_node)
+        caps = rng.uniform(0.0, 1.0, (P, 2))
+        elm, pi, loops = grpar.reduce(net, np.array(drv, np.int64), caps)
+        self.assertEqual(loops, 0)
+        res = {(a, b): r for a, b, r in zip(ra, rb, rr)}
+        for e, (first, parent) in enumerate(trees):
+            n = len(parent)
+            cap = np.repeat(np.array(node_cap[first:first + n])[:, None], 2, 1)
+            for p in range(P):
+                if first <= pin_node[p] < first + n:
+                    cap[pin_node[p] - first] += caps[p]
+            kids = [[] for _ in range(n)]
+            for k in range(1, n):
+                kids[parent[k]].append(k)
+            y = np.zeros((n, 3, 2))                            # downstream moments, children first
+            for k in range(n - 1, -1, -1):
+                y[k, 0] = cap[k]
+                for ch in kids[k]:
+                    r = res[(first + k, first + ch)]
+                    a1, a2, a3 = y[ch]
+                    y[k, 0] += a1; y[k, 1] += a2 - r * a1 * a1; y[k, 2] += a3 - 2 * r * a1 * a2 + r * r * a1 ** 3
+            el = np.zeros((n, 2))
+            for k in range(1, n):
+                el[k] = el[parent[k]] + res[(first + parent[k], first + k)] * y[k, 0]
+            for p in range(P):
+                if first <= pin_node[p] < first + n:
+                    want = el[pin_node[p] - first] if drv[e] >= 0 else 0.0
+                    np.testing.assert_allclose(elm[p], want, rtol=1e-10, atol=1e-12)
+            if drv[e] >= 0:
+                Y1, Y2, Y3 = y[0]
+                c1 = np.where(Y3 == 0, 0.0, Y2 * Y2 / np.where(Y3 == 0, 1.0, Y3))
+                np.testing.assert_allclose(pi[e, :, 0] + pi[e, :, 2], Y1, rtol=1e-10)
+                np.testing.assert_allclose(pi[e, :, 2], c1, rtol=1e-10)
+            else:
+                self.assertTrue(np.isnan(pi[e]).all())
+
     def test_many_nodes(self):
         """More nodes than int32 edge keys hold (regression: scipy's int32 BFS order overflowed them)."""
         net, drv, caps, N = chain_net(8000, 6, 0.05, 1.0, 2.0)

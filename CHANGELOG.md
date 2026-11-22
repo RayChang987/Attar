@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Timing
+- Timing with global-route parasitics (`d.timing(routes=...)`) is 9-17x faster on large designs, with bit-identical
+  results: netcard_fast (300k cells) 67 -> 3.8 s per call (83 -> 10 s the first time), superblue18 88 -> 8.8 s.
+  `attar.timing.grpar.reduce` went over every node once per tree depth (thousands of gcell-long nodes deep), now once
+  per node on the breadth-first order's depth runs; `grpar.build` sorts its node keys as packed int64 instead of
+  structured records.
+
+Routing
+- `d.global_route()` on designs whose tech stops at four routing layers (the ICCAD 2015 superblue designs: metal1-4)
+  failed choosing the IO pins' layers (`export.pin_layers` looked for a horizontal layer above the third only); it
+  now takes the highest horizontal layer with a vertical one above.
+
 Examples
 - The Colab notebooks are in English and walk through their methods step by step, each piece in its own cell with
   its explanation. `p11_attar_superblue18.ipynb` now holds both methods (DATE 2025's pin-pair weights and the DAC

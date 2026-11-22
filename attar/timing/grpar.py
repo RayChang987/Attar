@@ -39,6 +39,26 @@ def _via_table(rc, n_levels, via_res=None):
     return out
 
 
+def _packer(*cols):
+    """A function packing integer columns into one int64 key whose order is the columns' lexicographic order (as
+    np.unique / searchsorted on a structured array, which sort record by record: 20x slower). cols: every value each
+    column will take; a column is packed as its value's rank among them (coordinates in DBU would overflow int64)."""
+    uniq = []
+    for c in cols:
+        c = np.concatenate([np.asarray(x, np.int64).ravel() for x in c]) if isinstance(c, (list, tuple)) else c
+        uniq.append(np.unique(c))
+    sizes = [max(len(u), 1) for u in uniq]
+    if float(np.prod([float(x) for x in sizes])) >= 2.0 ** 62:
+        raise OverflowError('grpar: key columns too wide for int64 (%s)' % (sizes,))
+
+    def pack(*vals):
+        k = np.zeros(np.broadcast(*vals).shape, np.int64)
+        for v, u, m in zip(vals, uniq, sizes):
+            k = k * m + np.searchsorted(u, np.asarray(v, np.int64))
+        return k
+    return pack, uniq
+
+
 def build(d, routes, rc, via_res=None):
     """The parasitic networks of every routed net. Returns a dict of numpy arrays:
     node_net (N,), node_cap (N,) wire capacitance (fF) at each node; res_a, res_b (R,) node ids, res_r (R,) kohm;
@@ -60,9 +80,18 @@ def build(d, routes, rc, via_res=None):
     pp = routes.pin_pt; pg = routes.pin_grid
     has = routed[p_net] & (pg[:, 0] >= 0) & (pp[:, 0] >= 0)
     hp = np.nonzero(has)[0]
-    key_dt = np.dtype([('n', np.int64), ('x', np.int64), ('y', np.int64)])
-    gkey = np.empty(len(hp), key_dt); gkey['n'] = p_net[hp]; gkey['x'] = pg[hp, 0]; gkey['y'] = pg[hp, 1]
-    ug, ginv = np.unique(gkey, return_inverse=True)
+    # nodes: segment ends on valid layers (or any via end)
+    via = (s[:, 0] == s[:, 3]) & (s[:, 1] == s[:, 4]) & (s[:, 2] != s[:, 5])
+    planar = s[:, 2] == s[:, 5]
+    keep = ((s[:, 2] >= routes.min_layer) | via) & ((s[:, 5] >= routes.min_layer) | via)
+    ks = np.nonzero(keep)[0]
+    pr = np.nonzero(has & (routes.pin_layer >= 0))[0]            # pins that connect to their net's route
+    # keys (net, x, y[, layer]) packed into one int64, ordered as the records (net first): sized by every value
+    # they will hold
+    gpack, _ = _packer((p_net[hp], sn), (pg[hp, 0], s[:, 0], s[:, 3]), (pg[hp, 1], s[:, 1], s[:, 4]))
+    npack, nuq = _packer((sn[ks], p_net[pr]), (s[ks, 0], s[ks, 3], pg[pr, 0]), (s[ks, 1], s[ks, 4], pg[pr, 1]),
+                         (s[ks, 2], s[ks, 5], routes.pin_layer[pr] + 1))
+    ug, ginv = np.unique(gpack(p_net[hp], pg[hp, 0], pg[hp, 1]), return_inverse=True)
     med = np.zeros((len(ug), 2), np.int64)
     order = np.lexsort((pp[hp, 0], ginv)); gs = ginv[order]
     cnt = np.bincount(ginv, minlength=len(ug)); start = np.concatenate([[0], np.cumsum(cnt)[:-1]])
@@ -72,7 +101,7 @@ def build(d, routes, rc, via_res=None):
     del gs
 
     def route_point(net, x, y):
-        k = np.empty(len(net), key_dt); k['n'] = net; k['x'] = x; k['y'] = y
+        k = gpack(net, x, y)
         i = np.searchsorted(ug, k)
         ok = (i < len(ug))
         i2 = np.minimum(i, max(len(ug) - 1, 0))
@@ -80,19 +109,10 @@ def build(d, routes, rc, via_res=None):
         X = np.where(ok, med[i2, 0] if len(ug) else x, x); Y = np.where(ok, med[i2, 1] if len(ug) else y, y)
         return X, Y
 
-    # nodes: segment ends on valid layers (or any via end)
-    via = (s[:, 0] == s[:, 3]) & (s[:, 1] == s[:, 4]) & (s[:, 2] != s[:, 5])
-    planar = s[:, 2] == s[:, 5]
-    v1 = (s[:, 2] >= routes.min_layer) | via
-    v2 = (s[:, 5] >= routes.min_layer) | via
-    keep = v1 & v2
-    nk_dt = np.dtype([('n', np.int64), ('x', np.int64), ('y', np.int64), ('l', np.int64)])
-    ends = np.empty(2 * int(keep.sum()), nk_dt)
-    ks = np.nonzero(keep)[0]
-    ends['n'] = np.concatenate([sn[ks], sn[ks]])
-    ends['x'] = np.concatenate([s[ks, 0], s[ks, 3]]); ends['y'] = np.concatenate([s[ks, 1], s[ks, 4]])
-    ends['l'] = np.concatenate([s[ks, 2], s[ks, 5]])
+    ends = npack(np.concatenate([sn[ks], sn[ks]]), np.concatenate([s[ks, 0], s[ks, 3]]),
+                 np.concatenate([s[ks, 1], s[ks, 4]]), np.concatenate([s[ks, 2], s[ks, 5]]))
     nodes, ninv = np.unique(ends, return_inverse=True)
+    nodes_net = nuq[0][nodes // (max(len(nuq[1]), 1) * max(len(nuq[2]), 1) * max(len(nuq[3]), 1))]
     K = len(ks)
     na, nb = ninv[:K], ninv[K:]
     node_cap = np.zeros(len(nodes))
@@ -108,11 +128,10 @@ def build(d, routes, rc, via_res=None):
     np.add.at(node_cap, na, c_seg / 2); np.add.at(node_cap, nb, c_seg / 2)
     # pins: to their gcell's node on conn_layer + 1 (with the cut below it), else on conn_layer
     pin_node = np.full(P, -1, np.int64)
-    pr = np.nonzero(has & (routes.pin_layer >= 0))[0]
     cl = routes.pin_layer[pr]
 
     def find(net, x, y, l):
-        k = np.empty(len(net), nk_dt); k['n'] = net; k['x'] = x; k['y'] = y; k['l'] = l
+        k = npack(net, x, y, l)
         i = np.searchsorted(nodes, k)
         i2 = np.minimum(i, max(len(nodes) - 1, 0))
         ok = (i < len(nodes)) & (nodes[i2] == k) if len(nodes) else np.zeros(len(k), bool)
@@ -133,7 +152,7 @@ def build(d, routes, rc, via_res=None):
     N0 = len(nodes)
     pnode = N0 + np.arange(len(pr))                                    # a node per pin
     pin_node[pr] = pnode
-    node_net = np.concatenate([nodes['n'], p_net[pr]])
+    node_net = np.concatenate([nodes_net, p_net[pr]])
     node_cap = np.concatenate([node_cap, pcap / 2])
     np.add.at(node_cap, gnode, pcap / 2)
     res_a = np.concatenate([na, pnode]); res_b = np.concatenate([nb, gnode]); res_r = np.concatenate([r_seg, pres])
@@ -186,27 +205,26 @@ def reduce(net, drv_pin, pin_cap):
     y1[:N] = cap
     pos = np.full(N + 1, -1, np.int64); pos[order] = np.arange(len(order))
     pp = np.where(root_edge, -1, pos[np.where(root_edge, 0, par)])      # parent's index in order (-1: a driver)
-    depth_o = np.zeros(len(order), np.int64)
-    anc = pp.copy()
-    while True:                                          # depth = number of ancestors below the super root
-        live = anc >= 0
-        if not live.any():
-            break
-        depth_o += live
-        anc = np.where(live, pp[np.maximum(anc, 0)], -1)
-    for dpt in range(int(depth_o.max(initial=0)), -1, -1):
-        sel = np.nonzero(depth_o == dpt)[0]
-        c = order[sel]; p_ = par[sel]; r = r_edge[sel][:, None]
+    # breadth-first: the nodes of one depth are a contiguous run of `order`, and pp never decreases along it, so the
+    # depth runs are found by searching pp (a tree routed through many gcells is thousands of nodes deep: a pass over
+    # all nodes per depth took a minute on a 300k-cell design)
+    if len(pp) > 1 and bool((pp[1:] < pp[:-1]).any()):
+        raise AssertionError('grpar.reduce: the traversal is not breadth-first')
+    bounds = [0, int(np.searchsorted(pp, 0, 'left'))]          # depth 0: the driver nodes (pp == -1)
+    while bounds[-1] < len(order):
+        bounds.append(int(np.searchsorted(pp, bounds[-1], 'left')))
+    runs = list(zip(bounds[:-1], bounds[1:]))
+    for a, b in reversed(runs):                                 # children before parents
+        c = order[a:b]; p_ = par[a:b]; r = r_edge[a:b][:, None]
         a1, a2, a3 = y1[c], y2[c], y3[c]
         np.add.at(y1, p_, a1)
         np.add.at(y2, p_, a2 - r * a1 * a1)
         np.add.at(y3, p_, a3 - 2 * r * a1 * a2 + r * r * a1 ** 3)
     # Elmore, parents first
     el = np.zeros((N + 1, V))
-    for dpt in range(1, int(depth_o.max(initial=0)) + 1):
-        sel = np.nonzero(depth_o == dpt)[0]
-        c = order[sel]
-        el[c] = el[par[sel]] + r_edge[sel][:, None] * y1[c]
+    for a, b in runs[1:]:
+        c = order[a:b]
+        el[c] = el[par[a:b]] + r_edge[a:b][:, None] * y1[c]
     elm[pn] = el[pin_node[pn]]
     # the pi model at each driver node
     Y1, Y2, Y3 = y1[dn[roots]], y2[dn[roots]], y3[dn[roots]]

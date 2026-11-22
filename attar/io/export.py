@@ -144,13 +144,18 @@ def floorplan_changes(d, dbu, tracks, site):
 
 def pin_layers(d):
     """(horizontal, vertical) layer for IO pins: ORFS's IO_PLACER_H/V when known (asap7: M4, M5), else the first
-    horizontal layer above the third and the first vertical one above it, from the tech profile."""
+    horizontal layer above the third and the first vertical one above it, from the tech profile. A stack too short
+    for that (the ICCAD 2015 superblue LEFs: metal1-4) takes its highest horizontal layer with a vertical one above."""
     if d.manifest.get('orfs', {}).get('platform') == 'asap7':
         return 'M4', 'M5'
     tp, _ = st.load(os.path.join(d.path, 'tech_profile.safetensors'))
     names = d.names['layers']; dr = tp['layer_dir']
-    h = next(i for i in range(3, len(names)) if dr[i] == 0)
-    v = next(i for i in range(h + 1, len(names)) if dr[i] == 1)
+    pairs = [(h, next((v for v in range(h + 1, len(names)) if dr[v] == 1), None))
+             for h in range(len(names)) if dr[h] == 0]
+    pairs = [(h, v) for h, v in pairs if v is not None]
+    if not pairs:
+        raise ValueError('%s: no horizontal routing layer with a vertical one above it' % d.path)
+    h, v = next(((h, v) for h, v in pairs if h >= 3), pairs[-1])
     return names[h], names[v]
 
 
