@@ -12,6 +12,11 @@ Examples
   independent sets, the set optimizer and the round loop, with a check that the timer equals the exact one at the
   anchor; its results are unchanged.
 
+Docs
+- docs/features.md: the global placer's gap to DREAMPlace in a timing-driven loop is withdrawn. It came from a
+  DATE'25 port that, by a bug, kept its first pin pairs; fixed, the port's TNS on the 8 superblue designs is 0.93x
+  DATE25-TDP's own (Attar-timed). The wirelength-only gap stays.
+
 ## 1.0.5
 
 **Upgrading.** `naive.legalize` (and so `d.place()` and `naive.flow`) uses Abacus by default: placements differ from
