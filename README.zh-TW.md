@@ -38,9 +38,9 @@ d.export('aes.def')                                         # 匯出回 OpenROAD
 | notebook | 內容 |
 | --- | --- |
 | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/timing_driven_colab.ipynb) | 十五行的時序驅動擺置，即下方示範：先為線長擺置 cva6、做時序分析、如 OpenROAD 依 slack 為 net 加權、再擺置一次 |
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/latte_on_attar.ipynb) | LATTE（DAC 2026）時序驅動 detailed placement，逐步拆解：錨定在 Attar timer 上的可微分 timer、獨立集、Adam 加 CAWP，以 Attar global routing 後的時序評估，在 ICCAD 2025 競賽設計上（英文） |
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/p11_attar_superblue18.ipynb) | DAC 2026 的 net–pin 混合加權時序驅動 global placement，逐步拆解：DATE 2025 的 pin 對加上由延遲模型推導的 net 權重，建在 Attar 的 timer 與 placer 上，在 superblue18（74.5 萬 cells）上跑（英文） |
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/date25_attar_superblue18.ipynb) | DATE 2025 的 pin 對加權時序驅動 global placement，逐步拆解，在 superblue18 上跑（英文） |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/latte_on_attar.ipynb) | **[DAC 2026]** LATTE 時序驅動 detailed placement，逐步拆解：錨定在 Attar timer 上的可微分 timer、獨立集、Adam 加 CAWP，以 Attar global routing 後的時序評估，在 ICCAD 2025 競賽設計上（英文） |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/p11_attar_superblue18.ipynb) | **[DAC 2026]** net–pin 混合加權時序驅動 global placement，逐步拆解：DATE 2025 的 pin 對加上由延遲模型推導的 net 權重，建在 Attar 的 timer 與 placer 上，在 superblue18（74.5 萬 cells）上跑（英文） |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RayChang987/Attar/blob/main/examples/colab/date25_attar_superblue18.ipynb) | **[DATE 2025]** pin 對加權時序驅動 global placement，逐步拆解，在 superblue18 上跑（英文） |
 
 <div align="center">
 <img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="以十五行 Python 寫成的時序驅動擺置，在 cva6 與 swerv 上執行：先為線長擺置、做時序分析、依 slack 為 net 加權（如 OpenROAD 的全域擺置）、再擺置一次、再做時序分析" width="920">
