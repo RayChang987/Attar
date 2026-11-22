@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from common import RUNS, need
+from common import MEDIUM, RUNS, need
 
 from attar import route
 from attar.rules import routing as R
@@ -175,6 +175,57 @@ class RouterTest(unittest.TestCase):
                 self.assertEqual(c.item(), (nx - 1) + (ny - 1) + 2.0)   # unit costs plus one bend's two vias
             typ, mid = G.best(seg, margin=2, via=2.0)
             self.assertEqual(G.path(seg, typ, mid, via=2.0).item(), (nx - 1) + (ny - 1) + 2.0)
+
+    def test_new_routes_redo_only_the_changed_nets(self):
+        """d.timing(routes=other) on the kept timer (Timer.set_routes) equals a new timer on those routes, bit for
+        bit, redoing only the nets whose route or pins changed; and back to the first routes, the first result."""
+        import torch
+        from attar.timing.sta import Timer
+        d = need(MEDIUM)
+        d.load_reference()
+        r1, _ = route.global_route(d, verbose=False)
+        t1 = d.timing(routes=r1)
+        s1 = (t1.setup.clone(), t1.hold.clone())
+        T = d._gr_timer[1]
+        mv = torch.nonzero(d.movable).flatten()
+        sel = mv[torch.randperm(len(mv), generator=torch.Generator().manual_seed(0))[:len(mv) // 50].to(mv.device)]
+        p = d.pos.clone(); p[sel] += 1.5; d.pos = p
+        r2, _ = route.global_route(d, verbose=False)
+        t2 = d.timing(routes=r2)
+        self.assertIs(d._gr_timer[1], T)                              # the same timer, patched
+        fresh = Timer(d, parasitics='global_routing', routes=r2).run()
+        self.assertTrue(torch.equal(t2.setup, fresh.setup) and torch.equal(t2.hold, fresh.hold))
+        self.assertEqual(T.gr_loops, fresh.timer.gr_loops)
+        E = len(d.n_ptr) - 1
+        self.assertLess(T.set_routes(r1), E)                          # back: only the nets that differ
+        self.assertEqual(T.set_routes(r1), 0)
+        t3 = T.run()
+        self.assertTrue(torch.equal(t3.setup, s1[0]) and torch.equal(t3.hold, s1[1]))
+
+    def test_incremental_reroute(self):
+        """global_route(previous=...): only the nets with a pin in another gcell (or layer) are routed again; every
+        other net keeps its segments as they were; every net is routed; other parameters: a full route."""
+        import torch
+        d = need(MEDIUM)
+        d.load_reference()
+        r1, s1 = route.global_route(d, verbose=False)
+        mv = torch.nonzero(d.movable).flatten()
+        sel = mv[torch.randperm(len(mv), generator=torch.Generator().manual_seed(1))[:len(mv) // 100].to(mv.device)]
+        p = d.pos.clone(); p[sel] += 4.0; d.pos = p
+        r2, s2 = route.global_route(d, verbose=False, previous=r1)
+        self.assertTrue(s2['incremental'])
+        n = d.raw['n_ptr']
+        p_net = np.repeat(np.arange(len(n) - 1), np.diff(n))
+        moved = (r1.pin_grid != r2.pin_grid).any(1) | (r1.pin_layer != r2.pin_layer)
+        changed = np.zeros(len(n) - 1, bool); changed[p_net[moved]] = True
+        self.assertEqual(s2['nets_rerouted'], int(changed.sum()))
+        self.assertGreater(s2['nets_rerouted'], 0)
+        for e in np.nonzero(~changed)[0][::97]:                       # a sample of the others: segments unchanged
+            self.assertTrue(np.array_equal(r1.seg[r1.seg_net == e], r2.seg[r2.seg_net == e]))
+        full, _ = route.global_route(d, verbose=False)
+        self.assertTrue(np.array_equal(r2.routed(), full.routed()))   # the same nets routed
+        _, s3 = route.global_route(d, verbose=False, previous=r1, margin=5)
+        self.assertFalse(s3['incremental'])                            # other parameters: a full route
 
     def test_gcd(self):
         d = need(GCD)

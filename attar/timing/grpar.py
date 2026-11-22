@@ -59,10 +59,12 @@ def _packer(*cols):
     return pack, uniq
 
 
-def build(d, routes, rc, via_res=None):
+def build(d, routes, rc, via_res=None, nets=None):
     """The parasitic networks of every routed net. Returns a dict of numpy arrays:
     node_net (N,), node_cap (N,) wire capacitance (fF) at each node; res_a, res_b (R,) node ids, res_r (R,) kohm;
-    pin_node (P,) the node of each pin (-1: its net is not routed, or the pin has no route to it)."""
+    pin_node (P,) the node of each pin (-1: its net is not routed, or the pin has no route to it).
+    nets: a bool mask (E,) to build only those nets' networks (the others get no node, wire_cap 0); a net's network,
+    and so its reduction, is bit for bit the one it has in the full build (its nodes keep their relative order)."""
     names = d.names['layers']
     L = len(names)
     lay_r = np.zeros(L + 2); lay_c = np.zeros(L + 2)
@@ -76,6 +78,11 @@ def build(d, routes, rc, via_res=None):
     p_net = np.repeat(np.arange(len(a['n_ptr']) - 1), np.diff(a['n_ptr']))
     P = len(p_net)
     routed = routes.routed()
+    if nets is not None:
+        nets = np.asarray(nets, bool)
+        routed = routed & nets
+        sel = nets[sn]
+        s, sn = s[sel], sn[sel]
     # route points: per (net, gcell center) holding pins of the net, the median of their positions
     pp = routes.pin_pt; pg = routes.pin_grid
     has = routed[p_net] & (pg[:, 0] >= 0) & (pp[:, 0] >= 0)
@@ -159,6 +166,60 @@ def build(d, routes, rc, via_res=None):
     return {'node_net': node_net, 'node_cap': node_cap, 'res_a': res_a, 'res_b': res_b, 'res_r': res_r,
             'pin_node': pin_node, 'pins_missing': int((has & (routes.pin_layer >= 0)).sum() - len(pr)),
             'wire_cap': np.bincount(node_net, node_cap, minlength=len(a['n_ptr']) - 1)}
+
+
+def _mix(x):
+    """splitmix64 of uint64 values (wrapping arithmetic)."""
+    with np.errstate(over='ignore'):
+        z = x + np.uint64(0x9E3779B97F4A7C15)
+        z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        return z ^ (z >> np.uint64(31))
+
+
+def _row_hash(cols):
+    h = np.zeros(len(cols[0]), np.uint64)
+    with np.errstate(over='ignore'):
+        for c in cols:
+            h = _mix(h ^ np.asarray(c).astype(np.int64).astype(np.uint64))
+    return h
+
+
+def net_signatures(d, routes):
+    """Per net (E,) a 64-bit hash of what its network depends on: its segments in their order and its pins' positions,
+    gcells and layers. Two route sets give a net the same network (and the same reduction at the same pin
+    capacitances) where the signatures agree, barring a hash collision."""
+    a = d.raw
+    E = len(a['n_ptr']) - 1
+    s, sn = routes.seg, routes.seg_net.astype(np.int64)
+    o = np.argsort(sn, kind='stable')
+    sno = sn[o]
+    first = np.searchsorted(sno, sno)
+    rank = np.arange(len(sno)) - first                          # position of the segment within its net
+    hs = _row_hash([s[o, k] for k in range(s.shape[1])] + [rank])
+    seg_h = np.zeros(E, np.uint64)
+    if len(sno):
+        starts = np.nonzero(np.r_[True, sno[1:] != sno[:-1]])[0]
+        with np.errstate(over='ignore'):
+            seg_h[sno[starts]] = np.add.reduceat(hs, starts)
+    p_net = np.repeat(np.arange(E), np.diff(a['n_ptr']))
+    hp = _row_hash([np.arange(len(p_net)), routes.pin_pt[:, 0], routes.pin_pt[:, 1], routes.pin_grid[:, 0],
+                    routes.pin_grid[:, 1], routes.pin_layer])
+    pin_h = np.zeros(E, np.uint64)
+    if len(p_net):
+        starts = np.asarray(a['n_ptr'][:-1], np.int64)
+        nz = np.diff(a['n_ptr']) > 0
+        with np.errstate(over='ignore'):
+            pin_h[nz] = np.add.reduceat(hp, starts[nz])
+    cnt = np.bincount(sn, minlength=E).astype(np.uint64)
+    return _mix(seg_h ^ _mix(pin_h ^ _mix(cnt)))
+
+
+def loop_nets(net, E):
+    """Per net (E,): its network has a resistor loop (more resistors than nodes less one)."""
+    nn = np.bincount(net['node_net'], minlength=E)
+    nr = np.bincount(net['node_net'][net['res_a']], minlength=E)
+    return (nr > nn - 1) & (nn > 0)
 
 
 def reduce(net, drv_pin, pin_cap):

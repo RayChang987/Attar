@@ -263,7 +263,7 @@ def _side_stream(dev):
     return _SIDE[dev]
 
 
-def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
+def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0, into=None):
     """Elmore delay from each net's driver to every pin and the driver's pi model, on OpenROAD's estimate-parasitics
     tree (attar.timing.steiner.pd_tree: Prim-Dijkstra alpha 0.3 on nearest neighbors, steinerized; dbu coordinates), each
     branch a pi segment of wire RC r, c per um, every pin behind its via resistance rcut (a scalar, OpenROAD's average
@@ -272,7 +272,9 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
     on length (r x distance x half the net's C).
     cap may hold V variants (P, V) (rise / fall, max / min pin capacitances: OpenSTA reduces per rise / fall and
     min / max). Returns per pin and variant the Elmore delay (P, V) in ps, per net and variant the pi model (E, V, 3)
-    near C / R / far C, and per net the tree's wire length in um (length where no tree was built)."""
+    near C / R / far C, and per net the tree's wire length in um (length where no tree was built).
+    into: (out, pi, tlen) buffers to update in place, only the rows of the plan's nets and pins (Timer.wires
+    recomputes the nets that changed with a plan of those); tlen's rows of the plan's nets must hold length."""
     from .steiner import pd_tree
     rc_bucket = None
     if p.is_cuda:
@@ -284,9 +286,12 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
     if cap.dim() == 1:
         cap = cap[:, None]
     V = cap.shape[1]
-    out = torch.zeros(len(p), V, device=dev)
-    pi = torch.zeros(n_nets, V, 3, device=dev)
-    tlen = length.clone()
+    if into is None:
+        out = torch.zeros(len(p), V, device=dev)
+        pi = torch.zeros(n_nets, V, 3, device=dev)
+        tlen = length.clone()
+    else:
+        out, pi, tlen = into
     if rc_bucket is not None:                     # one Triton launch per bucket: tree, moments, pi, scattered outputs
         pc, cc = p.float().contiguous(), cap.float().contiguous()
         rv = (rcut.float() if torch.is_tensor(rcut) else torch.full((len(p),), float(rcut), device=dev)).contiguous()
@@ -344,7 +349,8 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0):
         big, net_of = plan['big'], plan['net_of']
         dd = (p - p[plan['drv_pin']]).abs().sum(1)
         ctot = torch.zeros(n_nets, V, device=dev).index_add_(0, net_of, cap) + c * length[:, None]
-        out = torch.where(plan['pin_big'][:, None], r * dd[:, None] * ctot[net_of] / 2, out)
+        pb = plan['pin_big']
+        out[pb] = (r * dd[:, None] * ctot[net_of] / 2)[pb]
         pi[big] = torch.stack([ctot[big], torch.zeros_like(ctot[big]), torch.zeros_like(ctot[big])], -1)
     if plan.get('big_buf') is not None:              # large data nets: their exact trees (attar.timing.steiner_big, host)
         nets_b, pins_b, elm_b, pi_b, len_b = plan['big_buf']
@@ -752,6 +758,7 @@ class Timer:
             self._gr_setup()
         self._graph = None
         self._warming = False
+        self._ws = None                              # placement wires for the CUDA graph: (cw, elm, pi), static
         self.use_graph = self.dev.type == 'cuda'
         from . import dmp
         self.steps = dmp.EAGER
@@ -1189,9 +1196,12 @@ class Timer:
         if self.net_clkrc.any():                    # non-leaf clock nets: their own plan, timed with clock RC
             nc = torch.as_tensor(self.net_clkrc, device=self.dev)
             self.net_clkrc_t = nc
-            self.plan_clk = tree_plan(ev.ptr, ev.deg, torch.where(nc, drv_local, torch.full_like(drv_local, -1)))
+            self._plan_clk_drv = torch.where(nc, drv_local, torch.full_like(drv_local, -1))
+            self.plan_clk = tree_plan(ev.ptr, ev.deg, self._plan_clk_drv)
             drv_local = torch.where(nc, torch.full_like(drv_local, -1), drv_local)
         self.plan = tree_plan(ev.ptr, ev.deg, drv_local)
+        self._plan_drv = drv_local                  # the drivers the plans were made with (Timer.wires: a plan of
+        self._w = None                              # the nets that changed); the last wires and their inputs
         self._big = None
         big = self.plan['big']
         from . import steiner_big
@@ -1209,6 +1219,7 @@ class Timer:
                 bn = bn[~self.net_clkrc[bn]]
                 dl = drv_local.clone(); dl[torch.as_tensor(bn, device=self.dev, dtype=torch.long)] = -1
                 self.plan = tree_plan(ev.ptr, ev.deg, dl)
+                self._plan_drv = dl
             else:
                 reach = self._reachable()
                 bn = bn[reach[self.net_driver[bn]] & ~self.net_clkrc[bn]]      # (clock RC nets: plan_clk)
@@ -1218,7 +1229,7 @@ class Timer:
             pins = np.repeat(ptr[bn] - np.concatenate([[0], np.cumsum(cnt)[:-1]]), cnt) + np.arange(int(cnt.sum()))
             caps = torch.cat([self.pin_cap, self.pin_cap_min], 1).cpu().numpy()
             pins_t = torch.as_tensor(pins, device=self.dev)
-            self._big = {'ptr': np.concatenate([[0], np.cumsum(deg[bn])]), 'drv': drv_local.cpu().numpy()[bn],
+            self._big = {'nets': bn, 'ptr': np.concatenate([[0], np.cumsum(deg[bn])]), 'drv': drv_local.cpu().numpy()[bn],
                          'cap': caps[pins], 'rv': self.pin_rvia.cpu().numpy()[pins], 'cell': ev.cell[pins_t],
                          'off': ev.off[pins_t], 'pins': pins_t}
             self.plan['big_buf'] = (big, pins_t, torch.zeros(len(pins), 4, device=self.dev),
@@ -1244,29 +1255,85 @@ class Timer:
         if via_res is None:                          # the cut layers' LEF resistance (routing fact), as OpenROAD falls back to
             cr = (self.d.manifest.get('routing') or {}).get('cut_res')
             via_res = {int(k): v for k, v in cr.items()} if cr else None
+        self._gr_rc, self._gr_via = rc, via_res
         self._gr_net = grpar.build(self.d, self.routes, rc, via_res)
+        self._gr_sig = grpar.net_signatures(self.d, self.routes)
         E, P = len(self.d.raw['n_ptr']) - 1, len(self.d.raw['p_cell'])
         dev = self.dev
-        self._gr_cw = torch.as_tensor(self._gr_net['wire_cap'], device=dev, dtype=torch.float32)
+        self._gr_cw64 = self._gr_net['wire_cap'].astype(np.float64)
+        self._gr_cw = torch.as_tensor(self._gr_cw64, device=dev, dtype=torch.float32)
         self._gr_elm = torch.zeros(P, 4, device=dev); self._gr_pi = torch.zeros(E, 4, 3, device=dev)
+        self._gr_elm64 = None                       # the reduction (float64), per pin and per net: _gr_update
         self._gr_key = None
         self.gr_loops = 0
 
     def _gr_update(self):
         """Reduce the routes' networks at the pins' present capacitances, into the static buffers."""
-        caps_t = torch.cat([self.pin_cap, self.pin_cap_min], 1)
-        key = (caps_t.data_ptr(), float(caps_t.sum()))
-        if key == self._gr_key:
+        key = self._gr_caps_key()
+        if key == self._gr_key:                     # the pin capacitances have not changed since the last reduction
             return
+        caps_t = torch.cat([self.pin_cap, self.pin_cap_min], 1)
         self._gr_key = key
         from . import grpar
+        if self._gr_net is None:                    # patched by set_routes: the whole network again
+            self._gr_net = grpar.build(self.d, self.routes, self._gr_rc, self._gr_via)
+            self._gr_cw64 = self._gr_net['wire_cap'].astype(np.float64)
+            self._gr_cw.copy_(torch.from_numpy(self._gr_cw64).float())
         caps = caps_t.double().cpu().numpy()
-        elm, pi, self.gr_loops = grpar.reduce(self._gr_net, np.asarray(self.net_driver), caps)
-        E = pi.shape[0]
-        tot = np.zeros((E, caps.shape[1])); np.add.at(tot, np.asarray(self.d.p_net.cpu().numpy()), caps)
-        miss = np.isnan(pi[:, 0, 0])
-        pi[miss] = np.stack([tot[miss], np.zeros_like(tot[miss]), np.zeros_like(tot[miss])], -1)
+        self._gr_caps = caps
+        E = len(self._gr_cw64)
+        self._gr_tot = np.zeros((E, caps.shape[1])); np.add.at(self._gr_tot, np.asarray(self.d.p_net.cpu().numpy()), caps)
+        elm, pi, _ = grpar.reduce(self._gr_net, np.asarray(self.net_driver), caps)
+        self._gr_fill(pi, None)
+        self._gr_elm64, self._gr_pi64 = elm, pi
+        self._gr_loop = grpar.loop_nets(self._gr_net, len(pi))
+        self.gr_loops = int(self._gr_loop.sum())
         self._gr_elm.copy_(torch.from_numpy(elm).float()); self._gr_pi.copy_(torch.from_numpy(pi).float())
+
+    def _gr_caps_key(self):
+        """Identifies the pin capacitances (resized() updates them in place: the version counters change)."""
+        return (id(self.pin_cap), self.pin_cap._version, id(self.pin_cap_min), self.pin_cap_min._version)
+
+    def _gr_fill(self, pi, nets):
+        """Nets without a network (unrouted): their pins' capacitance, lumped (pi rows still NaN; nets: a mask of
+        the rows to consider, or None for all)."""
+        tot = self._gr_tot
+        miss = np.isnan(pi[:, 0, 0])
+        if nets is not None:
+            miss &= nets
+        pi[miss] = np.stack([tot[miss], np.zeros_like(tot[miss]), np.zeros_like(tot[miss])], -1)
+
+    def set_routes(self, routes):
+        """Time on other routes of the same netlist: only the nets whose route or pins changed (grpar.net_signatures)
+        get their networks built and reduced again; every other net keeps its parasitics, which are bit for bit
+        what a new timer on these routes would compute. Returns the number of nets redone."""
+        from . import grpar
+        if self.parasitics != 'global_routing':
+            raise ValueError('set_routes: this timer uses placement parasitics')
+        sig = grpar.net_signatures(self.d, routes)
+        dirty = sig != self._gr_sig
+        self.routes, self._gr_sig = routes, sig
+        n = int(dirty.sum())
+        if n == 0:
+            return 0
+        if self._gr_elm64 is None or self._gr_key != self._gr_caps_key():
+            self._gr_net, self._gr_key = None, None      # never reduced, or the pin capacitances changed: all again
+            return n
+        net = grpar.build(self.d, routes, self._gr_rc, self._gr_via, nets=dirty)
+        caps = self._gr_caps
+        elm, pi, _ = grpar.reduce(net, np.asarray(self.net_driver), caps)
+        self._gr_fill(pi, dirty)
+        pins = dirty[np.asarray(self.d.p_net.cpu().numpy())]
+        self._gr_elm64[pins] = elm[pins]
+        self._gr_pi64[dirty] = pi[dirty]
+        self._gr_cw64[dirty] = net['wire_cap'][dirty]
+        self._gr_loop[dirty] = grpar.loop_nets(net, len(dirty))[dirty]
+        self.gr_loops = int(self._gr_loop.sum())
+        self._gr_net = None                              # no longer the whole network (_gr_update builds it if needed)
+        self._gr_elm.copy_(torch.from_numpy(self._gr_elm64).float())
+        self._gr_pi.copy_(torch.from_numpy(self._gr_pi64).float())
+        self._gr_cw.copy_(torch.from_numpy(self._gr_cw64).float())
+        return n
 
     def wires_gr(self):
         """Global-routing parasitics (the buffers _gr_update filled): per net the wire capacitance, per net arc the
@@ -1333,17 +1400,35 @@ class Timer:
                 reach[g_to[a:b][reach[g_fr[a:b]]]] = True       # np.logical_or.at, without ufunc.at
         return reach
 
-    def _big_update(self, pos):
-        """The large nets' parasitics at pos, on the host (attar.timing.steiner_big), into plan['big_buf']."""
+    def _big_update(self, pos, nets=None):
+        """The large nets' parasitics at pos, on the host (attar.timing.steiner_big), into plan['big_buf']. nets: a
+        mask (E,) of the nets to redo (the others keep theirs); returns the mask of big_buf rows redone."""
         if self._big is None or self.parasitics != 'placement':
-            return
+            return None
         from . import steiner_big
         b = self._big
-        q = torch.round(((self.d.pos if pos is None else pos)[b['cell']] + b['off']) * self.d.dbu).cpu().numpy()
-        elm, pi, length = steiner_big.pd_rc(q[:, 0], q[:, 1], b['ptr'], b['drv'], b['cap'], b['rv'], self.r_sig,
-                                            self.c_sig, self.d.dbu)
         _, _, elm_b, pi_b, len_b = self.plan['big_buf']
-        elm_b.copy_(torch.from_numpy(elm)); pi_b.copy_(torch.from_numpy(pi)); len_b.copy_(torch.from_numpy(length))
+        pos = self.d.pos if pos is None else pos
+        if nets is None:
+            q = torch.round((pos[b['cell']] + b['off']) * self.d.dbu).cpu().numpy()
+            elm, pi, length = steiner_big.pd_rc(q[:, 0], q[:, 1], b['ptr'], b['drv'], b['cap'], b['rv'], self.r_sig,
+                                                self.c_sig, self.d.dbu)
+            elm_b.copy_(torch.from_numpy(elm)); pi_b.copy_(torch.from_numpy(pi)); len_b.copy_(torch.from_numpy(length))
+            return None
+        rows = nets.cpu().numpy()[b['nets']]                 # which big nets
+        if not rows.any():
+            return rows
+        k = np.nonzero(rows)[0]
+        cnt = np.diff(b['ptr'])[k]
+        pin_rows = np.repeat(b['ptr'][k] - np.concatenate([[0], np.cumsum(cnt)[:-1]]), cnt) + np.arange(int(cnt.sum()))
+        pr = torch.as_tensor(pin_rows, device=self.dev)
+        q = torch.round((pos[b['cell'][pr]] + b['off'][pr]) * self.d.dbu).cpu().numpy()
+        elm, pi, length = steiner_big.pd_rc(q[:, 0], q[:, 1], np.concatenate([[0], np.cumsum(cnt)]), b['drv'][k],
+                                            b['cap'][pin_rows], b['rv'][pin_rows], self.r_sig, self.c_sig, self.d.dbu)
+        kt = torch.as_tensor(k, device=self.dev)
+        elm_b[pr] = torch.from_numpy(elm).to(elm_b); pi_b[kt] = torch.from_numpy(pi).to(pi_b)
+        len_b[kt] = torch.from_numpy(length).to(len_b)
+        return rows
 
     def steiner(self, p):
         """Wire length of the nets without an estimate-parasitics tree (above the largest bucket, or no driver):
@@ -1354,19 +1439,53 @@ class Timer:
         L = torch.where(ev.deg <= 3, (hi - lo).sum(1), s)
         return torch.where(ev.deg >= 2, L, torch.zeros_like(L))
 
+    INCREMENTAL_WIRES = 0.3     # wires(): redo only the changed nets while they are at most this fraction of all
+
     def wires(self, pos=None):
-        """Placement parasitics: per net the wire capacitance, per net arc the Elmore delay (ps)."""
+        """Placement parasitics: per net the wire capacitance, per net arc the Elmore delay (ps). Only the nets with a
+        pin that moved or changed (capacitance, via resistance: a resize) since the last call are computed again, the
+        others keep theirs: each net's tree and reduction are its own, so the result is bit for bit a full one's."""
         p = self.ev._pins(pos)
-        if not (p.is_cuda and torch.cuda.is_current_stream_capturing()) and not self._warming:
-            self._big_update(pos)
         L = self.steiner(p)
         caps = torch.cat([self.pin_cap, self.pin_cap_min], 1)            # rise / fall max, rise / fall min
-        elm_pin, pi, L2 = tree_elmore(p, self.plan, self.ev.E, caps, self.r_sig, self.c_sig, L,
-                                      self.d.dbu, rcut=self.pin_rvia)
+        E = self.ev.E
+        w = self._w
+        dirty = None
+        if w is not None:
+            pins = (p != w['p']).any(1) | (caps != w['caps']).any(1) | (self.pin_rvia != w['rv'])
+            dirty = torch.zeros(E, dtype=torch.bool, device=self.dev)
+            dirty[self.pin_net[pins]] = True
+            if int(dirty.sum()) > self.INCREMENTAL_WIRES * E:
+                dirty = None
+        if dirty is None:                                                # every net
+            self._big_update(pos)
+            main = tree_elmore(p, self.plan, E, caps, self.r_sig, self.c_sig, L, self.d.dbu, rcut=self.pin_rvia)
+            clk = None
+            if self.plan_clk is not None:
+                clk = tree_elmore(p, self.plan_clk, E, caps, self.r_clk, self.c_clk, L, self.d.dbu,
+                                  rcut=self.pin_rvia)
+            self._w = w = {'p': p.clone(), 'caps': caps.clone(), 'rv': self.pin_rvia.clone(), 'main': main,
+                           'clk': clk}
+        elif bool(dirty.any()):                                          # the nets that changed
+            rows = self._big_update(pos, dirty)
+            for key, drv0, r_, c_ in (('main', self._plan_drv, self.r_sig, self.c_sig),
+                                       ('clk', getattr(self, '_plan_clk_drv', None), self.r_clk, self.c_clk)):
+                if w[key] is None:
+                    continue
+                sub = tree_plan(self.ev.ptr, self.ev.deg, torch.where(dirty, drv0, torch.full_like(drv0, -1)))
+                w[key][2][dirty] = L[dirty]
+                tree_elmore(p, sub, E, caps, r_, c_, L, self.d.dbu, rcut=self.pin_rvia, into=w[key])
+                if key == 'main' and rows is not None and rows.any():  # the large nets' host trees again
+                    nets_b, pins_b, elm_b, pi_b, len_b = self.plan['big_buf']
+                    rk = torch.as_tensor(rows, device=self.dev)
+                    pk = rk.repeat_interleave(torch.as_tensor(np.diff(self._big['ptr']), device=self.dev))
+                    out, pi_, tl = w['main']
+                    out[pins_b[pk]] = elm_b[pk]; pi_[nets_b[rk]] = pi_b[rk]; tl[nets_b[rk]] = len_b[rk]
+            w['p'].copy_(p); w['caps'].copy_(caps); w['rv'].copy_(self.pin_rvia)
+        elm_pin, pi, L2 = w['main']
         cw = L2 * self.c_sig
         if self.plan_clk is not None:
-            e2, pi2, L3 = tree_elmore(p, self.plan_clk, self.ev.E, caps, self.r_clk, self.c_clk, L,
-                                      self.d.dbu, rcut=self.pin_rvia)
+            e2, pi2, L3 = w['clk']
             nc = self.net_clkrc_t
             elm_pin = torch.where(nc[self.pin_net][:, None], e2, elm_pin)
             pi = torch.where(nc[:, None, None], pi2, pi)
@@ -1868,6 +1987,13 @@ class Timer:
         if not self.use_graph:
             return self._result(*self._run_core(pos), crpr=crpr)
         with torch.cuda.device(self.dev):
+            if self.parasitics == 'placement':          # eager (only the nets that changed), into static buffers
+                cw, elm = self.wires(pos)
+                if self._ws is None:
+                    self._ws = (cw.clone(), elm.clone(), self.pi.clone())
+                else:
+                    self._ws[0].copy_(cw); self._ws[1].copy_(elm); self._ws[2].copy_(self.pi)
+                self.pi = self._ws[2]
             if self._graph is None:
                 self._pos_buf = pos.detach().clone()
                 st_ = torch.cuda.Stream(); st_.wait_stream(torch.cuda.current_stream())
@@ -1884,7 +2010,6 @@ class Timer:
                     self._g_out = self._run_core(self._pos_buf)
                 self._graph = g
             self._pos_buf.copy_(pos)
-            self._big_update(pos)                       # large nets on the host, into the graph's static buffers
             self._graph.replay()
             return self._result(self._g_out[0].clone(), self._g_out[1].clone(), crpr=crpr)
 
@@ -1903,7 +2028,12 @@ class Timer:
 
     def _run_core(self, pos):
         dev, P, NT = self.dev, self.P, self.NT
-        cw, elm = self.wires(pos) if self.parasitics == 'placement' else self.wires_gr()
+        if self.parasitics == 'global_routing':
+            cw, elm = self.wires_gr()
+        elif self.use_graph:                                  # run() filled them (the graph reads static buffers)
+            cw, elm = self._ws[0], self._ws[1]; self.pi = self._ws[2]
+        else:
+            cw, elm = self.wires(pos)
         if elm is None:
             elm = torch.zeros(len(self.n_fr), 4, device=dev)
         self._elm = elm                                       # the run's wire delays, for required()

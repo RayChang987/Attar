@@ -8,8 +8,27 @@ Timing
   `attar.timing.grpar.reduce` went over every node once per tree depth (thousands of gcell-long nodes deep), now once
   per node on the breadth-first order's depth runs; `grpar.build` sorts its node keys as packed int64 instead of
   structured records.
+- Re-timing recomputes only the parasitics that changed, bit for bit as a new timer would:
+  - placement parasitics: `d.timing()` redoes the Steiner trees and their RC of the nets with a pin that moved or
+    changed (a resize) since the last call, up to 30 % of the nets (`Timer.INCREMENTAL_WIRES`), else all; the wires
+    now run before the CUDA graph's replay. netcard_fast 352 -> 222-251 ms per call, superblue18 590 -> 277-317 ms
+    (nothing moved / 0.1-1 % of the cells moved);
+  - global-routing parasitics: `d.timing(routes=other)` keeps its timer and rebuilds and reduces only the nets whose
+    route or pins changed (`Timer.set_routes`, `grpar.net_signatures`). netcard_fast after 1 % of the cells moved
+    and a new route: 11 -> 5 s; superblue18: 19 -> 12 s. A new route changes 30-47 % of the nets' routes there.
+  - Timing again on the same routes no longer reduces them again (its cache key was a temporary tensor's address):
+    netcard_fast 3.8 -> 0.45 s.
 
 Routing
+- Incremental global routing: `d.global_route(previous=routes)` routes again only the nets with a pin in another
+  gcell or on another layer since `routes`, against the other nets' routes, which stay as they were through the
+  negotiation and the layer assignment (as OpenROAD's `grt -incremental`); more than 30 % of the nets changed
+  (`max_changed`), or other parameters: a full route. Not what a full route gives (the other nets do not make room):
+  after 1 % of the cells moved, overflow ends a little higher (netcard_fast: 2D 5 against 0, 3D +10 %), timing about
+  the same. The unchanged nets keep their segments bit for bit, so `d.timing(routes=new)` then redoes only the
+  rerouted nets' parasitics. superblue18: 16-25 s -> 4.6-4.8 s for a new route after 0.1-1 % of the cells moved,
+  timing 3.5 s; netcard_fast after 0.1 %: 12 -> 3.6 s (after 1 % about as long as a full route: its new branches
+  need as many negotiation rounds). A full route is unchanged (the same segments).
 - `d.global_route()` on designs whose tech stops at four routing layers (the ICCAD 2015 superblue designs: metal1-4)
   failed choosing the IO pins' layers (`export.pin_layers` looked for a horizontal layer above the third only); it
   now takes the highest horizontal layer with a vertical one above.

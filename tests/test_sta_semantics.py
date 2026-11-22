@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 import torch
 
-from common import attar  # noqa: F401  (puts the checkout on the path)
+from common import attar  # (puts the checkout on the path)
 from attar.timing.ir import T_COMB
 from attar.timing.sta import Timer, _latch_relationships
 
@@ -156,3 +156,40 @@ class EarlyLibraryTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class IncrementalWiresTest(unittest.TestCase):
+    """Timer.wires redoes only the nets with a pin that moved or changed: the timing equals a new timer's, bit for bit,
+    on the CPU (no CUDA graph, host trees) and on the GPU (wires outside the graph, static buffers)."""
+
+    def check(self, dev):
+        from common import need, MEDIUM
+        need(MEDIUM)
+        d = attar.load(MEDIUM, device=dev, download=False)
+        d.timing()
+        T = d._timer
+        same = lambda a, b: torch.equal(a.setup, b.setup) and torch.equal(a.hold, b.hold)  # noqa: E731
+        mv = torch.nonzero(d.movable).flatten()
+        sel = mv[torch.randperm(len(mv), generator=torch.Generator().manual_seed(0))[:len(mv) // 100].to(mv.device)]
+        p = d.pos.clone(); p[sel] += 1.0; d.pos = p
+        r = d.timing()
+        self.assertIs(d._timer, T)
+        self.assertTrue(same(r, Timer(d).run()))
+        r2 = d.timing()                                             # nothing changed: the same result
+        self.assertTrue(same(r2, r))
+        cells = d.names['cells']
+        i = next(i for i in range(len(cells)) if bool(d.movable[i]) and len(d.equivalents(i)) > 1)
+        cur = d.names['masters'][int(d.raw['c_master'][i])]
+        d.resize(i, next(m for m in d.equivalents(i) if m != cur))   # capacitances and pin locations change
+        self.assertTrue(same(d.timing(), Timer(d).run()))
+        T.INCREMENTAL_WIRES = 0.0                                   # past the threshold: every net again
+        p = d.pos.clone(); p[sel] -= 1.0; d.pos = p
+        self.assertTrue(same(d.timing(), Timer(d).run()))
+
+    def test_cpu(self):
+        self.check('cpu')
+
+    def test_gpu(self):
+        if not torch.cuda.is_available():
+            self.skipTest('no GPU')
+        self.check('cuda')

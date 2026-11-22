@@ -601,12 +601,16 @@ class Design:
         pessimism (OpenSTA's default; False: sta::set_crpr_enabled 0).
         routes: an attar.route.GlobalRoutes (d.global_route(), or OpenROAD's read with attar.route.read_segments): wire
         parasitics from the routes, as OpenROAD's estimate_parasitics -global_routing (attar.timing.grpar), instead of
-        the placement's Steiner trees; one timer is kept for the last routes given."""
+        the placement's Steiner trees; one timer is kept for the last routes given. A re-time recomputes the parasitics
+        of the nets whose pins moved or changed (with routes: whose routes changed) only, bit for bit as a new timer."""
         self.require('sta')
         from .timing.sta import Timer
         if routes is not None:
-            if getattr(self, '_gr_timer', None) is None or self._gr_timer[0] is not routes:
+            if getattr(self, '_gr_timer', None) is None:
                 self._gr_timer = (routes, Timer(self, parasitics='global_routing', routes=routes))
+            elif self._gr_timer[0] is not routes:           # other routes: only the nets that changed are redone
+                self._gr_timer[1].set_routes(routes)
+                self._gr_timer = (routes, self._gr_timer[1])
             return self._gr_timer[1].run(pos, crpr=crpr)
         if self._timer is None:
             self._timer = Timer(self)
@@ -616,7 +620,10 @@ class Design:
         """Global routing at pos (default: the current placement) on OpenROAD's gcell grid and capacities: attar.route.
         global_route (pattern routing with negotiated rip-up and reroute, then layer assignment). Returns (routes, stats):
         an attar.route.GlobalRoutes (wirelength as grt reports it: routes.wirelength(stats['tile'])) and the run's
-        wirelength, overflow, vias and times. Time the design on the routes with d.timing(routes=routes)."""
+        wirelength, overflow, vias and times. Time the design on the routes with d.timing(routes=routes).
+        previous=routes (routes this design got from global_route): route again only the nets with a pin in another
+        gcell or on another layer, against the others' routes (incremental, as grt -incremental; not what a full
+        route would give)."""
         self.require('global_route', ignore=('placement',) if pos is not None else ())
         from .route import global_route
         return global_route(self, pos=pos, verbose=verbose, **kw)
