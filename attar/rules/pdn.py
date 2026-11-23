@@ -95,8 +95,43 @@ def pin_blockages(d):
     d._pdn_blockages = res
     return res
 
+def _expand(cnt):
+    """For counts (N,): the owner index and the rank within the owner of each of the sum(cnt) entries."""
+    dev = cnt.device
+    owner = torch.repeat_interleave(torch.arange(len(cnt), device=dev), cnt)
+    rank = torch.arange(len(owner), device=dev) - torch.repeat_interleave(torch.cumsum(cnt, 0) - cnt, cnt)
+    return owner, rank
+
+
+def _chunks(cost, budget):
+    """Consecutive slices of entries whose summed cost stays within budget (an entry over budget alone is a slice)."""
+    n = len(cost)
+    if n == 0:
+        return []
+    cum = torch.cumsum(cost, 0)
+    if int(cum[-1]) <= budget:
+        return [slice(0, n)]
+    out, a, base = [], 0, 0
+    cum = cum.cpu()
+    while a < n:
+        b = int(torch.searchsorted(cum, torch.tensor([base + budget]), right=True)[0])
+        b = max(b, a + 1)
+        out.append(slice(a, b))
+        base = int(cum[b - 1]); a = b
+    return out
+
+
 class Index:
-    """Pin blockages binned for overlap queries on the GPU: hits(boxes, layers) -> bool per box."""
+    """Pin blockages binned for overlap queries on the GPU: hits(boxes, layers) -> bool per box.
+
+    The grid is uniform with bin size s; a blockage is listed in every bin it covers, and a query box looks in every
+    bin it covers, so neither side's size bounds s. s is the smallest power-of-two multiple of 1 micron (or of the
+    blockages' median short side, if larger) that keeps the listing within KEYS_PER_RECT entries per blockage: long
+    stripes (a whole chip high on ispd19_test4) are listed in many bins instead of making every bin the whole chip.
+    Queries run in slices of at most BUDGET (box, bin) and (box, blockage) pairs."""
+    KEYS_PER_RECT = 8
+    MIN_KEYS = 1 << 22
+    BUDGET = 1 << 24
 
     def __init__(self, d, dev, blockages=None):
         bl = pin_blockages(d) if blockages is None else blockages
@@ -106,27 +141,32 @@ class Index:
         B = torch.as_tensor(bl, device=dev).double()
         self.R = B[:, 1:] / d.dbu
         L = B[:, 0].long(); R = self.R
-        self.s = max(1.0, float((R[:, 2:] - R[:, :2]).max()))          # a rect spans at most 2 bins per axis
         self.ox, self.oy = float(R[:, 0].min()), float(R[:, 1].min())
-        bx0, by0, bx1, by1 = self.gx(R[:, 0]), self.gy(R[:, 1]), self.gx(R[:, 2]), self.gy(R[:, 3])
-        self.nx = int(bx1.max().item()) + 3
-        keys, ids = [], []
-        for dx in (0, 1):
-            for dy in (0, 1):
-                m = (bx0 + dx <= bx1) & (by0 + dy <= by1)
-                keys.append(self.key(L[m], bx0[m] + dx, by0[m] + dy)); ids.append(torch.nonzero(m).flatten())
-        keys = torch.cat(keys); ids = torch.cat(ids)
+        ext = R[:, 2:] - R[:, :2]
+        s = max(1.0, float(ext.min(1).values.median()))
+        limit = max(self.KEYS_PER_RECT * self.n, self.MIN_KEYS)
+        while True:
+            self.s = s
+            nbx = self.gx(R[:, 2]) - self.gx(R[:, 0]) + 1
+            nby = self.gy(R[:, 3]) - self.gy(R[:, 1]) + 1
+            if int((nbx * nby).sum()) <= limit:
+                break
+            s *= 2
+        bx0, by0 = self.gx(R[:, 0]), self.gy(R[:, 1])
+        self.nx = int(self.gx(R[:, 2]).max().item()) + 1
+        own, k = _expand(nbx * nby)
+        keys = self.key(L[own], bx0[own] + k % nbx[own], by0[own] + k // nbx[own])
         order = torch.argsort(keys)
-        self.keys, self.ids = keys[order], ids[order]
+        self.keys, self.ids = keys[order], own[order]
 
     def gx(self, v):
-        return ((v - self.ox) / self.s).floor().long().clamp(min=-1) + 1
+        return ((v - self.ox) / self.s).floor().long().clamp(min=0)
 
     def gy(self, v):
-        return ((v - self.oy) / self.s).floor().long().clamp(min=-1) + 1
+        return ((v - self.oy) / self.s).floor().long().clamp(min=0)
 
     def key(self, layer, bx, by):
-        return layer * (1 << 40) + by * self.nx + bx.clamp(max=self.nx - 1)
+        return layer * (1 << 40) + by * self.nx + bx
 
     def hits(self, pb, pl):
         """pb (P, 4) boxes in microns, pl (P,) layers: does each box overlap a blockage of its layer?"""
@@ -134,19 +174,24 @@ class Index:
         hit = torch.zeros(len(pb), dtype=torch.bool, device=dev)
         if self.n == 0 or len(pb) == 0:
             return hit
-        for cx, cy in ((0, 1), (2, 1), (0, 3), (2, 3)):                  # the bins of the box's corners
-            q = self.key(pl, self.gx(pb[:, cx]), self.gy(pb[:, cy]))
-            lo = torch.searchsorted(self.keys, q); hi = torch.searchsorted(self.keys, q, right=True)
-            cnt = hi - lo
-            idx = torch.nonzero(cnt > 0).flatten()
-            if len(idx) == 0:
-                continue
-            c = cnt[idx]
-            rep = torch.repeat_interleave(idx, c)
-            off = torch.arange(len(rep), device=dev) - torch.repeat_interleave(torch.cumsum(c, 0) - c, c)
-            r = self.R[self.ids[lo[rep] + off]]
-            ov = (pb[rep, 0] < r[:, 2]) & (r[:, 0] < pb[rep, 2]) & (pb[rep, 1] < r[:, 3]) & (r[:, 1] < pb[rep, 3])
-            hit[rep[ov]] = True
+        bx0 = self.gx(pb[:, 0]); by0 = self.gy(pb[:, 1])
+        bx1 = self.gx(pb[:, 2]).clamp(max=self.nx - 1)                  # bins right of every blockage are empty
+        by1 = self.gy(pb[:, 3])
+        nbx = (bx1 - bx0 + 1).clamp(min=0); nby = (by1 - by0 + 1).clamp(min=0)
+        for sl in _chunks(nbx * nby, self.BUDGET):                       # (box, bin) pairs
+            nb = nbx[sl] * nby[sl]
+            q, k = _expand(nb)
+            q = q + sl.start
+            key = self.key(pl[q], bx0[q] + k % nbx[q], by0[q] + k // nbx[q])
+            lo = torch.searchsorted(self.keys, key); cnt = torch.searchsorted(self.keys, key, right=True) - lo
+            m = cnt > 0
+            q, lo, cnt = q[m], lo[m], cnt[m]
+            for s2 in _chunks(cnt, self.BUDGET):                         # (box, blockage) pairs
+                j, off = _expand(cnt[s2])
+                rep = q[s2][j]
+                r = self.R[self.ids[lo[s2][j] + off]]
+                ov = (pb[rep, 0] < r[:, 2]) & (r[:, 0] < pb[rep, 2]) & (pb[rep, 1] < r[:, 3]) & (r[:, 1] < pb[rep, 3])
+                hit[rep[ov]] = True
         return hit
 
 

@@ -98,6 +98,51 @@ class TestDetailedPlace(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             naive.detailed_place(d, verbose=False)
 
+    def test_pdn_heavy_design_in_little_memory(self):
+        # ispd19_test4: M2 PG stripes a whole chip high over the cells' pins. The PDN index used to make every bin
+        # the whole chip, and global swap checked the PDN for every candidate: out of memory at 24 GB (GPU) and 98 GB
+        # (CPU). Now about 1.2 GB.
+        d = need('after_fp/ispd2019/test4')
+        self.assertTrue(d.place(verbose=False)['legal'])
+        if d.device.type == 'cuda':
+            torch.cuda.synchronize(d.device); torch.cuda.reset_peak_memory_stats(d.device)
+        st = naive.detailed_place(d, verbose=False)
+        self.assertTrue(st['legal'])
+        self.assertLess(st['hpwl_after'], st['hpwl_before'])
+        if d.device.type == 'cuda':
+            self.assertLess(torch.cuda.max_memory_allocated(d.device), 4 * 2**30)
+
+
+class TestPdnIndex(unittest.TestCase):
+    def test_hits_equal_brute_force_for_any_box_size(self):
+        # long stripes next to small vias; query boxes from 0.01 to 50 um, larger and smaller than the bins (the
+        # index used to look only in the bins of a box's corners and missed blockages under a wide box's middle)
+        from attar.rules import pdn
+        d = need(SMALL)
+        dbu = d.dbu
+        g = torch.Generator().manual_seed(0)
+        n = 400
+        x = torch.randint(0, 200 * dbu, (n,), generator=g); y = torch.randint(0, 200 * dbu, (n,), generator=g)
+        w = torch.randint(1, dbu // 2, (n,), generator=g); h = torch.randint(1, dbu // 2, (n,), generator=g)
+        h[:40] = 150 * dbu                                                    # stripes
+        L = torch.randint(0, 3, (n,), generator=g)
+        m = 20000
+        c = torch.rand(m, 2, generator=g, dtype=torch.float64) * 220 - 10
+        s = 10 ** (torch.rand(m, 2, generator=g, dtype=torch.float64) * 3.7 - 2)
+        boxes = torch.cat([c - s / 2, c + s / 2], 1)
+        lay = torch.randint(0, 3, (m,), generator=g)
+        for k in (0, 40):                                                    # with and without the stripes
+            bl = torch.stack([L, x, y, x + w, y + h], 1)[k:].numpy()
+            ix = pdn.Index(d, d.device, blockages=bl)
+            R = torch.as_tensor(bl[:, 1:], dtype=torch.float64) / dbu
+            truth = ((boxes[:, None, 0] < R[None, :, 2]) & (R[None, :, 0] < boxes[:, None, 2]) &
+                     (boxes[:, None, 1] < R[None, :, 3]) & (R[None, :, 1] < boxes[:, None, 3]) &
+                     (lay[:, None] == torch.as_tensor(bl[:, 0])[None])).any(1)
+            self.assertGreater(int(truth.sum()), 1000)
+            self.assertTrue(torch.equal(ix.hits(boxes.to(d.device), lay.to(d.device)).cpu(), truth))
+            ix.BUDGET = 1000                                                 # the same in many small slices
+            self.assertTrue(torch.equal(ix.hits(boxes.to(d.device), lay.to(d.device)).cpu(), truth))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Fixes
+- `naive.detailed_place` ran out of memory on designs with long PG stripes over the pin layers (ispd19_test4: OOM
+  on a 24 GB GPU and at 98 GB on the CPU); it now takes 3.6 s and 1.2 GB there (GPU; CPU 7 s, 1.7 GB). Two causes:
+  - the PDN pin-blockage index (`attar.rules.pdn.Index`) sized its bins by the largest blockage, so a stripe a whole
+    chip high made every bin the whole chip and every query a scan of all the blockages. Bins are now small and a
+    blockage is listed in every bin it covers; queries run in slices of bounded memory;
+  - global and vertical swap checked the PDN for every candidate move; now only for the moves that gain.
+  Results are unchanged where it ran before (test1, iccad2025 aes: bit for bit).
+- The same index missed blockages under the middle of a query box larger than two bins. Pin boxes were never that
+  large, but the legalizer's "cells near the PDN" filter (a cell grown by its shift range) was: on NS3K aes it found
+  2,294 of 5,533 such cells, and the cells it missed were left to the final PDN repair. The legalizer's output can
+  therefore change slightly on designs with pin blockages (NS3K aes: 6 cells; still legal, same HPWL).
+
 ## 1.0.6
 
 **Upgrading.** Nothing to do: results are the same as 1.0.5's (timing bit for bit), only faster when a design is

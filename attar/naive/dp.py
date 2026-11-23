@@ -544,10 +544,13 @@ def _global_swap_pass(S, stats, max_batches=20, vertical=False, gen=None):
         old = S.cost(mv_cells, cur_X, cur_Y, cur_O, xonly=False)
         gain = old - new
         good = gain > 1e-9
-        if S.pdn is not None:
-            ok1 = S.pdn_ok(c1, X[:, 0], Y[:, 0], o1)
-            ok2 = torch.where(c2 >= 0, S.pdn_ok(c2.clamp(min=0), X[:, 1], Y[:, 1], o2), torch.ones_like(ok1))
-            good &= ok1 & ok2
+        if S.pdn is not None:                          # only the improving candidates need the PDN check
+            gi = torch.nonzero(good).flatten()
+            ok = S.pdn_ok(c1[gi], X[gi, 0], Y[gi, 0], o1[gi])
+            sw = c2[gi] >= 0
+            gs_ = gi[sw]
+            ok[sw] &= S.pdn_ok(c2[gs_], X[gs_, 1], Y[gs_, 1], o2[gs_])
+            good[gi] = ok
         g = torch.nonzero(good).flatten()
         if len(g) == 0:
             break
