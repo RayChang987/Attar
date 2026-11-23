@@ -113,6 +113,53 @@ class TestDetailedPlace(unittest.TestCase):
             self.assertLess(torch.cuda.max_memory_allocated(d.device), 4 * 2**30)
 
 
+class TestFill(unittest.TestCase):
+    def test_run_search_equals_a_whole_chip_window(self):
+        # the single-row search over free runs finds spots exactly as near as the dense search with a window over the
+        # whole chip: random rows (offsets, lengths), fixed blocks, placed cells (overlaps allowed) and rail tables
+        from attar.naive.space import _Space
+        g = torch.Generator().manual_seed(0)
+        R, hb, sw = 14, 1.2, 0.2
+        f64 = torch.float64
+        for trial in range(5):
+            roff = torch.randint(0, 6, (R,), generator=g).double()
+            nsites = torch.randint(150, 200, (R,), generator=g)
+            nf = 30
+            fr = torch.randint(0, R, (nf,), generator=g); fa = torch.randint(0, 150, (nf,), generator=g).double()
+            fb = fa + torch.randint(1, 30, (nf,), generator=g).double()
+            sp = _Space(torch.arange(R, dtype=f64) * hb, roff * sw, nsites, roff, sw, hb, (fr, fa, fb), torch.device('cpu'))
+            m = 400 + 100 * trial                                            # denser each trial
+            P = sp.prefix(torch.randint(0, sp.S, (m,), generator=g), torch.randint(0, R, (m,), generator=g),
+                          torch.ones(m, dtype=torch.long), torch.randint(1, 6, (m,), generator=g))
+            n = 300
+            gx = torch.rand(n, generator=g, dtype=f64) * (sp.S + 40) - 20
+            gy = torch.rand(n, generator=g, dtype=f64) * (R + 4) * hb - 2 * hb
+            w = torch.randint(1, 12, (n,), generator=g)
+            gtab = torch.rand(3, R, generator=g) < 0.6
+            gtab[2] = False                                                  # a rail group no row allows
+            gid = torch.randint(0, 3, (n,), generator=g)
+            from attar.naive.space import _nearest_row
+            c1, x1, r1 = sp.best_free_1row(sp.free_runs(P), gx, gy, w, (gtab, gid))
+            c0, _, _ = sp.best_free(P, gx, gy, _nearest_row(sp.ys, gy), torch.ones(n, dtype=torch.long), w, (gtab, gid),
+                                    None, None, R, sp.S)
+            self.assertTrue(torch.equal(c1, c0))
+            ok = torch.isfinite(c1)
+            self.assertTrue(torch.equal(~ok, gid == 2))
+            self.assertTrue(bool((P[r1[ok], x1[ok] + w[ok]] - P[r1[ok], x1[ok]] == 0).all()))   # free
+            self.assertTrue(bool(gtab[gid[ok], r1[ok]].all()))                                     # rails allow
+
+    def test_cells_far_from_free_space(self):
+        # a few cells far from any free spot (piled up outside the rows): incremental legalization used to widen
+        # every cell's window to the whole chip and take 1,250 s for 2,038 such cells on ispd19_test8
+        d = _placed(SMALL)
+        mv = torch.nonzero(d.movable).flatten()[:60]
+        d.pos[mv] = d.pos[mv].new_tensor([float(d.die_box[0, 2]) + 5.0, float(d.die_box[0, 3]) + 5.0])   # past a corner
+        self.assertFalse(attar.Evaluator(d).legality()['legal'])
+        st = naive.legalize(d, incremental=True, verbose=False)
+        self.assertEqual(st['unplaced'], 0)
+        self.assertTrue(attar.Evaluator(d).legality()['legal'])
+
+
 class TestPdnIndex(unittest.TestCase):
     def test_hits_equal_brute_force_for_any_box_size(self):
         # long stripes next to small vias; query boxes from 0.01 to 50 um, larger and smaller than the bins (the

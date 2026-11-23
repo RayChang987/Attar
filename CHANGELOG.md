@@ -14,6 +14,16 @@ Fixes
   large, but the legalizer's "cells near the PDN" filter (a cell grown by its shift range) was: on NS3K aes it found
   2,294 of 5,533 such cells, and the cells it missed were left to the final PDN repair. The legalizer's output can
   therefore change slightly on designs with pin blockages (NS3K aes: 6 cells; still legal, same HPWL).
+- `naive.legalize(incremental=True)` took 1,250 s (RTX 4090) to put back the 2,038 cells ABCDPlace leaves outside
+  the rows of ispd19_test8; now 15 s (RTX 3080 Ti). When any cell saw no free spot in its window, every cell's
+  window doubled, so the few cells far from free space made all the others search hundreds of rows by thousands
+  of sites, a few cells at a time (544 rounds, as they compete for the same spots). Now each cell keeps its own
+  window; a single-row cell that sees no free spot in its first window looks at every row at once, from the free
+  runs of each row (exact: the same distance as a dense search over the whole chip); a taller cell doubles its own
+  window. Placements that only need nearby spots are unchanged in speed (ispd19_test8 with 1 % of the cells moved
+  up to 100 um: 0.4 -> 0.3 s); where the window used to grow, the cells can land on different spots
+  (test4 repair: 6-9 cells differ, HPWL within 0.001 %). Full legalization does not use this step unless a cell
+  does not fit its class (ispd19 test1 / test8, ASAP7 aes, NS3K ariane133: bit for bit).
 
 ## 1.0.6
 

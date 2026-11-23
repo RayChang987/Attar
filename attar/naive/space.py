@@ -54,6 +54,7 @@ class _Space:
         # alone is too large, its rows in blocks (the best spot so far is kept across blocks)
         chunk = max(1, budget // (len(rd) * len(xd)))
         rblock = len(rd) if chunk > 1 else max(1, budget // len(xd))
+        kmax = int(k.max().item()) if n else 0                           # one sync per call, not per chunk and block
         for c0 in range(0, n, chunk):
             c = slice(c0, min(n, c0 + chunk))
             m = c.stop - c.start
@@ -67,7 +68,7 @@ class _Space:
                 ok &= allowed[0][allowed[1][c][:, None, None], rc]            # (group table, group of each cell)
                 xc = x.clamp(0, S - 1); xe = (x + ww).clamp(0, S)
                 busy = torch.zeros(x.shape, dtype=torch.int32, device=dev)
-                for j in range(int(k[c].max().item())):
+                for j in range(kmax):
                     rj = (rc + j).clamp(max=R - 1)
                     use = j < kk
                     t = P[rj, xe] - P[rj, xc]
@@ -85,6 +86,65 @@ class _Space:
                 bc[c] = torch.where(better, cb, bc[c])
                 bx[c] = torch.where(better, x.reshape(m, -1).gather(1, bi[:, None]).squeeze(1), bx[c])
                 br[c] = torch.where(better, rc.reshape(m, -1).gather(1, bi[:, None]).squeeze(1), br[c])
+        return bc, bx, br
+
+    def free_runs(self, P):
+        """The maximal runs of free sites in every row: keys row * (S + 1) + start (sorted), starts, ends (excl.)."""
+        S = self.S
+        free = (P[:, 1:] - P[:, :-1]) == 0                                  # (R, S)
+        edge = torch.zeros(self.R, S + 2, dtype=torch.int8, device=self.dev)
+        edge[:, 1:S + 1] = free.to(torch.int8)
+        dd = edge[:, 1:] - edge[:, :-1]                                     # +1 at a run's start, -1 after its end
+        sr, sa = torch.nonzero(dd == 1, as_tuple=True)
+        _, sb = torch.nonzero(dd == -1, as_tuple=True)                      # same row-major order: one end per start
+        return sr * (S + 1) + sa, sr, sa, sb
+
+    def best_free_1row(self, runs, gx, gy, w, allowed, budget=4_000_000):
+        """best_free for single-row cells without a window: the nearest free spot over all rows the rails allow, from
+        the free runs of every row (two candidates per row: the last run long enough for the cell starting at or left
+        of round(gx), and the next one; a run nearer than those is impossible). Same cost as best_free; returns
+        (cost, x, r), cost inf if nothing is free. All widths at once: the runs are listed once per distinct width
+        they can hold, under the key (width class, row, start)."""
+        R, S, dev, ys, sw = self.R, self.S, self.dev, self.ys, self.sw
+        n = len(gx)
+        bc = torch.full((n,), float('inf'), device=dev, dtype=torch.float64)
+        bx = torch.zeros(n, dtype=torch.long, device=dev); br = torch.zeros(n, dtype=torch.long, device=dev)
+        keys, rr, ra, rb = runs
+        if n == 0 or len(keys) == 0:
+            return bc, bx, br
+        wv, wc = torch.unique(w, return_inverse=True)                       # width classes
+        fits = (rb - ra)[None, :] >= wv[:, None]                            # (W, runs)
+        ci, ri = torch.nonzero(fits, as_tuple=True)                         # class-major, then key order: sorted
+        if len(ci) == 0:
+            return bc, bx, br
+        span = R * (S + 1)
+        K = ci * span + keys[ri]
+        rw, aw, bw = rr[ri], ra[ri], rb[ri]
+        xr = gx.round().long().clamp(0, S)
+        rows = torch.arange(R, device=dev)
+        chunk = max(1, budget // R)
+        for c0 in range(0, n, chunk):
+            c = torch.arange(c0, min(n, c0 + chunk), device=dev)
+            q = wc[c][:, None] * span + rows[None, :] * (S + 1) + xr[c][:, None]      # (m, R)
+            i = torch.searchsorted(K, q, right=True) - 1                    # last fitting run at or before round(gx)
+            ia = i.clamp(min=0); ib = (i + 1).clamp(max=len(K) - 1)
+            cls = wc[c][:, None] * span
+            okA = (i >= 0) & (K[ia] >= cls) & (rw[ia] == rows[None, :])
+            okB = (i + 1 < len(K)) & (K[ib] < cls + span) & (rw[ib] == rows[None, :])
+            ww = w[c][:, None]
+            xA = torch.minimum(xr[c][:, None], bw[ia] - ww)
+            xB = aw[ib]
+            al = allowed[0][allowed[1][c]]                                    # (m, R) rows the rails allow
+            dy = (ys[None, :] - gy[c][:, None]).abs().double()
+            inf = torch.full_like(dy, float('inf'))
+            cA = torch.where(okA & al, (xA.double() - gx[c][:, None]).abs() * sw + dy, inf)
+            cB = torch.where(okB & al, (xB.double() - gx[c][:, None]).abs() * sw + dy, inf)
+            cost = torch.stack([cA, cB], 2).view(len(c), -1)                  # (m, R * 2): row-major, A before B
+            bi = cost.argmin(1)
+            bc[c] = cost.gather(1, bi[:, None]).squeeze(1)
+            r = bi // 2
+            bx[c] = torch.where((bi % 2 == 0)[:, None], xA.gather(1, r[:, None]), xB.gather(1, r[:, None])).squeeze(1)
+            br[c] = r
         return bc, bx, br
 
     def resolve(self, x, r, k, w, gain, prio=None):
@@ -126,12 +186,20 @@ def _nearest_row(ys, gy):
 
 
 def _fill(space, cur_x, cur_r, placed, gx, gy, k, w, allowed, stats=None, max_rounds=10_000):
-    """Place the cells not placed yet (placed == False) in the nearest free spots around their GP positions; the
-    window grows each round until the whole chip is covered. Conflicting picks resolve to one per cluster per round,
-    so rounds continue while they make progress; it stops when a round over the whole chip places nothing.
-    Keeps everything legal."""
+    """Place the cells not placed yet (placed == False) in the nearest free spots around their GP positions.
+    Every cell first searches a window of rows and sites around its position. A single-row cell that sees no free
+    spot there searches every row at once from then on (free runs, no window); a taller one doubles its own window,
+    up to the whole chip. (The window used to grow for every cell at once, so a few cells far from free space made
+    every cell search the whole chip, one by one: 1,250 s for 2,038 cells on ispd19_test8.) Conflicting picks resolve
+    to one per cluster per round, so rounds continue while they make progress; it stops when a round places nothing
+    and no window can grow. Keeps everything legal."""
     rg = _nearest_row(space.ys, gy)
-    dr, dx = 4, 32
+    dev = cur_x.device
+    n = len(gx)
+    dr = torch.full((n,), 4, dtype=torch.long, device=dev)
+    dx = torch.full((n,), 32, dtype=torch.long, device=dev)
+    far = torch.zeros(n, dtype=torch.bool, device=dev)                  # single-row cells past their first window
+    one = k == 1
     rounds = 0
     for rounds in range(1, max_rounds + 1):                       # noqa: B007  (read after the loop)
         todo = torch.nonzero(~placed).flatten()
@@ -139,8 +207,20 @@ def _fill(space, cur_x, cur_r, placed, gx, gy, k, w, allowed, stats=None, max_ro
             break
         pl = torch.nonzero(placed).flatten()
         P = space.prefix(cur_x[pl], cur_r[pl], k[pl], w[pl])
-        cost, bx, br = space.best_free(P, gx[todo], gy[todo], rg[todo], k[todo], w[todo], (allowed[0], allowed[1][todo]),
-                                       None, None, dr, dx)
+        cost = torch.full((len(todo),), float('inf'), dtype=torch.float64, device=dev)
+        bx = torch.zeros(len(todo), dtype=torch.long, device=dev); br = torch.zeros_like(bx)
+        fr = far[todo]
+        if bool(fr.any()):
+            s1 = torch.nonzero(fr).flatten(); c = todo[s1]
+            cost[s1], bx[s1], br[s1] = space.best_free_1row(space.free_runs(P), gx[c], gy[c], w[c],
+                                                            (allowed[0], allowed[1][c]))
+        if not bool(fr.all()):                                       # the others: one call per window size
+            sm = torch.nonzero(~fr).flatten()
+            win = dr[todo[sm]] * (space.S + 1) + dx[todo[sm]]
+            for v in torch.unique(win).tolist():
+                s2 = sm[win == v]; c = todo[s2]
+                cost[s2], bx[s2], br[s2] = space.best_free(P, gx[c], gy[c], rg[c], k[c], w[c], (allowed[0], allowed[1][c]),
+                                                          None, None, v // (space.S + 1), v % (space.S + 1))
         del P
         found = torch.isfinite(cost)
         # equal distance: the taller, then the wider cell first (OpenDP CellPlaceOrderLess: multi-row, then area)
@@ -148,10 +228,12 @@ def _fill(space, cur_x, cur_r, placed, gx, gy, k, w, allowed, stats=None, max_ro
         acc = space.resolve(bx[found], br[found], kt, wt, -cost[found], prio=kt * (int(w.max()) + 1) + wt)
         idx = todo[found][acc]
         cur_x[idx] = bx[found][acc]; cur_r[idx] = br[found][acc]; placed[idx] = True
-        whole = dr >= space.R and dx >= space.S
-        if not bool(found.all()):                                    # someone saw no free spot: look wider
-            dr = min(space.R, dr * 2); dx = min(space.S, dx * 2)
-        if len(idx) == 0 and whole:                                  # the whole chip and no progress: give up
+        # a cell that saw no free spot looks wider next round: everywhere if single-row, else twice the window
+        miss = todo[~found & ~far[todo]]
+        far[miss[one[miss]]] = True
+        grow = miss[~one[miss] & ((dr[miss] < space.R) | (dx[miss] < space.S))]
+        dr[grow] = (dr[grow] * 2).clamp(max=space.R); dx[grow] = (dx[grow] * 2).clamp(max=space.S)
+        if len(idx) == 0 and len(grow) == 0 and not bool(one[miss].any()):   # no progress, nowhere new to look
             break
     if stats is not None:
         stats['fill_rounds'] = rounds
