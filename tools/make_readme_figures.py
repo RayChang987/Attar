@@ -54,7 +54,7 @@ def speed_vs_openroad(mode):
         for s_ in a.spines.values():
             s_.set_visible(False)
         a.tick_params(length=0)
-    for i, (name, cells, or_gp, at_gp, or_dp, at_dp) in enumerate(LOOP):
+    for i, (_name, _cells, or_gp, at_gp, or_dp, at_dp) in enumerate(LOOP):
         y = n - 1 - i
         for yy, v, col, who in ((y + (h + gap) / 2, or_gp, t['base'], 'OpenROAD'),
                                 (y - (h + gap) / 2, at_gp, t['series'], 'Attar (GPU)')):

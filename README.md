@@ -9,7 +9,7 @@ Evolve VLSI placement, timing-optimization and routing algorithms in minutes, no
 [![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-d99a1e?style=flat-square)](https://pytorch.org)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/attar?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/attar)
 [![Validated](https://img.shields.io/badge/validated%20against-OpenROAD-8f6a3f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/docs/features.md#evaluators)
-[![Tests](https://img.shields.io/badge/tests-182%20passing-5f7f1e?style=flat-square)](https://github.com/RayChang987/Attar/tree/main/tests)
+[![Tests](https://img.shields.io/badge/tests-186%20passing-5f7f1e?style=flat-square)](https://github.com/RayChang987/Attar/tree/main/tests)
 [![License](https://img.shields.io/badge/license-MIT-a8946f?style=flat-square)](https://github.com/RayChang987/Attar/blob/main/LICENSE)
 
 **English** &nbsp;·&nbsp; [繁體中文](README.zh-TW.md) &nbsp;·&nbsp; [简体中文](README.zh-CN.md)

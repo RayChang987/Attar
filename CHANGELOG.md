@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.0.7
+
+**Upgrading.** Nothing to do. Two fixes found while reproducing SROA (ICCAD 2025) on Attar: detailed placement no
+longer runs out of memory on designs with long PG stripes, and incremental legalization no longer takes many
+minutes when a few cells are far from free space. Results are the same as 1.0.6's except where noted below (the
+legalizer on designs with PDN pin blockages, and incremental legalization where windows used to grow). Timing,
+routing and the zoo are unchanged.
 
 Fixes
 - `naive.detailed_place` ran out of memory on designs with long PG stripes over the pin layers (ispd19_test4: OOM
