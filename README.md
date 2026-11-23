@@ -49,13 +49,19 @@ the examples in Colab:
 <img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="Timing-driven placement written in fifteen lines of Python, run on cva6 and swerv: place for wirelength, time it, weight the nets by their slack as OpenROAD's global placement does, place again, time it" width="920">
 
 <sub>Timing-driven placement in 15 lines (<a href="examples/timing_driven.py">examples/timing_driven.py</a>):
-cva6 WNS -195 → -75 ps, in 2.2 s on an RTX 3080 Ti.</sub>
+cva6 WNS -195 → -75 ps, in 2.2 s.</sub>
 </div>
 
 ## Why Attar
 
-- **Fast.** Exact HPWL of 8.9M pins in 3 ms; a 2.2M-cell design placed and legalized in 49 s. An idea, from
-  your code or an AI agent's, is tested in seconds, not in an overnight P&R run.
+- **Fast.** Timing inside the placement loop 21-54x faster than OpenROAD kept warm; a 2.2M-cell design placed
+  and legalized in 49 s. An idea, from your code or an AI agent's, is tested in seconds, not in an overnight
+  P&R run.
+
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/speed_vs_openroad.png" alt="Seconds per timing update in global placement, OpenROAD kept warm vs Attar on the GPU: netcard_fast 7.2 vs 0.34 s, superblue18 13.0 vs 0.56 s, superblue1 19.6 vs 0.83 s, superblue7 33.6 vs 1.2 s; Attar is 21-27 times faster per GP update and 21-54 times faster per DP round" width="860"></p>
+
+<p align="center"><sub>Timing after every move, as a timing-driven placer needs it, against OpenROAD with the design already loaded: same machine, same rounds, TNS within 0.13%. <a href="https://github.com/RayChang987/Attar/blob/main/docs/validation/speed_vs_openroad.md">How it was measured</a>.</sub></p>
+
 - **One environment.** 262 designs from 24 benchmark suites (ISPD 2005-2024, ICCAD 2015 and 2025, MCNC, GSRC,
   IBM-HB+, OpenROAD-flow-scripts) load with one call, in one format, from LEF/DEF, Bookshelf or YAL. An algorithm
   is a function from tensors to positions: no database API, no TCL.
@@ -126,9 +132,8 @@ Docs: [concepts](https://github.com/RayChang987/Attar/blob/main/docs/concepts.md
 
 ## Acknowledgements
 
-Attar's placer follows ePlace, DREAMPlace and Xplace; its checks follow OpenROAD. It is
-validated against [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts) on ASAP7
-and Nangate45. Benchmarks are from the ISPD, ICCAD and GSRC contests, MCNC and ORFS.
+Attar's placer follows ePlace, [DREAMPlace](https://github.com/limbo018/DREAMPlace) and [Xplace](https://github.com/cuhk-eda/Xplace); its timer follows [OpenSTA](https://github.com/the-openroad-project/opensta) and its checks follow OpenROAD.
+It is validated against [OpenROAD-flow-scripts](https://github.com/the-openroad-project/openroad-flow-scripts) on ASAP7 and Nangate45. Benchmarks are from the ISPD, ICCAD and GSRC contests, MCNC and ORFS.
 
 ## License
 

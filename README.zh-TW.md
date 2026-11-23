@@ -46,12 +46,17 @@ d.export('aes.def')                                         # 匯出回 OpenROAD
 <img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/demo_placement.gif" alt="以十五行 Python 寫成的時序驅動擺置，在 cva6 與 swerv 上執行：先為線長擺置、做時序分析、依 slack 為 net 加權（如 OpenROAD 的全域擺置）、再擺置一次、再做時序分析" width="920">
 
 <sub>15 行程式碼完成時序驅動擺置（<a href="examples/timing_driven.py">examples/timing_driven.py</a>）：
-cva6 的 WNS 由 -195 ps 改善至 -75 ps，在 RTX 3080 Ti 上僅需 2.2 秒。</sub>
+cva6 的 WNS 由 -195 ps 改善至 -75 ps，僅需 2.2 秒。</sub>
 </div>
 
 ## 為什麼選 Attar
 
-- **快。** 890 萬個 pin 的精確 HPWL 只要 3 ms；220 萬 cell 的設計擺置加合法化只要 49 秒。無論是你的程式碼或 AI agent 提出的點子，都能在數秒內驗證，不必等一整夜的 P&R。
+- **快。** 在擺置迴圈內做時序分析，比保持熱啟動的 OpenROAD 快 21-54 倍；220 萬 cell 的設計擺置加合法化只要 49 秒。無論是你的程式碼或 AI agent 提出的點子，都能在數秒內驗證，不必等一整夜的 P&R。
+
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/speed_vs_openroad.png" alt="Seconds per timing update in global placement, OpenROAD kept warm vs Attar on the GPU: netcard_fast 7.2 vs 0.34 s, superblue18 13.0 vs 0.56 s, superblue1 19.6 vs 0.83 s, superblue7 33.6 vs 1.2 s; Attar is 21-27 times faster per GP update and 21-54 times faster per DP round" width="860"></p>
+
+<p align="center"><sub>每次移動後的時序分析（時序驅動擺置每一輪都需要），對比已載入設計、保持熱啟動的 OpenROAD：同一台機器、同一組移動，TNS 差距 0.13% 以內。<a href="https://github.com/RayChang987/Attar/blob/main/docs/validation/speed_vs_openroad.md">量測方法</a>。</sub></p>
+
 - **統一環境。** 來自 24 個基準測試套件（ISPD 2005-2024、ICCAD 2015 與 2025、MCNC、GSRC、IBM-HB+、OpenROAD-flow-scripts）的 262 個設計，一個呼叫、一種格式即可載入，支援 LEF/DEF、Bookshelf 或 YAL。演算法就是「張量到位置」的函式：不需資料庫 API，也不用 TCL。
 - **忠實。** 在同一份擺置上對比 OpenROAD 與 OpenSTA：HPWL 誤差 0.00002% 以內、時序（WNS）0.34% 以內、功耗 0.06% 以內、全域繞線線長 3.6% 以內。
 
@@ -118,7 +123,7 @@ Attar 如同量產流程，在電源網格（power grid）處將實體設計一�
 
 ## 致謝
 
-Attar 的擺置器遵循 ePlace、DREAMPlace 與 Xplace；檢查則遵循 OpenROAD。它在 ASAP7 與 Nangate45 上對 [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts) 做過驗證。基準測試來自 ISPD、ICCAD、GSRC 競賽、MCNC 與 ORFS。
+Attar 的擺置器遵循 ePlace、[DREAMPlace](https://github.com/limbo018/DREAMPlace) 與 [Xplace](https://github.com/cuhk-eda/Xplace)；時序分析遵循 [OpenSTA](https://github.com/the-openroad-project/opensta)，檢查則遵循 OpenROAD。它在 ASAP7 與 Nangate45 上對 [OpenROAD-flow-scripts](https://github.com/the-openroad-project/openroad-flow-scripts) 做過驗證。基準測試來自 ISPD、ICCAD、GSRC 競賽、MCNC 與 ORFS。
 
 ## 授權
 
