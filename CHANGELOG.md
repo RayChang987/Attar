@@ -35,7 +35,9 @@ Changed
   in-place mirroring of multi-row cells clears them too, and the detailed placer rejects moves that make one
   unreachable.
   NS3K u80, from the same global placement: unreachable pins 66 -> 0 (aes), 603 -> 0 (jpeg), 1,235 -> 0
-  (ariane136), 4,360 -> 4 (bp_quad); HPWL +0.01-0.24%; the PDN step of legalization +0.2-0.6 s (bp_quad +2 s).
+  (ariane136), 4,360 -> 4 (bp_quad); HPWL +0.01-0.24%; the PDN step of legalization +0.2-0.6 s (bp_quad +2 s),
+  detailed placement +1.5 s on 60k cells (bp_quad +4 s). Where no pin can be blocked (no pin layer below the lowest
+  routing layer), nothing is checked and nothing costs more.
   ASAP7 and Nangate45: the same placements as before (no pin is unreachable there; a strip test skips every
   pin), at most +0.4 s. Legality is still OpenROAD dpl's; `pin_access=False` gives 1.0.7's placements.
 

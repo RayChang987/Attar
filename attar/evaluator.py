@@ -338,8 +338,9 @@ class Evaluator:
         below the lowest signal routing layer only (a pin on a routing layer can be left along that layer).
         On 988 routed Innovus runs of i3dPDK_NS3K the blocked pins are the signal-to-PG M1/M2 DRVs, one for one;
         OpenROAD dpl's PDN rule (legality()['pdn_blocked']) passes them. Signal-to-signal DRVs are not modelled.
-        Returns {'blocked_pins', 'blocked_cells', 'signal_pins', 'access_points', 'blocked_access_points',
-        'off_track_pins'}; per_pin / per_cell add bool masks 'pins' (every pin) / 'cells' (every cell)."""
+        Returns {'blocked_pins', 'blocked_cells', 'signal_pins', 'checked_pins' (below the lowest routing layer),
+        'access_points', 'blocked_access_points', 'off_track_pins' (of the checked pins)}; per_pin / per_cell add bool
+        masks 'pins' (every pin) / 'cells' (every cell)."""
         self._require('pin_access', pos)
         from .rules import pin_access as PA
         d = self.d

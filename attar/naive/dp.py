@@ -90,7 +90,7 @@ class _DP:
         if self.pdn is not None and self.pdn.n == 0:
             self.pdn = None
         self.pa = PA.Checker(d, dev) if pin_access and 'pdn' in d.facts and 'tracks' in d.facts else None
-        if self.pa is not None and self.pa.n == 0:
+        if self.pa is not None and not self.pa.active:      # no pin can be blocked here: no checks
             self.pa = None
         self.pdn_check = self.pdn is not None or self.pa is not None
         if self.pdn_check:
@@ -240,9 +240,12 @@ class _DP:
         pb = PDN.place_boxes(self.pin_rel[pins], d.size[c, 0].double(), d.size[c, 1].double(), o[owner], x[owner], y[owner])
         hit = self.pdn.hits(pb, lay) if self.pdn is not None else torch.zeros(len(pb), dtype=torch.bool, device=self.dev)
         if self.pa is not None:          # a pin made unreachable; one that is unreachable where the cell stands may stay so
-            now = PDN.place_boxes(self.pin_rel[pins], d.size[c, 0].double(), d.size[c, 1].double(), d.orient[c],
-                                  d.pos[c, 0].double(), d.pos[c, 1].double())
-            hit |= self.pa.blocked(pb, lay)[0] & ~self.pa.blocked(now, lay)[0]
+            new = torch.nonzero(self.pa.blocked(pb, lay)[0]).flatten()
+            if len(new):
+                cn, pn = c[new], pins[new]
+                now = PDN.place_boxes(self.pin_rel[pn], d.size[cn, 0].double(), d.size[cn, 1].double(), d.orient[cn],
+                                      d.pos[cn, 0].double(), d.pos[cn, 1].double())
+                hit[new[~self.pa.blocked(now, lay[new])[0]]] = True
         ok[owner[hit]] = False
         return ok
 

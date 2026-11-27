@@ -167,12 +167,25 @@ class Checker:
         names = d.names['layers']
         self.bottom = names.index(lo) if lo in names else self.nL
         self.via_only = torch.arange(self.nL, device=dev) < self.bottom
+        # the pin layers checked: via-only, and both widths readable
+        self.check = self.via_only.clone()
+        if self.n:
+            up = (torch.arange(self.nL, device=dev) + 1).clamp(max=self.nL - 1)
+            self.check &= ~self.bad & ~self.bad[up]
+        self.active = self.n > 0 and bool(self.check.any())   # False: no pin can be blocked; callers skip the checks
+
+    def _subset(self, lp):
+        return torch.nonzero(self.check[lp]).flatten()
 
     def blocked(self, pb, lp):
-        """Pin boxes pb (P, 4, um) on layers lp (P,) -> (bool per box: every access point blocked, counts)."""
-        if self.n == 0 or len(pb) == 0:
-            return torch.zeros(len(pb), dtype=torch.bool, device=pb.device), {'access_points': 0, 'blocked_access_points': 0,
-                                                                              'off_track_pins': 0}
+        """Pin boxes pb (P, 4, um) on layers lp (P,) -> (bool per box: every access point blocked, counts of the pins
+        checked: those on a checked layer)."""
+        out = torch.zeros(len(pb), dtype=torch.bool, device=pb.device)
+        st = {'checked_pins': 0, 'access_points': 0, 'blocked_access_points': 0, 'off_track_pins': 0}
+        sel = self._subset(lp) if self.active and len(pb) else torch.zeros(0, dtype=torch.long, device=pb.device)
+        if len(sel) == 0:
+            return out, st
+        pb, lp = pb[sel], lp[sel]
         owner, x, y, n_off = access_points(self.d, pb, lp, self.tp)
         blk = torch.zeros(len(owner), dtype=torch.bool, device=pb.device)
         for L in (lp[owner], (lp[owner] + 1).clamp(max=self.nL - 1)):  # the landing on the pin layer and the one above
@@ -180,9 +193,9 @@ class Checker:
             blk |= self.index.hits(torch.stack([x - h, y - h, x + h, y + h], 1), L)
         npts = torch.bincount(owner, minlength=len(pb))
         nblk = torch.bincount(owner[blk], minlength=len(pb))
-        ok = ~(self.bad[lp] | self.bad[(lp + 1).clamp(max=self.nL - 1)]) & self.via_only[lp]
-        return (nblk == npts) & (npts > 0) & ok, {'access_points': len(owner), 'blocked_access_points': int(blk.sum()),
-                                             'off_track_pins': n_off}
+        out[sel] = (nblk == npts) & (npts > 0)
+        st.update(checked_pins=len(sel), access_points=len(owner), blocked_access_points=int(blk.sum()), off_track_pins=n_off)
+        return out, st
 
     def can_block(self, pb, lp, x0, x1):
         """Pin boxes pb (P, 4, um) on layers lp, whose cells may move anywhere in x0..x1 (um, per pin: the cell's
@@ -190,16 +203,19 @@ class Checker:
         detailed placer uses to skip pins. Each access point's landing moves along a strip at a fixed height (the
         track's for a horizontal layer above, the pin centre's for a vertical one); a strip clear of PG metal on
         both layers keeps that access point free wherever the cell goes."""
-        if self.n == 0 or len(pb) == 0:
-            return torch.zeros(len(pb), dtype=torch.bool, device=pb.device)
+        out = torch.zeros(len(pb), dtype=torch.bool, device=pb.device)
+        sel = self._subset(lp) if self.active and len(pb) else torch.zeros(0, dtype=torch.long, device=pb.device)
+        if len(sel) == 0:
+            return out
+        pb, lp, x0, x1 = pb[sel], lp[sel], x0[sel], x1[sel]
         owner, _, y, _ = access_points(self.d, pb, lp, self.tp)
         hit = torch.zeros(len(owner), dtype=torch.bool, device=pb.device)
         for L in (lp[owner], (lp[owner] + 1).clamp(max=self.nL - 1)):
             h = self.hw[L]
             hit |= self.index.hits(torch.stack([x0[owner] - h, y - h, x1[owner] + h, y + h], 1), L)
         n = torch.bincount(owner, minlength=len(pb))
-        ok = ~(self.bad[lp] | self.bad[(lp + 1).clamp(max=self.nL - 1)]) & self.via_only[lp]
-        return (torch.bincount(owner[hit], minlength=len(pb)) == n) & (n > 0) & ok
+        out[sel] = (torch.bincount(owner[hit], minlength=len(pb)) == n) & (n > 0)
+        return out
 
 
 def blocked_pins(d, pos=None, orient=None):
@@ -211,9 +227,10 @@ def blocked_pins(d, pos=None, orient=None):
     out = torch.zeros(len(d.p_cell), dtype=torch.bool, device=dev)
     rel, layer = PDN.pin_shapes(d, dev)
     pins = torch.nonzero(layer >= 0).flatten()
-    stats = {'signal_pins': len(pins), 'access_points': 0, 'blocked_access_points': 0, 'off_track_pins': 0}
+    stats = {'signal_pins': len(pins), 'checked_pins': 0, 'access_points': 0, 'blocked_access_points': 0,
+             'off_track_pins': 0}
     ck = Checker(d, dev)
-    if len(pins) == 0 or ck.n == 0:
+    if len(pins) == 0 or not ck.active:
         return out, stats
     c = d.p_cell[pins]
     pb = PDN.place_boxes(rel[pins], d.size[c, 0].double(), d.size[c, 1].double(), orient[c], pos[c, 0].double(),

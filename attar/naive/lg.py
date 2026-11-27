@@ -458,6 +458,7 @@ def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_dis
     dev = d.device
     index = PDN.Index(d, dev)
     ck = PA.Checker(d, dev) if access else None
+    ck = ck if ck is not None and ck.active else None   # no pin can be blocked here: the dpl rule alone
     if index.n == 0 and (ck is None or ck.n == 0):
         return {'cells': 0}
     t0 = time.time()
