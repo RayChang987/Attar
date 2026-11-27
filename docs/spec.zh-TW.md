@@ -1,13 +1,13 @@
 # Attar 規格書
 
-Nov 27, 2026 · @JR · 對應版本 1.0.7（加上未發布的 pin access）
+Nov 27, 2026 · @JR · 對應版本 1.0.8
 
 > 本文最初是 2026-11-09 的 v0.1 MVP 規格，2026-11-22 依實際做出來的樣子改寫。原規劃中後來改變或放棄的部分，
 > 在各節以「原規劃」註明，保留做決定的理由。
 
 ## 0. 現況摘要
 
-- **套件**：PyPI `attar`，1.0.0（11-15）到 1.0.7（11-24）；MIT 授權；Python 3.8 以上、PyTorch 2.0 以上，CPU 與 CUDA 皆可。
+- **套件**：PyPI `attar`，1.0.0（11-15）到 1.0.8（11-27）；MIT 授權；Python 3.8 以上、PyTorch 2.0 以上，CPU 與 CUDA 皆可。
 - **資料**：Hugging Face `RayChang987/attar-zoo`，262 個設計、24 個 suite，第一次使用時自動下載。
 - **引擎**（`attar.naive` 與 Design 上的編輯）：die sizing、packing、macro placement、IO placement、global placement、
   legalization（含 PDN 與 pin access）、detailed placement、global routing（含增量）、CTS、gate sizing、buffering 與 cloning、
@@ -454,7 +454,7 @@ P11、DATE25，逐步講解）、`docs/`（concepts、features、benchmarks、ap
 | 11-21 | 1.0.5：Abacus 預設、Early library、deterministic GP、timer 唯讀資料；三篇論文的重現回饋 |
 | 11-22 | 1.0.6：GR 寄生快 9–17 倍、增量寄生與增量 routing、GPU OOM 說明、英文逐步 Colab |
 | 11-24 | 1.0.7：長 PG stripe 設計的 detailed placement 不再 OOM；遠離空位的增量合法化 1,250 s → 15 s |
-| 11-27 | （未發布）pin access 評估與保持 pin 可達的合法化／detailed placement；LEF 層寬讀錯修正；ISPD 2018／2019 從 metal1 繞線 |
+| 11-27 | 1.0.8：pin access 評估與保持 pin 可達的合法化／detailed placement；LEF 層寬讀錯修正；ISPD 2018／2019 從 metal1 繞線 |
 
 成功標準（v0.1 時訂的，現況）：
 

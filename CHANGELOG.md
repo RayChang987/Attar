@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 1.0.8
+
+**Upgrading.** Refresh the zoo designs downloaded by an older attar in five suites:
+`attar.fetch('after_fp/ispd2015', 'after_fp/ispd2018', 'after_fp/ispd2019', 'after_fp/iccad2025', 'after_fp/orfs_asap7',
+'before_fp/orfs_asap7', force=True)`. Their layer widths were misread (fixes below), and ISPD 2018/2019 now route
+from metal1. Without the refresh, `pin_access` leaves out the misread layers with a warning, and placement behaves
+as in 1.0.7.
+
+On NS3K designs, legalization and detailed placement now keep signal pins reachable past the PDN. The placements
+differ (HPWL +0.01-0.24%), and `pin_access=False` gives 1.0.7's. ASAP7 and Nangate45 placements are bit for bit
+1.0.7's. Global routing changes on ISPD 2018/2019 only (metal1). Timing is unchanged.
 
 New
 - `Evaluator.pin_access` (metric `'pin_access'`, facts `pdn` and `tracks`): the signal pins the router cannot reach
