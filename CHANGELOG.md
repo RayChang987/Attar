@@ -34,6 +34,10 @@ Fixes
   `pin_access`; the zoo's 73 IRs concerned (ispd2015, ispd2018, ispd2019, iccad2025, orfs_asap7) were rewritten
   from their LEFs. `pin_access` leaves out pins on layers whose width exceeds the pitch, with a warning, so an IR
   distilled before this fix does not stall the detailed placer.
+- Zoo: the ISPD 2018 and 2019 designs route from metal1 (the contests route on every metal layer; their guides use
+  metal1), not from metal2 (a default). Their pins are then never unreachable for `pin_access` (ispd19_test4 had
+  28k at +0.86% HPWL). Global routing there: wirelength within 0.1%, half the vias on ispd19_test4, overflow
+  slightly lower.
 
 ## 1.0.7
 
