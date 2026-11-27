@@ -265,6 +265,67 @@ class VizTest(unittest.TestCase):
         with self.assertRaises(MissingFacts):
             need(BOOKSHELF).plot(tiles='pin_access')                            # no PDN
 
+    def test_pin_access_is_the_landing_rule(self):
+        """Evaluator.pin_access against a direct check, pin by pin: every track of the layer above that crosses the pin
+        gets a via landing (a square of the layer width) on both layers; a pin is blocked when each landing it has
+        comes closer than the layer spacing to PG metal of its layer (Euclidean, corner to corner too). NS3K gcd placed: a pin the router cannot reach
+        that OpenROAD dpl's PDN rule passes; shifted half a site, many."""
+        import os
+        import numpy as np
+        from attar.io import st
+        from attar.rules import pdn as PDN
+        d = need('after_fp/ns3k/gcd')
+        d.place(verbose=False)
+        ev = attar.Evaluator(d)
+        r = ev.pin_access(per_pin=True)
+        self.assertGreater(r['blocked_pins'], 0)
+        self.assertEqual(int(PDN.conflicts(d).sum()), 0)                        # legal for OpenROAD dpl
+        tp, _ = st.load(os.path.join(d.path, 'tech_profile.safetensors'))
+        a, dbu = d.raw, float(d.dbu)
+        pg = [(int(l), np.asarray(rc, np.int64)) for l, rc in zip(a['pg_layer'], a['pg_rect'])]
+
+        def direct(pos):
+            rel, layer = (t.cpu() for t in PDN.pin_shapes(d, d.device))
+            out = np.zeros(len(layer), bool)
+            p_cell = d.p_cell.cpu()
+            for i in np.nonzero(layer.numpy() >= 0)[0]:
+                c = int(p_cell[i]); L = int(layer[i]); U = L + 1
+                b = PDN.place_boxes(rel[i:i + 1], d.size[c:c + 1, 0].double().cpu(), d.size[c:c + 1, 1].double().cpu(),
+                                    d.orient[c:c + 1].cpu(), pos[c:c + 1, 0].double().cpu(),
+                                    pos[c:c + 1, 1].double().cpu())[0].numpy() * dbu
+                horiz = tp['layer_dir'][U] == 0
+                lo, hi = (b[1], b[3]) if horiz else (b[0], b[2])
+                ts = [s + k * p for ax, l, s, p, n in zip(a['tr_axis'], a['tr_layer'], a['tr_start'], a['tr_step'],
+                                                         a['tr_num'])
+                      if l == U and ax == (1 if horiz else 0) for k in range(int(n)) if lo - 0.25 <= s + k * p <= hi + 0.25]
+                pts = [((b[0] + b[2]) / 2, t) if horiz else (t, (b[1] + b[3]) / 2) for t in ts] or \
+                      [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)]
+
+                def hit(x, y, Lk):
+                    h, s = tp['layer_width'][Lk] / 2, tp['layer_spacing'][Lk]
+                    return any(l == Lk and max(rc[0] - (x + h), (x - h) - rc[2], 0) ** 2
+                               + max(rc[1] - (y + h), (y - h) - rc[3], 0) ** 2 < s * s for l, rc in pg)
+                out[i] = all(hit(x, y, L) or hit(x, y, U) for x, y in pts)
+            return out
+
+        np.testing.assert_array_equal(r['pins'].cpu().numpy(), direct(d.pos))
+        pos = d.pos.clone(); pos[:, 0] += 0.5 * float(d.row_site_w.min())
+        shifted = ev.pin_access(pos, per_pin=True)
+        self.assertGreater(shifted['blocked_pins'], r['blocked_pins'])
+        np.testing.assert_array_equal(shifted['pins'].cpu().numpy(), direct(pos))
+
+    def test_pin_access_on_other_pdks(self):
+        """ASAP7 gives M2 seven track patterns per row (DEF TRACKS): every pin is crossed by one; no PDN, no metric."""
+        from attar.facts import MissingFacts
+        d = need('after_fp/orfs_asap7/gcd')
+        d.place(verbose=False)
+        r = attar.Evaluator(d).pin_access()
+        self.assertEqual(r['off_track_pins'], 0)
+        self.assertGreater(r['access_points'], 2 * r['signal_pins'])
+        self.assertIn('pin_access', attar.Evaluator(d).evaluate(metrics='pin_access'))
+        with self.assertRaises(MissingFacts):
+            attar.Evaluator(need(BOOKSHELF)).pin_access()
+
 class WritebackTest(unittest.TestCase):
     def test_unchanged_reference_exports_the_source_design(self):
         from attar.io.deffile import same_design

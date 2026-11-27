@@ -5,8 +5,9 @@ follows from what the design has, as for capabilities. Implemented:
   hpwl, star_wirelength, steiner_wirelength (RSMT estimate, see attar/metrics.py), rudy (congestion map),
   density_overflow (ePlace overflow), legality (rows, sites, overlaps; multi-row aware), timing (attar.timing.sta: WNS,
   TNS, hold, on placement parasitics), gr_overflow (GROV: RUDY demand against OpenROAD's gcell capacities),
-  displacement (between two placements, as OpenROAD dpl reports it).
-Listed for later: global-route wirelength and overflow, pin access, thermal.
+  displacement (between two placements, as OpenROAD dpl reports it), pin_access (signal pins the router cannot reach
+  past the PDN: attar.rules.pin_access).
+Listed for later: global-route wirelength and overflow, thermal.
 
 Speed: one HPWL call is ~0.15 ms up to ~1M pins (launch-bound). Exact speed-ups:
   fast=True     CUDA graph for hpwl (0.22 -> 0.05 ms on 43k pins)
@@ -33,7 +34,7 @@ METRICS = {
     'gr_wirelength': (WL | {'routing'}, False),
     'gr_overflow': (WL | {'routing', 'tracks', 'floorplan.die'}, True),
     'timing': (WL | {'pin_direction', 'timing'}, True),
-    'pin_access': (WL | {'routing'}, False),
+    'pin_access': ({'cell_geometry', 'pin_offsets', 'placement', 'tracks', 'pdn'}, True),
     'thermal': ({'cell_geometry', 'placement', 'floorplan.die', 'timing'}, False),
 }
 
@@ -331,6 +332,27 @@ class Evaluator:
             res['illegal'] = mv & ill
         return res
 
+    def pin_access(self, pos=None, per_pin=False, per_cell=False):
+        """Signal pins the router cannot reach past the PDN (attar.rules.pin_access): every access point of the pin
+        (a track of the layer above crossing it) has a via landing closer than the layer's spacing to PG metal.
+        On 988 routed Innovus runs of i3dPDK_NS3K the blocked pins are the signal-to-PG M1/M2 DRVs, one for one;
+        OpenROAD dpl's PDN rule (legality()['pdn_blocked']) passes them. Signal-to-signal DRVs are not modelled.
+        Returns {'blocked_pins', 'blocked_cells', 'signal_pins', 'access_points', 'blocked_access_points',
+        'off_track_pins'}; per_pin / per_cell add bool masks 'pins' (every pin) / 'cells' (every cell)."""
+        self._require('pin_access', pos)
+        from .rules import pin_access as PA
+        d = self.d
+        p = d.pos if pos is None else pos
+        bp, st = PA.blocked_pins(d, pos=p)
+        cells = torch.zeros(len(p), dtype=torch.bool, device=p.device)
+        cells[d.p_cell[bp]] = True
+        res = {'blocked_pins': int(bp.sum()), 'blocked_cells': int(cells.sum()), **st}
+        if per_pin:
+            res['pins'] = bp
+        if per_cell:
+            res['cells'] = cells
+        return res
+
     def displacement(self, pos, ref=None, cells=None):
         """Displacement between two placements, as OpenROAD's detailed placer reports it (dpl Opendp::disp,
         findDisplacementStats): per cell the Manhattan distance of its lower-left corner, |dx| + |dy| (um).
@@ -361,6 +383,7 @@ class Evaluator:
                                                                                          'max': 0.0},
         'timing': lambda ev, pos: ev.d.timing(pos).summary(),
         'gr_overflow': lambda ev, pos: ev.d.gr_overflow(pos),
+        'pin_access': lambda ev, pos: ev.pin_access(pos),
     }
 
     def evaluate(self, pos=None, metrics=('hpwl',)):

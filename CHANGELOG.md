@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+New
+- `Evaluator.pin_access` (metric `'pin_access'`, facts `pdn` and `tracks`): the signal pins the router cannot reach
+  past the PDN. Each track of the layer above that crosses a pin is an access point; the via lands a square of the
+  layer width on both layers; a pin is blocked when every landing comes closer than the layer spacing to PG metal
+  (Euclidean). Geometry comes from the IR alone (layer directions, widths, spacings, every DEF TRACKS pattern), so
+  it runs on any PDK: 0.2 s on 62k cells, 2.6 s on bp_quad (1.18M cells, GPU). On 988 routed Innovus runs of
+  i3dPDK_NS3K (pa_pdn) the blocked pins are exactly the pins with a signal-to-PG M1/M2 DRV (156,665 of 156,665,
+  no others). OpenROAD dpl's PDN rule (`legality()['pdn_blocked']`, `plot(tiles='pin_access')`, the detailed
+  placer's penalty) is unchanged; on those runs it flags 66 cells, 23 of them failing: a single-access M1 pin one
+  M1 spacing from a PG via is legal, but its M2 landing is 0.040 um from the via's M2 pad (M2 spacing 0.048). Signal-to-signal DRVs (58% of
+  the M2 markers there) are not modelled.
+
 ## 1.0.7
 
 **Upgrading.** Nothing to do. Two fixes found while reproducing SROA (ICCAD 2025) on Attar: detailed placement no

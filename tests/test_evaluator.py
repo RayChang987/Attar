@@ -61,8 +61,8 @@ class EvaluatorTest(unittest.TestCase):
         self.assertEqual(ev.missing('gr_overflow'), ['placement'])
         self.assertEqual(ev.missing('rudy'), ['placement'])
         d.restore('reference')
-        self.assertEqual(ev.available(), ['density_overflow', 'displacement', 'gr_overflow', 'hpwl', 'legality', 'rudy',
-                                          'star_wirelength', 'steiner_wirelength', 'timing'])
+        self.assertEqual(ev.available(), ['density_overflow', 'displacement', 'gr_overflow', 'hpwl', 'legality',
+                                          'pin_access', 'rudy', 'star_wirelength', 'steiner_wirelength', 'timing'])
         r = ev.evaluate()
         self.assertIn('hpwl', r); self.assertEqual(r['fidelity'], 'F1')
         self.assertIn('wns', ev.evaluate(metrics=('timing',))['timing'])
