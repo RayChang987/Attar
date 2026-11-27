@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixes
+- The GPU timer's first-compile notice looks in `TRITON_CACHE_DIR` when it is set, as Triton does. Before, it
+  checked Triton's default folder only and printed the notice on every run with the variable set, though the
+  kernels were cached.
+
 ## 1.0.8
 
 **Upgrading.** Refresh the zoo designs downloaded by an older attar in five suites:

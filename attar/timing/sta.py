@@ -193,11 +193,13 @@ def _first_compile_notice():
     if _NOTICED:
         return
     _NOTICED = True
-    try:
-        from triton.runtime.cache import default_cache_dir
-        cache = default_cache_dir()
-    except Exception:  # noqa: BLE001
-        cache = os.path.join(os.path.expanduser('~'), '.triton', 'cache')
+    cache = os.environ.get('TRITON_CACHE_DIR', '').strip()      # Triton's own order: the variable, then its default
+    if not cache:
+        try:
+            from triton.runtime.cache import default_cache_dir
+            cache = default_cache_dir()
+        except Exception:  # noqa: BLE001
+            cache = os.path.join(os.path.expanduser('~'), '.triton', 'cache')
     if not os.path.isdir(cache) or not os.listdir(cache):
         print('attar.timing: first GPU timing run on this machine: compiling its Triton kernels (a couple of minutes, '
               'once; cached in %s; a fresh machine such as a new Colab runtime compiles again unless TRITON_CACHE_DIR '
