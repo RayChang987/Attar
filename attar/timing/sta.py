@@ -193,14 +193,18 @@ def _first_compile_notice():
     if _NOTICED:
         return
     _NOTICED = True
-    cache = os.environ.get('TRITON_CACHE_DIR', '').strip()      # Triton's own order: the variable, then its default
-    if not cache:
+    probe = 'attar_cache_probe'
+    try:                    # where Triton keeps its kernels, as Triton resolves it (its setting, else its default)
+        from triton.runtime.cache import FileCacheManager
+        made = FileCacheManager(probe).cache_dir               # Triton creates <cache>/<probe>: removed again
+        cache = os.path.dirname(made)
         try:
-            from triton.runtime.cache import default_cache_dir
-            cache = default_cache_dir()
-        except Exception:  # noqa: BLE001
-            cache = os.path.join(os.path.expanduser('~'), '.triton', 'cache')
-    if not os.path.isdir(cache) or not os.listdir(cache):
+            os.rmdir(made)
+        except OSError:
+            pass
+    except Exception:  # noqa: BLE001
+        cache = os.path.join(os.path.expanduser('~'), '.triton', 'cache')
+    if not os.path.isdir(cache) or not [e for e in os.listdir(cache) if e != probe]:
         print('attar.timing: first GPU timing run on this machine: compiling its Triton kernels (a couple of minutes, '
               'once; cached in %s; a fresh machine such as a new Colab runtime compiles again unless TRITON_CACHE_DIR '
               'and TORCHINDUCTOR_CACHE_DIR point to a folder it keeps)' % cache, flush=True)
@@ -2719,6 +2723,69 @@ class TimingResult:
         v = torch.where(torch.isnan(v) | ~torch.isfinite(v), torch.full_like(v, INF), v)
         return TimingData('EndpointRequired', pin=rows // 2, rf=rows % 2, required=req.clone(), arrival=arr.clone(),
                           slack=v.amin(1) if len(v) else torch.zeros(0, device=T.dev))
+
+    def stages(self):
+        """The level schedule of the last run of this result's timer, with the delays it computed (copies, ps). The
+        search runs stage by stage: the launch arcs of ideal clocks first (if any), then one stage per level that has
+        cell arcs. A stage evaluates its cell arcs (gate delay and driver slew, OpenSTA's delay calculation at the
+        driver's load and input slew), then the wire arcs leaving their output pins (wire delay and load slew).
+        Returns a TimingData with
+          stages                  the stages in run order, each a TimingData:
+            level                 the level of its arcs' output pins (graph().level); -1 for the launch stage
+            launch                True for the launch stage
+            arc (N,)              each entry's arc: an index into graph()'s l_* (launch stage) or c_* (others)
+            lib, from_pin, to_pin (N,)   its Liberty arc (library()), input pin (the launch stage: the register clock
+                                  pin) and output pin
+            from_rf, to_rf (N,)   the input and output transitions (0 rise, 1 fall; launch stage: from_rf -1)
+            searched (N,)         False where the entry only sets the output slew (graph()'s c_searched, and the
+                                  transitions the sense allows)
+            latch (N,)            clocked latch D -> Q entries: their arrival is the latch's (time borrowing), not
+                                  the input pin's arrival plus the delay, and their loads get no wire delay
+            tag, time, in_slew (N,)      launch stage only (None elsewhere): the launch tag, the time it launches at
+                                  and the clock pin's slew (graph()'s launch_tag, launch_time, launch_slew)
+            delay_max, delay_min (N,)    the gate delay of each entry (max and min analysis)
+            load_entry, net_arc, sink (M,)   the wire arcs leaving the stage: per entry, every load of its output pin;
+                                  the entry (index into this stage's N), the net arc (graph()'s n_*), the load pin
+            wire_max, wire_min (M,)      the wire delay of each, after this entry's driver slew
+          port_net_arcs           the net arcs driven by input ports (graph()'s n_*): no stage; a port's arrival and
+                                  slew come from the constraints, its loads' arrivals add the wire delay
+        How arrivals follow (arrivals(per_tag=True).max, per pin, transition and launch tag): an output pin's is the
+        max over its searched, non-latch entries of the input pin's arrival plus delay_max (launch stage: time plus
+        delay_max, in its tag); a load's is its driver's plus the wire delay, where OpenSTA keeps one wire delay per
+        load and transition, the largest over the driver's entries. Before each stage the timer also sets the
+        arrivals of pins with a set_clock_latency on them and of latch outputs; those are in arrivals(), not here."""
+        T = self.timer
+        rec = getattr(T, '_rec', None)
+        if rec is None:
+            raise RuntimeError('stages(): this result\'s timer has no delays of a run')
+        dev = T.dev
+        c = lambda x: x.clone()  # noqa: E731
+        i64 = lambda x: torch.as_tensor(np.asarray(x, np.int64), device=dev)  # noqa: E731
+        out = []
+        if T.lc is not None:
+            lib, to, orf, tag, t0, cks = T.lc
+            ea, en = T.lc_ex
+            src = i64(T._lc_src)
+            out.append(dict(level=-1, launch=True, arc=src, lib=c(lib), from_pin=T.l_fr[src].clone(), to_pin=c(to),
+                            from_rf=torch.full_like(orf, -1), to_rf=c(orf),
+                            searched=torch.ones(len(lib), dtype=torch.bool, device=dev),
+                            latch=torch.zeros(len(lib), dtype=torch.bool, device=dev),
+                            tag=c(tag), time=c(t0), in_slew=c(cks), load_entry=c(ea), net_arc=c(en), sink=T.n_to[en]))
+        for k, (cb, src) in enumerate(zip(T.cb_lev, T._cb_src)):
+            if cb is None:
+                continue
+            lib, f, t_, orf, irf, ea, en, _ = cb
+            _, arr, nol = T._cb_fwd[k]
+            out.append(dict(level=k, launch=False, arc=i64(src), lib=c(lib), from_pin=c(f), to_pin=c(t_),
+                            from_rf=c(irf), to_rf=c(orf), searched=c(arr), latch=c(nol), tag=None, time=None,
+                            in_slew=None, load_entry=c(ea), net_arc=c(en), sink=T.n_to[en]))
+        if len(rec) != len(out):
+            raise RuntimeError('stages(): the delays of the last run do not match its levels')
+        st = []
+        for s, (dmax, wx, dmin, wn) in zip(out, rec):
+            st.append(TimingData('TimingStage', **s, delay_max=dmax.float().clone(), delay_min=dmin.float().clone(),
+                                 wire_max=wx.float().clone(), wire_min=wn.float().clone()))
+        return TimingData('TimingStages', stages=st, port_net_arcs=c(T.pa))
 
     def parasitics(self):
         """The wire parasitics of the last run of this result's timer (copies). Variants v are the pin capacitances

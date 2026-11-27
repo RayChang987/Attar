@@ -14,7 +14,7 @@ class SelfContainedTest(unittest.TestCase):
     def test_no_environment_variables(self):
         pkg = os.path.dirname(attar.__file__)
         for f in glob.glob(os.path.join(pkg, '**', '*.py'), recursive=True):
-            with open(f) as fh:
+            with open(f, encoding='utf-8') as fh:
                 self.assertIsNone(re.search(r'os\.environ|getenv', fh.read()), f)
 
     def test_zoo_dir(self):

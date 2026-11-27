@@ -13,7 +13,7 @@ class ExampleTest(unittest.TestCase):
         name = 'after_fp/orfs_asap7/aes'
         need(name)
         here = os.path.join(os.path.dirname(__file__), '..', 'examples')
-        r = subprocess.run([sys.executable, os.path.join(here, 'quickstart_placement.py'), name], capture_output=True, text=True, timeout=300)
+        r = subprocess.run([sys.executable, os.path.join(here, 'quickstart_placement.py'), name], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertIn("'legal': True", r.stdout)
         self.assertIn('setup: WNS', r.stdout)                   # the timing report
@@ -25,7 +25,7 @@ class ExampleTest(unittest.TestCase):
         name = 'before_fp/orfs_asap7/aes'
         need(name)
         here = os.path.join(os.path.dirname(__file__), '..', 'examples')
-        r = subprocess.run([sys.executable, os.path.join(here, 'quickstart_floorplan.py'), name], capture_output=True, text=True, timeout=300)
+        r = subprocess.run([sys.executable, os.path.join(here, 'quickstart_floorplan.py'), name], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertIn('d.floorplan() places it; then d.export', r.stdout)
         self.assertTrue(os.path.exists(os.path.join(here, 'orfs_asap7_aes_fp.png')))
@@ -35,7 +35,7 @@ class ExampleTest(unittest.TestCase):
         name = MEDIUM
         need(name)
         here = os.path.join(os.path.dirname(__file__), '..', 'examples')
-        r = subprocess.run([sys.executable, os.path.join(here, 'timing_driven.py'), name], capture_output=True, text=True, timeout=300)
+        r = subprocess.run([sys.executable, os.path.join(here, 'timing_driven.py'), name], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertEqual(r.stdout.count('setup: WNS'), 2)              # before and after the reweighting
         self.assertTrue(os.path.exists(os.path.join(here, 'orfs_asap7_aes_timing_driven.png')))

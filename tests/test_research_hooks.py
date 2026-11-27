@@ -16,6 +16,40 @@ def _cpu(name):
         raise unittest.SkipTest(str(e)) from None
 
 
+def _stage_mismatches(r):
+    """Rebuild the arrivals from TimingResult.stages(), as its doc says they follow: (output rows, load rows that
+    differ from arrivals(per_tag=True), gate entries above their output's arrival)."""
+    inf = float('inf')
+    A = r.arrivals(per_tag=True).max
+    P, _, NT = A.shape
+    A = A.reshape(P * 2, NT)
+    same = lambda x, y: (x == y) | ((x - y).abs() < 1e-2)  # noqa: E731
+    out_bad = load_bad = above = 0
+    for s in r.stages().stages:
+        row = s.to_pin * 2 + s.to_rf
+        if s.launch:
+            cand = torch.full((len(s.lib), NT), -inf, device=A.device).scatter(1, s.tag[:, None],
+                                                                               (s.time + s.delay_max)[:, None])
+        else:
+            cand = A[s.from_pin * 2 + s.from_rf] + s.delay_max[:, None]
+            cand[~(s.searched & ~s.latch)] = -inf
+        u, inv = torch.unique(row, return_inverse=True)
+        best = torch.full((len(u), NT), -inf, device=A.device).scatter_reduce(0, inv[:, None].expand(-1, NT), cand,
+                                                                              'amax')
+        fed = torch.isfinite(best).any(1)
+        out_bad += int((~same(best, A[u]).all(1) & fed).sum())
+        above += int((cand > A[row] + 1e-2).sum())
+        ok = ~s.latch[s.load_entry]
+        if ok.any():
+            si = (s.sink * 2 + s.to_rf[s.load_entry])[ok]
+            uu, ii = torch.unique(si, return_inverse=True)
+            w = torch.full((len(uu),), -inf, device=A.device).scatter_reduce(0, ii, s.wire_max[ok], 'amax')
+            drv = torch.zeros(len(uu), dtype=torch.long, device=A.device).scatter(0, ii, row[s.load_entry][ok])
+            want = A[drv] + w[:, None]
+            load_bad += int((~same(want, A[uu]) & torch.isfinite(want)).sum())
+    return out_bad, load_bad, above
+
+
 class GlobalPlaceHooksTest(unittest.TestCase):
     ARGS = dict(max_iters=80, verbose=False, graphs=False, seed=0, snapshot='hook_test')
 
@@ -284,6 +318,19 @@ class TimingDataTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(s[ep]).all())
         self.assertEqual(er.version, _sta.TIMING_DATA_VERSION)
 
+    def test_stages_rebuild_the_arrivals(self):
+        st = self.r.stages()
+        self.assertEqual(_stage_mismatches(self.r), (0, 0, 0))
+        g = self.r.graph()
+        levels = [s.level for s in st.stages]
+        self.assertEqual(levels, sorted(levels))
+        for s in st.stages[:3]:
+            self.assertTrue(torch.equal(g.c_lib[s.arc], s.lib) and torch.equal(g.c_to[s.arc], s.to_pin))
+            self.assertTrue(bool((g.level[s.to_pin] == s.level).all()))
+            self.assertTrue(torch.equal(g.n_from[s.net_arc], s.to_pin[s.load_entry]))
+        self.assertTrue(bool((g.net_driver[g.n_net[st.port_net_arcs]] == g.n_from[st.port_net_arcs]).all()))
+        self.assertEqual(st.version, _sta.TIMING_DATA_VERSION)
+
 
 GCD = 'after_fp/orfs_asap7/gcd'
 
@@ -326,6 +373,14 @@ class IdealClockDataTest(unittest.TestCase):
         a = self.r.arrivals(per_tag=True)
         self.assertEqual(tuple(a.max.shape), (len(self.d.p_cell), 2, self.r.timer.NT))
         self.assertTrue(torch.equal(a.max.amax(2), self.r.arrivals().max))
+
+    def test_stages_start_with_the_launches(self):
+        st, g = self.r.stages(), self.r.graph()
+        s = st.stages[0]
+        self.assertTrue(s.launch and s.level == -1)
+        self.assertTrue(torch.equal(s.arc, g.launch_arc) and torch.equal(s.time, g.launch_time))
+        self.assertTrue(torch.equal(s.from_pin, g.l_from[g.launch_arc]))
+        self.assertEqual(_stage_mismatches(self.r), (0, 0, 0))
 
 
 class NamesAndPlacementTest(unittest.TestCase):

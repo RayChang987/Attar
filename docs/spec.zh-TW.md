@@ -168,8 +168,8 @@ flow 自己的目標密度）、`d.plot()`、`d.export()`。
 
 ### 4.4 接下來
 
-- **下一版**：公開、帶版本號的 `TimingResult.stages()`（timer 的逐層排程與它自己算的 gate／wire delay），讓 LATTE 這類
-  可微分 timer 不必讀 timer 的私有欄位；之後把 LATTE notebook 換上去，驗收標準是結果逐輪不變。
+- **已完成（main，待發版）**：公開、帶版本號的 `TimingResult.stages()`（timer 的逐層排程與它自己算的 gate／wire delay），
+  由它重建的 arrival 與 `arrivals()` 完全相同（CPU 與 GPU）；LATTE notebook 已改用它，不再讀 timer 的私有欄位。
 - 增量 routing 的 negotiation：重繞的 net 很多時（netcard_fast 移動 1% cell，1 萬條 net）不比全部重繞快；要改策略會影響
   繞線品質，需另行決定。
 - 匯出 Verilog、SDC 與精簡的 Liberty，方便和外部 baseline（Rsyn、DREAMPlace 4.0）比較。
@@ -469,7 +469,7 @@ P11、DATE25，逐步講解）、`docs/`（concepts、features、benchmarks、ap
 | 風險 | 影響 | 對策 |
 | --- | --- | --- |
 | 評估器與參考工具在新設計或新 SDC 上不一致 | 結果不可信 | 照 OpenSTA／OpenROAD 原始碼移植；不一致之處記在 `limitations`；每次發版跑 `docs/validation/` 的比對工具 |
-| 研究程式依賴 timer 的私有欄位 | timer 重構時研究程式壞掉 | 唯讀資料 API 帶版本號；下一版補上 `stages()` |
+| 研究程式依賴 timer 的私有欄位 | timer 重構時研究程式壞掉 | 唯讀資料 API 帶版本號，含 `stages()`；LATTE notebook 只用公開 API |
 | GPU 記憶體不足（共用 GPU、百萬 cell 設計） | 跑不起來 | 1.0.6 起錯誤訊息附解法；CPU 路徑也要在幾分鐘內完成（原則 4） |
 | 與文獻的數字無法直接比（ICCAD 2015 用 OpenTimer） | 使用者誤判 | 文件與 notebook 註明，只比方法間的倍數 |
 | 重現研究時移植出錯（例如 P11 重現中 DATE25 pin 對只用了第一次更新） | 錯誤結論 | 重現一律在 Attar 上跑、以 Attar 評估；對照組也要驗證和官方實作相當 |

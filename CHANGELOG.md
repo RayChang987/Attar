@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+New
+- `TimingResult.stages()`: the level schedule of the last timing run, with the delays the timer computed. Stages
+  come in run order: the ideal clocks' launch arcs, then one stage per level. Each holds its cell arcs (Liberty arc,
+  pins, transitions, whether searched or a latch D -> Q arc), the wire arcs leaving them, and the gate and wire
+  delays of both analyses. The arrivals of `arrivals(per_tag=True)` follow from them exactly (tested on CPU and
+  GPU). With it, the LATTE notebook reads no private timer fields.
+
 Fixes
-- The GPU timer's first-compile notice looks in `TRITON_CACHE_DIR` when it is set, as Triton does. Before, it
-  checked Triton's default folder only and printed the notice on every run with the variable set, though the
-  kernels were cached.
+- The GPU timer's first-compile notice asks Triton where its kernel cache is, so it honours `TRITON_CACHE_DIR`.
+  Before, it checked Triton's default folder only and printed the notice on every run with the variable set,
+  though the kernels were cached. (Attar itself still reads no environment variable.)
+- Tests: `test_examples` and `test_paths` read UTF-8 explicitly, so the suite passes under a non-UTF-8 locale.
 
 ## 1.0.8
 
