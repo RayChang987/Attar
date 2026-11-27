@@ -127,8 +127,10 @@ def proxy_agreement(mode):
 def gallery(only=()):
     """What the Evaluator sees, one view per figure (attar.viz tiles), from real runs of attar.naive:
       eval_grov         cva6 (ASAP7) placed: global-routing load on OpenROAD's gcells (d.gr_overflow)
-      eval_pin_access   ariane136 (NS3K) after global placement: cells with a signal pin on the PDN
-      eval_placed       the same after legalization: legal, rails and PDN included
+      eval_pin_access   ariane136 (NS3K) legalized with OpenROAD dpl's PDN rule only: the signal pins the router
+                        cannot reach past the PDN (Evaluator.pin_access; signal-to-PG DRVs in Innovus)
+      eval_placed       the same global placement legalized by attar (default: pins kept reachable): legal, rails and
+                        PDN included
       fp_n300           GSRC n300 floorplanned by B*-tree packing: legality and the macro / IO connections"""
     sys.path.insert(0, ROOT)
     import time
@@ -157,12 +159,19 @@ def gallery(only=()):
     if not only or {'eval_pin_access', 'eval_placed'} & set(only):
         d = attar.load('after_fp/ns3k_pl_u80/ariane136', 'cuda')
         ev = attar.Evaluator(d)
-        _, sec = quiet(lambda: naive.global_place(d))
-        save(d, 'eval_pin_access', 'ariane136    pin access after global placement (%.1f s)' % sec, tiles='pin_access')
+        _, gp_sec = quiet(lambda: naive.global_place(d))
+        p0, o0 = d.pos.clone(), d.orient.clone()
+        _, sec = quiet(lambda: naive.legalize(d, pin_access=False))
+        n = ev.pin_access()['blocked_pins']
+        save(d, 'eval_pin_access', "ariane136    unreachable pins, dpl's PDN rule only",
+             tiles='unreachable_pins')
+        d.pos, d.orient = p0, o0
+        d.update_orient()
         _, sec = quiet(lambda: naive.legalize(d))
         lg = ev.legality()
         save(d, 'eval_placed', 'ariane136    legalized (%.1f s)' % sec)
-        print('   legality', lg)
+        print('   legality', lg, '| unreachable pins: %d with dpl\'s rule only, %d by default'
+              % (n, ev.pin_access()['blocked_pins']))
         del d
     if not only or 'fp_n300' in only:
         d = attar.load('before_fp/gsrc_hard/n300', 'cuda')

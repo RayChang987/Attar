@@ -35,6 +35,7 @@ import torch
 
 from ..io.distill import ASIDE, MACRO, TERMINAL
 from ..rules import pdn as PDN
+from ..rules import pin_access as PA
 from ..rules import rails as RL
 from ..rules.rails import base_rows as _base_rows
 from .rowops import BIG, _locate, _segments
@@ -47,7 +48,7 @@ MIRROR = {0: 4, 5: 1}         # N -> FN, FS -> S: a cell mirrored left-right sta
 class _DP:
     """The placement as rows of single-row cells in free segments, and the net cost of candidate moves."""
 
-    def __init__(self, d):
+    def __init__(self, d, pin_access=True):
         self.d = d
         dev = self.dev = d.device
         hb, ys, rx0, rx1, sw, rorient = _base_rows(d)
@@ -88,7 +89,11 @@ class _DP:
         self.pdn = PDN.Index(d, dev) if 'pdn' in d.facts else None
         if self.pdn is not None and self.pdn.n == 0:
             self.pdn = None
-        if self.pdn is not None:
+        self.pa = PA.Checker(d, dev) if pin_access and 'pdn' in d.facts and 'tracks' in d.facts else None
+        if self.pa is not None and self.pa.n == 0:
+            self.pa = None
+        self.pdn_check = self.pdn is not None or self.pa is not None
+        if self.pdn_check:
             self.pin_rel, self.pin_layer = PDN.pin_shapes(d, dev)
         self.refresh()
 
@@ -217,9 +222,11 @@ class _DP:
         return win
 
     def pdn_ok(self, cells, x, y, o):
-        """Bool per entry: cell at lower-left (x, y), orientation o, has no signal pin on a PDN pin blockage."""
+        """Bool per entry: cell at lower-left (x, y), orientation o, has no signal pin on a PDN pin blockage (OpenROAD
+        dpl's rule) and, with pin_access, makes none unreachable past the PDN that is reachable where the cell stands
+        (attar.rules.pin_access)."""
         ok = torch.ones(len(cells), dtype=torch.bool, device=self.dev)
-        if self.pdn is None or len(cells) == 0:
+        if not self.pdn_check or len(cells) == 0:
             return ok
         d = self.d
         cnt = self.cell_ptr[cells + 1] - self.cell_ptr[cells]
@@ -231,7 +238,11 @@ class _DP:
         pins, owner, lay = pins[k], owner[k], lay[k]
         c = cells[owner]
         pb = PDN.place_boxes(self.pin_rel[pins], d.size[c, 0].double(), d.size[c, 1].double(), o[owner], x[owner], y[owner])
-        hit = self.pdn.hits(pb, lay)
+        hit = self.pdn.hits(pb, lay) if self.pdn is not None else torch.zeros(len(pb), dtype=torch.bool, device=self.dev)
+        if self.pa is not None:          # a pin made unreachable; one that is unreachable where the cell stands may stay so
+            now = PDN.place_boxes(self.pin_rel[pins], d.size[c, 0].double(), d.size[c, 1].double(), d.orient[c],
+                                  d.pos[c, 0].double(), d.pos[c, 1].double())
+            hit |= self.pa.blocked(pb, lay)[0] & ~self.pa.blocked(now, lay)[0]
         ok[owner[hit]] = False
         return ok
 
@@ -326,7 +337,7 @@ def _reorder_pass(S, W, stats, chunk=200_000):
                 sl = slice(c0, min(Wn * P, c0 + chunk))
                 cost[sl] = S.cost(mv_cells[sl], x_um[sl], y_um[sl], o[sl], xonly=True)
             cost = cost.view(Wn, P)
-            if S.pdn is not None:
+            if S.pdn_check:
                 ok = S.pdn_ok(mv_cells.reshape(-1), x_um.reshape(-1), y_um.reshape(-1), o.reshape(-1)).view(Wn, P, W).all(2)
                 cost = torch.where(ok, cost, torch.full_like(cost, float('inf')))
             cur = torch.empty(Wn, dtype=torch.float64, device=dev)
@@ -544,7 +555,7 @@ def _global_swap_pass(S, stats, max_batches=20, vertical=False, gen=None):
         old = S.cost(mv_cells, cur_X, cur_Y, cur_O, xonly=False)
         gain = old - new
         good = gain > 1e-9
-        if S.pdn is not None:                          # only the improving candidates need the PDN check
+        if S.pdn_check:                          # only the improving candidates need the PDN check
             gi = torch.nonzero(good).flatten()
             ok = S.pdn_ok(c1[gi], X[gi, 0], Y[gi, 0], o1[gi])
             sw = c2[gi] >= 0
@@ -606,7 +617,7 @@ def _flip_pass(S, stats, max_batches=50):
         old = S.cost(todo[:, None], x, y, o[:, None], xonly=True)
         gain = old - new
         good = gain > 1e-9
-        if S.pdn is not None:
+        if S.pdn_check:
             good &= S.pdn_ok(todo, x[:, 0], y[:, 0], no)
         g = torch.nonzero(good).flatten()
         if len(g) == 0:
@@ -623,13 +634,15 @@ def _flip_pass(S, stats, max_batches=50):
 
 @explain_oom('naive.detailed_place')
 def detailed_place(d, ops=('gs', 'vs', 'ro', 'flip'), passes=10, tol=0.01, window=3, seed=1, verbose=True,
-                   snapshot='naive_dp'):
+                   snapshot='naive_dp', pin_access=True):
     """Improve the wirelength of d's legal placement, keeping it legal (module docstring). ops: the dpo passes to run,
     in order ('gs' global swap, 'vs' vertical swap, 'ro' local reordering, 'flip' cell flipping: dpo's script order
     without mis and the random improver); each runs up to `passes` times and stops when a pass changes the HPWL by tol
     or less (dpo: -p 10 -t 0.005, the tolerance raised to 0.01 inside; flipping runs once, as in dpo). window: cells
-    per reordering window (dpo: 2..4, default 3). seed: the vertical swap's random row choice (dpo: 1). Updates
-    d.pos / d.orient and saves a snapshot; returns statistics."""
+    per reordering window (dpo: 2..4, default 3). seed: the vertical swap's random row choice (dpo: 1). pin_access
+    (facts 'pdn' and 'tracks'): no move makes a signal pin unreachable past the PDN (Evaluator.pin_access);
+    False: only OpenROAD dpl's PDN rule, as up to 1.0.7. Updates d.pos / d.orient and saves a snapshot; returns
+    statistics."""
     d.require('detailed_place')
     from ..evaluator import Evaluator
     ev = Evaluator(d)
@@ -640,7 +653,7 @@ def detailed_place(d, ops=('gs', 'vs', 'ro', 'flip'), passes=10, tol=0.01, windo
     t0 = time.time()
     W = min(4, max(2, int(window)))
     tol = max(float(tol), 0.01)
-    S = _DP(d)
+    S = _DP(d, pin_access=pin_access)
     gen = torch.Generator().manual_seed(int(seed))
     pos0 = d.pos.clone()
     h0 = float(ev.hpwl())

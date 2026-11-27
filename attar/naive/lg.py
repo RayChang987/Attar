@@ -23,6 +23,7 @@ from ..io.distill import ASIDE, MACRO, TERMINAL
 from ..rules.rails import base_rows as _base_rows
 from .rowops import BIG, _first, _locate, _pack, _segment_broadcast, _segments
 from ..rules import pdn as PDN
+from ..rules import pin_access as PA
 from .space import _Space, _fill, _improve
 from ..gpu import explain_oom
 
@@ -167,7 +168,7 @@ def _solve_class(gx, gy, w, NB, band_y, band_h, roff, seg_row, s0, s1, sw, col_c
 
 @explain_oom('naive.legalize')
 def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, verbose=True, snapshot='naive_lg',
-             macro_halo=0.0, cells=None, incremental=None, method=None):
+             macro_halo=0.0, cells=None, incremental=None, method=None, pin_access=True):
     """Legalize the movable standard cells of d in place (d.pos, d.orient). Returns statistics.
 
     Two modes (stats['mode']):
@@ -189,7 +190,10 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
                  their column has room. Needs g++ (built once into ~/.cache/attar); without it the default falls
                  back to 'columns' with a warning.
       'columns'  column balancing, segment spill, isotonic packing (the module docstring): batched on the device; the
-                 default before 1.0.5. col_cells, max_rounds and window apply to it only."""
+                 default before 1.0.5. col_cells, max_rounds and window apply to it only.
+    pin_access (global mode, facts 'pdn' and 'tracks'): the PDN-aware row DP also keeps signal pins reachable past the
+    PDN (Evaluator.pin_access), at the same cost as a pin on a blockage; False: OpenROAD dpl's PDN rule only, as up
+    to 1.0.7. Legality is dpl's either way."""
     d.require('legalize')
     if method is None:
         from .abacus import available, error
@@ -408,7 +412,7 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
     d.update_orient()
     if 'pdn' in d.facts:            # signal pins clear of the PDN's via metal (fact 'pdn'): a GPU row DP, then the few left
         if not incremental:         # incremental: only the repair, which moves the conflicting cells (and what they push)
-            stats['pdn_dp'] = _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw)
+            stats['pdn_dp'] = _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, access=pin_access)
         stats['pdn'] = _pdn_repair(d, space, mv, cur_x, cur_r, k_mv, wg, allowed_rows, rorient, ys, gx0, sw, placed)
     d.snapshot(snapshot)
     pos = d.pos
@@ -435,21 +439,26 @@ def legalize(d, max_rounds=5, window=8, col_cells=8.0, improve=True, passes=3, v
 W_PA = 20.0                    # pin-access penalty of the PDN-aware DP: a cell with a signal pin on a PDN pin blockage
 
 
-def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_disp=0.05, w_mirror=1e-3):
+def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_disp=0.05, w_mirror=1e-3, access=True):
     """Signal pins clear of the PDN (attar.rules.pdn) by a row-wise dynamic program on the GPU, after the PDN-aware detailed
     placement refinement of pa_pdn (Xplace pinaccess/dp_refine.py): every single-row movable cell may shift by
     -S..S sites and be mirrored left to right (N <-> FN, FS <-> S: the same rails; only where the LEF SYMMETRY allows
     it), at a cost
 
-        c_i(s, o) = w_pa [a signal pin overlaps a pin blockage] + w_disp |s| + w_mirror [mirrored],
+        c_i(s, o) = w_pa [a signal pin overlaps a pin blockage, or cannot be reached] + w_disp |s| + w_mirror [mirrored],
 
     and the cells of every chain (consecutive single-row cells between fixed objects, multi-row cells and row ends)
     keep their order without overlap: min sum_i c_i(s_i, o_i) s.t. x_{i-1} + w_{i-1} + s_{i-1} <= x_i + s_i, solved
     exactly, all chains at once, one step per position in the chain (prefix minima: no pairwise term). Updates
-    d.pos, d.orient and cur_x; returns counts. Cells it cannot clear are left to _pdn_repair."""
+    d.pos, d.orient and cur_x; returns counts. Cells it cannot clear are left to _pdn_repair.
+
+    A pin blockage is OpenROAD dpl's rule (attar.rules.pdn: legality); a pin that cannot be reached is one whose every
+    access point has a via landing too close to PG metal (attar.rules.pin_access, Evaluator.pin_access: on routed
+    NS3K runs, exactly the pins with a signal-to-PG DRV). access=False: the dpl rule alone (the DP up to 1.0.7)."""
     dev = d.device
     index = PDN.Index(d, dev)
-    if index.n == 0:
+    ck = PA.Checker(d, dev) if access else None
+    if index.n == 0 and (ck is None or ck.n == 0):
         return {'cells': 0}
     t0 = time.time()
     R = space.R
@@ -506,7 +515,12 @@ def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_dis
     c_ = ci[owner]
     x0 = d.pos[c_, 0].double() - S * float(sw); x1 = d.pos[c_, 0].double() + d.size[c_, 0].double() + S * float(sw)
     y0 = d.pos[c_, 1].double(); y1 = y0 + d.size[c_, 1].double()
-    near = index.hits(torch.stack([x0, y0, x1, y1], 1), layer[pins])
+    box = torch.stack([x0, y0, x1, y1], 1)
+    near = index.hits(box, layer[pins])
+    if ck is not None:                                   # and the pins that can become unreachable somewhere in range
+        pb0 = PDN.place_boxes(rel[pins], d.size[c_, 0].double(), d.size[c_, 1].double(), o0[owner], d.pos[c_, 0].double(),
+                              y0)
+        near |= ck.can_block(pb0, layer[pins], x0, x1)
     sel = torch.zeros(n, dtype=torch.bool, device=dev); sel[owner[near]] = True
     pk = sel[owner]
     pins, owner = pins[pk], owner[pk]
@@ -520,6 +534,8 @@ def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_dis
                 bx = d.pos[c_, 0].double() + sv[b0] * float(sw)
                 pb = PDN.place_boxes(rel[pins], w, h, oo, bx, d.pos[c_, 1].double())
                 hit = index.hits(pb, layer[pins])
+                if ck is not None:
+                    hit |= ck.blocked(pb, layer[pins])[0]
                 blocked[:, b0, o].index_put_((owner[hit],), torch.ones(int(hit.sum()), dtype=torch.bool, device=dev), accumulate=False)
     C += w_pa * blocked.double()
     n_blocked0 = int(blocked[:, S, 0].sum())
@@ -601,9 +617,18 @@ def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_dis
     cur_x[jt] = cur_x[jt] + shift
     d.pos = pos; d.orient = orient; d.update_orient()
     # then every cell still blocked (multi-row ones included) mirrored where it stands, all at once: the place does
-    # not change, so neither does legality; it stays mirrored where that clears it
+    # not change, so neither does legality; it stays mirrored where that clears it (a pin blockage: of that; a pin
+    # the router cannot reach: of both)
     conf = PDN.conflicts(d, index=index) & d.movable
-    cc = torch.nonzero(conf).flatten()
+    acc = torch.zeros_like(conf)
+    if ck is not None:
+        sp = torch.nonzero(layer >= 0).flatten()
+        c_ = d.p_cell[sp]
+        pb = PDN.place_boxes(rel[sp], d.size[c_, 0].double(), d.size[c_, 1].double(), d.orient[c_], d.pos[c_, 0].double(),
+                             d.pos[c_, 1].double())
+        acc[c_[ck.blocked(pb, layer[sp])[0]]] = True
+        acc &= d.movable
+    cc = torch.nonzero(conf | acc).flatten()
     n_mir2 = 0
     if len(cc):
         oc = d.orient[cc]
@@ -620,6 +645,10 @@ def _pdn_dp(d, space, mv, cur_x, cur_r, k_mv, wg, gx0, sw, S=8, w_pa=W_PA, w_dis
         pb = PDN.place_boxes(rel[pp], d.size[c_, 0].double(), d.size[c_, 1].double(), mc[own], d.pos[c_, 0].double(), d.pos[c_, 1].double())
         hit = index.hits(pb, layer[pp])
         still = torch.zeros(len(cc), dtype=torch.bool, device=dev); still[own[hit]] = True
+        if ck is not None:
+            unreach = torch.zeros(len(cc), dtype=torch.bool, device=dev)
+            unreach[own[ck.blocked(pb, layer[pp])[0]]] = True
+            still = torch.where(conf[cc], still, still | unreach)
         flip = okm & ~still
         orient = d.orient.clone(); orient[cc[flip]] = mc[flip]
         d.orient = orient; d.update_orient()

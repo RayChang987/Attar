@@ -113,7 +113,8 @@
 <circle cx="801" cy="468" r="9" fill="#d99a1e"/>
 <path d="M 796.4 468.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
 <text x="822" y="475" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Global routing overflow</text>
-<circle cx="801" cy="502" r="8" fill="none" stroke="#d99a1e" stroke-width="2"/>
+<circle cx="801" cy="502" r="9" fill="#d99a1e"/>
+<path d="M 796.4 502.4 l 3.2 3.4 l 6 -7" fill="none" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
 <text x="822" y="509" font-size="20" fill="#2b211c" font-weight="normal" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Blocked pin checking</text>
 <text x="790" y="559.6" font-size="16" fill="#6b5d52" font-weight="bold" text-anchor="start" font-family="'Segoe UI', Helvetica, Arial, sans-serif">Timing and power</text>
 <circle cx="801" cy="588" r="9" fill="#d99a1e"/>

@@ -207,6 +207,7 @@ def _draw_io(ax, d, t, s):
 TILES = {
     'gr_overflow': ('global-routing overflow', {'netlist', 'pin_offsets', 'placement', 'floorplan.die', 'tracks', 'routing'}),
     'pin_access': ('pin-access penalty', {'netlist', 'cell_geometry', 'pin_offsets', 'placement', 'pdn'}),
+    'unreachable_pins': ('unreachable pins', {'cell_geometry', 'pin_offsets', 'placement', 'pdn', 'tracks'}),
     'density': ('cell density', {'cell_geometry', 'placement', 'floorplan.die'}),
 }
 LOAD_MAX = 1.5          # load maps (demand / capacity) saturate here: the same colors for every design
@@ -259,7 +260,7 @@ def tiles_density(d, pos=None, bins=None):
 
 
 def tiles_pin_access(d, pos=None, bins=None):
-    """Pin-access penalty of the PDN-aware detailed placement (attar.naive.lg._pdn_dp): w_pa for every cell with a
+    """OpenROAD dpl's PDN rule, weighted as in the PDN-aware row DP (attar.naive.lg._pdn_dp): w_pa for every cell with a
     signal pin on a PDN pin blockage of its layer (attar.rules.pdn.conflicts), summed per bin of the global placement grid.
     -> (map [ny][nx], NaN where 0; x edges; y edges; stats)."""
     import torch
@@ -278,6 +279,26 @@ def tiles_pin_access(d, pos=None, bins=None):
     note = ('{:,.0f}'.format(W_PA * len(c)),
             '%s cells with a signal pin on the PDN  ·  w_pa %g per cell  ·  %d × %d bins'
             % ('{:,}'.format(len(c)), W_PA, g.nx, g.ny))
+    return np.where(m > 0, m, np.nan), *_edges(g), note
+
+
+def tiles_unreachable_pins(d, pos=None, bins=None):
+    """Signal pins the router cannot reach past the PDN (Evaluator.pin_access, attar.rules.pin_access), counted per bin
+    of the global placement grid. -> (map [ny][nx], NaN where 0; x edges; y edges; stats)."""
+    import torch
+    from .rules import pin_access as PA
+    p = d.pos if pos is None else pos
+    bp, st = PA.blocked_pins(d, pos=p)
+    g = _gp_grid(d, bins, int(d.movable.sum()))
+    xy = d.pin_pos(p)[bp]
+    ix = ((xy[:, 0] - g.x0) / g.bw).floor().long().clamp(0, g.nx - 1)
+    iy = ((xy[:, 1] - g.y0) / g.bh).floor().long().clamp(0, g.ny - 1)
+    m = torch.zeros(g.ny * g.nx, dtype=torch.float64, device=d.device)
+    m.index_add_(0, iy * g.nx + ix, torch.ones(len(xy), dtype=torch.float64, device=d.device))
+    m = m.view(g.ny, g.nx).cpu().numpy()
+    n = int(bp.sum())
+    note = ('{:,}'.format(n), 'of %s signal pins: every via landing too close to PG metal  ·  %d × %d bins'
+            % ('{:,}'.format(st['signal_pins']), g.nx, g.ny))
     return np.where(m > 0, m, np.nan), *_edges(g), note
 
 
@@ -350,7 +371,11 @@ def _draw_tiles(fig, ax, d, t, kind, pos, bins, adjustment):
         bar = (bar[0], *load_ticks, 1.0)
     else:
         from .naive.lg import W_PA
-        m, xe, ye, note = tiles_pin_access(d, pos, bins)
+        if kind == 'pin_access':
+            m, xe, ye, note = tiles_pin_access(d, pos, bins)
+        else:
+            m, xe, ye, note = tiles_unreachable_pins(d, pos, bins)
+            W_PA = 1.0                                   # a count of pins: the same steps, one per pin
         top = int(round(float(np.nanmax(m)) / W_PA)) if np.isfinite(m).any() else 1
         ramp = LinearSegmentedColormap.from_list('attar_pa', list(t['penalty']))
         if top <= 6:                                     # few cells per tile: one step per cell
@@ -360,7 +385,7 @@ def _draw_tiles(fig, ax, d, t, kind, pos, bins, adjustment):
         else:
             cmap, norm = ramp, Normalize(W_PA, W_PA * top)
             ticks = list(np.linspace(W_PA, W_PA * top, 4))
-        bar = ('penalty', ticks, [_num(v) for v in ticks], None)
+        bar = ('penalty' if kind == 'pin_access' else 'pins', ticks, [_num(v) for v in ticks], None)
     cmap.set_bad((0, 0, 0, 0))
     mesh = ax.pcolormesh(xe, ye, np.ma.masked_invalid(np.minimum(m, 1e9)), cmap=cmap, norm=norm, shading='flat',
                          edgecolors='none', antialiased=False, zorder=2, rasterized=True)
@@ -427,10 +452,12 @@ def plot(d, path=None, die=0, pos=None, max_cells=30_000, rows=None, labels=None
     macro, 40 to 400). tiles: a tile map in place of the cells, with its color bar:
       'gr_overflow'  global-routing load on OpenROAD's gcells: per gcell, the worst RUDY demand / capacity of its
                      edges (d.gr_overflow; adjustment as there); above 1 in red
-      'pin_access'   the pin-access penalty of the PDN-aware detailed placement: w_pa per cell with a signal pin on
-                     a PDN pin blockage, summed per tile (needs the 'pdn' fact)
+      'pin_access'   OpenROAD dpl's PDN rule, weighted as in the PDN-aware row DP: w_pa per cell with a signal pin
+                     on a PDN pin blockage, summed per tile (needs the 'pdn' fact)
+      'unreachable_pins'  signal pins the router cannot reach past the PDN (Evaluator.pin_access), per tile (needs
+                     the 'pdn' and 'tracks' facts)
       'density'      cell density as global placement sees it: movable area / free area per bin; above 1 in red
-    bins: the tile grid of 'pin_access' and 'density' per side (default: global placement's, ~sqrt(#movable), halved
+    bins: the tile grid of 'pin_access', 'unreachable_pins' and 'density' per side (default: global placement's, ~sqrt(#movable), halved
     until a bin spans two rows).
     Returns the matplotlib figure; saved to path if given."""
     from types import SimpleNamespace

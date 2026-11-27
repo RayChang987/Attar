@@ -106,7 +106,11 @@ counts the cells that break them (`pdn_blocked`). The legalizer fixes them last,
 1. a row-wise dynamic program on the GPU, after the PDN-aware refinement of pa_pdn (Xplace `pinaccess/dp_refine.py`):
    every single-row cell may shift by up to 8 sites and be mirrored left to right (N and FN, FS and S share their
    rails; only where the LEF `SYMMETRY` allows it), at a cost for blocked pins, displacement and mirroring, keeping
-   the order of the cells in every row segment; all segments are solved exactly at once;
+   the order of the cells in every row segment; all segments are solved exactly at once. A pin counts as blocked
+   when it breaks the rule above or when the router cannot reach it (`Evaluator.pin_access`: every access point, a
+   track of the layer above crossing the pin, has a via landing closer than the layer spacing to PG metal; on routed
+   NS3K runs these are exactly the pins with a signal-to-PG DRV, and the rule above passes them); `pin_access=False`
+   keeps the rule above alone;
 2. every cell still blocked, multi-row ones included, mirrored where it stands if that clears it (one GPU pass);
 3. the few left shifted along their rows, pushing neighbors, or moved to the nearest free spot; every such move is
    checked against a site occupancy map first.

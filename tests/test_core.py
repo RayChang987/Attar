@@ -268,17 +268,19 @@ class VizTest(unittest.TestCase):
     def test_pin_access_is_the_landing_rule(self):
         """Evaluator.pin_access against a direct check, pin by pin: every track of the layer above that crosses the pin
         gets a via landing (a square of the layer width) on both layers; a pin is blocked when each landing it has
-        comes closer than the layer spacing to PG metal of its layer (Euclidean, corner to corner too). NS3K gcd placed: a pin the router cannot reach
-        that OpenROAD dpl's PDN rule passes; shifted half a site, many."""
+        comes closer than the layer spacing to PG metal of its layer (Euclidean, corner to corner too). NS3K gcd placed with OpenROAD dpl's PDN rule only,
+        and shifted half a site (many pins blocked)."""
         import os
         import numpy as np
         from attar.io import st
         from attar.rules import pdn as PDN
+        from attar import naive
         d = need('after_fp/ns3k/gcd')
-        d.place(verbose=False)
+        naive.global_place(d, verbose=False)
+        naive.legalize(d, verbose=False, pin_access=False)
+        naive.detailed_place(d, verbose=False, pin_access=False)
         ev = attar.Evaluator(d)
-        r = ev.pin_access(per_pin=True)
-        self.assertGreater(r['blocked_pins'], 0)
+        r = ev.pin_access(per_pin=True)                     # usually one pin (GP varies; test_lg_dp: aes, always tens)
         self.assertEqual(int(PDN.conflicts(d).sum()), 0)                        # legal for OpenROAD dpl
         tp, _ = st.load(os.path.join(d.path, 'tech_profile.safetensors'))
         a, dbu = d.raw, float(d.dbu)
@@ -313,6 +315,39 @@ class VizTest(unittest.TestCase):
         shifted = ev.pin_access(pos, per_pin=True)
         self.assertGreater(shifted['blocked_pins'], r['blocked_pins'])
         np.testing.assert_array_equal(shifted['pins'].cpu().numpy(), direct(pos))
+        from attar.viz import tiles_unreachable_pins                           # its tile map: the same pins
+        self.assertEqual(float(np.nansum(tiles_unreachable_pins(d, pos)[0])), shifted['blocked_pins'])
+        with tempfile.TemporaryDirectory() as t:
+            d.plot(t + '/u.png', tiles='unreachable_pins')
+            self.assertGreater(os.path.getsize(t + '/u.png'), 10000)
+
+    def test_pin_access_scope(self):
+        """Pins on a signal routing layer can be left along it: never blocked. A width over the pitch (an IR distilled
+        before the LEF fix) leaves that layer's pins out, with a warning."""
+        from attar import naive
+        from attar.rules import pin_access as PA
+        d = need('after_fp/ns3k/gcd')
+        naive.global_place(d, verbose=False)
+        pos = d.pos.clone(); pos[:, 0] += 0.5 * float(d.row_site_w.min())
+        n = attar.Evaluator(d).pin_access(pos)['blocked_pins']
+        self.assertGreater(n, 0)
+        rt = d.manifest['routing']
+        try:
+            d.manifest['routing'] = dict(rt, layers=['M1', rt['layers'][1]])     # M1 routed: pins can leave along it
+            d._pa_pg = None
+            self.assertEqual(attar.Evaluator(d).pin_access(pos)['blocked_pins'], 0)
+        finally:
+            d.manifest['routing'] = rt
+        tp = PA._tech(d)
+        bad = dict(tp); bad['layer_width'] = tp['layer_width'].copy(); bad['layer_width'][1] = 50 * tp['layer_pitch'][1]
+        orig = PA._tech
+        try:
+            PA._tech = lambda d_, _b=bad: _b
+            with self.assertWarns(UserWarning):
+                self.assertEqual(attar.Evaluator(d).pin_access(pos)['blocked_pins'], 0)
+        finally:
+            PA._tech = orig
+        self.assertEqual(attar.Evaluator(d).pin_access(pos)['blocked_pins'], n)
 
     def test_pin_access_on_other_pdks(self):
         """ASAP7 gives M2 seven track patterns per row (DEF TRACKS): every pin is crossed by one; no PDN, no metric."""

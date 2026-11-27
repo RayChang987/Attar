@@ -129,7 +129,7 @@ def roadmap():
              ('Netlist edits', [('Gate sizing', 'done'), ('Buffering and cloning', 'done'), ('Debuffering', 'done')])]
     ev = [('Wirelength', [('HPWL', 'done'), ('Steiner wirelength', 'done')]),
           ('Placement', [('Legality', 'done'), ('Displacement', 'done'), ('Density overflow', 'done')]),
-          ('Routability', [('RUDY', 'done'), ('Global routing overflow', 'done'), ('Blocked pin checking', 'next')]),
+          ('Routability', [('RUDY', 'done'), ('Global routing overflow', 'done'), ('Blocked pin checking', 'done')]),
           ('Timing and power', [('Setup and hold', 'done'), ('GR parasitics', 'done'),
                                 ('Propagated clocks, CRPR', 'done'), ('Slew, cap, fanout (DRV)', 'done'),
                                 ('Power', 'done')])]

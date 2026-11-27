@@ -71,7 +71,7 @@ cva6 WNS -195 → -75 ps, in 2.2 s.</sub>
 
 ## What's inside
 
-<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="Roadmap in three cards. Data, 262 designs in the zoo: contest benchmarks ISPD 2005 (8), ISPD 2015 (20), ISPD 2018 (10), ISPD 2019 (10), ISPD 2024 (5), ICCAD 2015 (8), ICCAD 2025 (13), GSRC placement (4) for placement; MCNC (10), GSRC blocks (12), IBM-HB+ (28) for floorplan; ASAP7 (15 placement, 5 floorplan), Nangate45 (8 and 8) and NS3K (98 placement). Engines, done: die sizing, packing, macro placement, IO placement, global placer, legalizer, PDN-aware refinement, detailed placement, clock tree synthesis, global router, gate sizing, buffering and cloning, debuffering; not yet: delay-balanced clock trees. Evaluation, done: HPWL, Steiner wirelength, legality, displacement, density overflow, RUDY, global routing overflow, setup and hold timing, GR parasitics, propagated clocks and CRPR, slew, capacitance and fanout limits, power; not yet: blocked pin checking. Left to your P&amp;R tool: PDN synthesis, detailed routing, routing DRC, sign-off" width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="Roadmap in three cards. Data, 262 designs in the zoo: contest benchmarks ISPD 2005 (8), ISPD 2015 (20), ISPD 2018 (10), ISPD 2019 (10), ISPD 2024 (5), ICCAD 2015 (8), ICCAD 2025 (13), GSRC placement (4) for placement; MCNC (10), GSRC blocks (12), IBM-HB+ (28) for floorplan; ASAP7 (15 placement, 5 floorplan), Nangate45 (8 and 8) and NS3K (98 placement). Engines, done: die sizing, packing, macro placement, IO placement, global placer, legalizer, PDN-aware refinement, detailed placement, clock tree synthesis, global router, gate sizing, buffering and cloning, debuffering; not yet: delay-balanced clock trees. Evaluation, done: HPWL, Steiner wirelength, legality, displacement, density overflow, RUDY, global routing overflow, setup and hold timing, GR parasitics, propagated clocks and CRPR, slew, capacitance and fanout limits, power, blocked pin checking. Left to your P&amp;R tool: PDN synthesis, detailed routing, routing DRC, sign-off" width="100%"></p>
 
 Every engine and evaluator, with its accuracy against OpenROAD and OpenSTA:
 [docs/features.md](https://github.com/RayChang987/Attar/blob/main/docs/features.md).
@@ -115,18 +115,18 @@ Docs: [concepts](https://github.com/RayChang987/Attar/blob/main/docs/concepts.md
 </tr>
 <tr>
 <td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_grov.png" alt="cva6 after placement, colored by global-routing load on OpenROAD's gcells"></td>
-<td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_pin_access.png" alt="ariane136 after global placement: cells with a signal pin on the PDN, in stripes along the power grid"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_pin_access.png" alt="ariane136 legalized with OpenROAD dpl's PDN rule only: 1,254 signal pins the router cannot reach past the PDN, spread over the standard-cell area"></td>
 </tr>
 <tr>
 <td><sub><b>Routing congestion</b> cva6, placed in 2.4 s.</sub></td>
-<td><sub><b>Pin access</b> ariane136: cells with a signal pin on the PDN's vias.</sub></td>
+<td><sub><b>Pin access</b> ariane136 legalized with OpenROAD dpl's PDN rule only: 1,254 pins the router cannot reach past the power grid (signal-to-PG DRVs after Innovus routing). Attar's legalizer leaves none.</sub></td>
 </tr>
 <tr>
 <td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_placed.png" alt="ariane136 legalized: legal, rails and PDN included"></td>
 <td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/fp_n300.png" alt="GSRC n300 floorplanned by B*-tree packing, with the strongest connections between blocks and IO pins"></td>
 </tr>
 <tr>
-<td><sub><b>Legal placement</b> ariane136, rails and PDN included, in 2.4 s.</sub></td>
+<td><sub><b>Legal placement</b> ariane136, rails and PDN included, in 2.2 s.</sub></td>
 <td><sub><b>Floorplan</b> GSRC n300: 300 blocks, 569 IO pins, packed in 43 s.</sub></td>
 </tr>
 </table>

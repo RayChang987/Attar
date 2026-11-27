@@ -95,7 +95,11 @@ def read_lef(paths, macros=None, tech=None):
                     elif k == 'END' and len(t) > 1 and t[1] == via[0]:
                         tech['vias'][via[0]] = via[1]; via = None
                 elif layer is not None:
-                    if k in ('DIRECTION', 'PITCH', 'WIDTH', 'OFFSET', 'TYPE'):
+                    stmt = t[:t.index('#')] if '#' in t else t
+                    if k in ('DIRECTION', 'PITCH', 'WIDTH', 'OFFSET', 'TYPE') \
+                            and (k != 'WIDTH' or len([x for x in stmt if x != ';']) == 2):
+                        # WIDTH with a single value only: a SPACINGTABLE's rows also start with WIDTH (ISPD 2015/18/19:
+                        # the last row, WIDTH 4.10 ..., was read as the layer width)
                         v = t[1].rstrip(';')
                         layer[k.lower()] = v if k in ('DIRECTION', 'TYPE') else float(v)
                     elif k == 'SPACING' and 'spacing' not in layer and len(t) > 1:   # the plain minimum spacing

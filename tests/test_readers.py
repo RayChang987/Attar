@@ -42,6 +42,49 @@ class LefDefTest(unittest.TestCase):
         self.assertTrue(attar.Evaluator(need('after_fp/iccad2025/des')).legality()['legal'])
 
 
+class LefLayerTest(unittest.TestCase):
+    def test_width_is_not_a_spacing_table_row(self):
+        # ISPD 2015/18/19 LEFs: SPACINGTABLE rows start with WIDTH; the last one (4.10) used to become the layer
+        # width. ASAP7 writes a comment after the statement; a repeated PITCH keeps the last value, as before.
+        import os
+        import tempfile
+        from attar.io.lef import read_lef
+        lef = """VERSION 5.8 ;
+UNITS
+  DATABASE MICRONS 2000 ;
+END UNITS
+LAYER metal1
+  TYPE ROUTING ;
+  DIRECTION HORIZONTAL ;
+  PITCH 0.190 ;
+  PITCH 0.200 ;
+  WIDTH 0.100 ; # Min Width
+  SPACINGTABLE
+  PARALLELRUNLENGTH 0.00 0.40 4.10
+  WIDTH 0.00 0.10 0.10 0.10
+  WIDTH 4.10 0.10 0.52 1.40 ;
+  SPACING 0.11 ENDOFLINE 0.12 WITHIN 0.045 ;
+END metal1
+END LIBRARY
+"""
+        with tempfile.TemporaryDirectory() as t:
+            f = os.path.join(t, 'tech.lef')
+            open(f, 'w').write(lef)
+            _, tech = read_lef([f])
+        L = tech['layers'][0]
+        self.assertEqual((L['width'], L['pitch'], L['spacing'], L['direction']), (0.1, 0.2, 0.11, 'HORIZONTAL'))
+
+    def test_zoo_widths_fit_their_pitch(self):
+        # every routing layer of the contest IRs: a wire no wider than its pitch (a misread width is 20-40x)
+        from attar.io import st
+        import os
+        for name in ('after_fp/ispd2019/test4', 'after_fp/ispd2018/test1', 'after_fp/orfs_asap7/gcd'):
+            d = need(name)
+            tp, _ = st.load(os.path.join(d.path, 'tech_profile.safetensors'))
+            m = tp['layer_pitch'] > 0
+            self.assertTrue(bool((tp['layer_width'][m] <= tp['layer_pitch'][m]).all()), name)
+
+
 class DecimalCoordinateTest(unittest.TestCase):
     """Encounter writes component locations as decimals ("( 7214680.000000 1402200.000000 )", ICCAD 2015)."""
 

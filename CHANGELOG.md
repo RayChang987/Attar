@@ -6,13 +6,34 @@ New
 - `Evaluator.pin_access` (metric `'pin_access'`, facts `pdn` and `tracks`): the signal pins the router cannot reach
   past the PDN. Each track of the layer above that crosses a pin is an access point; the via lands a square of the
   layer width on both layers; a pin is blocked when every landing comes closer than the layer spacing to PG metal
-  (Euclidean). Geometry comes from the IR alone (layer directions, widths, spacings, every DEF TRACKS pattern), so
+  (Euclidean); pins below the lowest signal routing layer only (a pin on a routing layer can be left along it).
+  Geometry comes from the IR alone (layer directions, widths, spacings, every DEF TRACKS pattern), so
   it runs on any PDK: 0.2 s on 62k cells, 2.6 s on bp_quad (1.18M cells, GPU). On 988 routed Innovus runs of
   i3dPDK_NS3K (pa_pdn) the blocked pins are exactly the pins with a signal-to-PG M1/M2 DRV (156,665 of 156,665,
-  no others). OpenROAD dpl's PDN rule (`legality()['pdn_blocked']`, `plot(tiles='pin_access')`, the detailed
-  placer's penalty) is unchanged; on those runs it flags 66 cells, 23 of them failing: a single-access M1 pin one
-  M1 spacing from a PG via is legal, but its M2 landing is 0.040 um from the via's M2 pad (M2 spacing 0.048). Signal-to-signal DRVs (58% of
+  no others). OpenROAD dpl's PDN rule (`legality()['pdn_blocked']`, `plot(tiles='pin_access')`) is unchanged;
+  on those runs it flags 66 cells, 23 of them failing: a single-access M1 pin one M1 spacing from a PG via is
+  legal, but its M2 landing is 0.040 um from the via's M2 pad (M2 spacing 0.048). Signal-to-signal DRVs (58% of
   the M2 markers there) are not modelled.
+- `plot(tiles='unreachable_pins')`: those pins per tile. The README gallery shows them on ariane136 legalized with
+  dpl's PDN rule only (1,254 pins); the roadmap marks blocked pin checking done.
+
+Changed
+- `naive.legalize` and `naive.detailed_place` keep signal pins reachable (`pin_access=True`, the default, with facts
+  `pdn` and `tracks`): the PDN-aware row DP counts a pin the router cannot reach like a pin on a blockage, the
+  in-place mirroring of multi-row cells clears them too, and the detailed placer rejects moves that make one
+  unreachable.
+  NS3K u80, from the same global placement: unreachable pins 66 -> 0 (aes), 603 -> 0 (jpeg), 1,235 -> 0
+  (ariane136), 4,360 -> 4 (bp_quad); HPWL +0.01-0.24%; the PDN step of legalization +0.2-0.6 s (bp_quad +2 s).
+  ASAP7 and Nangate45: the same placements as before (no pin is unreachable there; a strip test skips every
+  pin), at most +0.4 s. Legality is still OpenROAD dpl's; `pin_access=False` gives 1.0.7's placements.
+
+Fixes
+- LEF reader: a layer's width was taken from the last line starting with WIDTH, which in a SPACINGTABLE is a table
+  row (ISPD 2015/2018/2019: 4.1 um for a 0.1 um wire; ASAP7: 1-12 um for M8, M9, Pad). Only a one-value WIDTH
+  statement counts now. The width went into the tech profile (`layer_width`), used by DEF export and now by
+  `pin_access`; the zoo's 73 IRs concerned (ispd2015, ispd2018, ispd2019, iccad2025, orfs_asap7) were rewritten
+  from their LEFs. `pin_access` leaves out pins on layers whose width exceeds the pitch, with a warning, so an IR
+  distilled before this fix does not stall the detailed placer.
 
 ## 1.0.7
 

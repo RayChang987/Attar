@@ -6,7 +6,10 @@ a preferred-direction track of Lu crosses the pin; there the via lands a square 
 and on Lu. An access point is blocked when either landing is closer than that layer's minimum spacing to PG metal of
 the same layer (wires, vias, fill; Euclidean, corner to corner too; facts 'pdn' and 'tracks', widths and spacings
 from the tech profile). A pin is blocked when all of its access points are. A pin that no track of Lu crosses has one
-access point at its centre (an off-track access).
+access point at its centre (an off-track access). The rule covers pins below the lowest signal routing layer (the
+'routing' fact's range: the pin layer only gives access, as M1 on NS3K, ASAP7 and Nangate45 in their flows); a pin on
+a routing layer can also be left along its own layer and is never blocked here. Without a recorded range every pin
+counts as below it.
 
 Measured on 988 routed Innovus runs of i3dPDK_NS3K (pa_pdn): OpenROAD dpl's rule (attar.rules.pdn.conflicts) flags
 almost none of the failing pins, since a single-access M1 pin can sit exactly one M1 spacing from a PG via (legal)
@@ -135,35 +138,87 @@ class _Spacing(PDN.Index):
         return hit
 
 
+class Checker:
+    """Pin access of placed pin boxes, for many placements of the same design (the detailed placer's candidates):
+    the PG shapes, the tech profile and the spacing index are built once."""
+
+    def __init__(self, d, dev):
+        self.d, self.dev = d, dev
+        pg = pg_shapes(d)
+        self.n = len(pg)
+        if self.n:
+            self.tp = _tech(d)
+            self.index = _Spacing(d, dev, pg)
+            self.hw = torch.as_tensor(self.tp['layer_width'].astype(np.float64) / 2 / float(d.dbu), device=dev)
+            # a width over the pitch cannot be: attar 1.0.7 and older read a SPACINGTABLE row as the width
+            # (ISPD 2015/18/19 LEFs); pins on or under such a layer are left out (never blocked) until distilled again
+            bad = (self.tp['layer_pitch'] > 0) & (self.tp['layer_width'] > self.tp['layer_pitch'])
+            self.bad = torch.as_tensor(bad, device=dev)
+            if bad[:3].any():
+                import warnings
+                warnings.warn('pin_access: %s has layer widths over the pitch (%s; a LEF misread by attar 1.0.7 and older): '
+                              'pins on those layers are not checked; distill the design again'
+                              % (d.manifest.get('design'), ', '.join(d.names['layers'][i] for i in np.nonzero(bad)[0][:4])),
+                              stacklevel=3)
+        self.nL = len(d.names['layers'])
+        # a via is the only way into a pin below the lowest signal routing layer (the routing fact's range, when
+        # recorded); on a routing layer the router can also leave the pin on its own layer: never blocked here
+        lo = (d.manifest.get('routing') or {}).get('layers', [None])[0]
+        names = d.names['layers']
+        self.bottom = names.index(lo) if lo in names else self.nL
+        self.via_only = torch.arange(self.nL, device=dev) < self.bottom
+
+    def blocked(self, pb, lp):
+        """Pin boxes pb (P, 4, um) on layers lp (P,) -> (bool per box: every access point blocked, counts)."""
+        if self.n == 0 or len(pb) == 0:
+            return torch.zeros(len(pb), dtype=torch.bool, device=pb.device), {'access_points': 0, 'blocked_access_points': 0,
+                                                                              'off_track_pins': 0}
+        owner, x, y, n_off = access_points(self.d, pb, lp, self.tp)
+        blk = torch.zeros(len(owner), dtype=torch.bool, device=pb.device)
+        for L in (lp[owner], (lp[owner] + 1).clamp(max=self.nL - 1)):  # the landing on the pin layer and the one above
+            h = self.hw[L]
+            blk |= self.index.hits(torch.stack([x - h, y - h, x + h, y + h], 1), L)
+        npts = torch.bincount(owner, minlength=len(pb))
+        nblk = torch.bincount(owner[blk], minlength=len(pb))
+        ok = ~(self.bad[lp] | self.bad[(lp + 1).clamp(max=self.nL - 1)]) & self.via_only[lp]
+        return (nblk == npts) & (npts > 0) & ok, {'access_points': len(owner), 'blocked_access_points': int(blk.sum()),
+                                             'off_track_pins': n_off}
+
+    def can_block(self, pb, lp, x0, x1):
+        """Pin boxes pb (P, 4, um) on layers lp, whose cells may move anywhere in x0..x1 (um, per pin: the cell's
+        shifts and mirrors): False where the pin stays reachable at every such place, a necessary condition the
+        detailed placer uses to skip pins. Each access point's landing moves along a strip at a fixed height (the
+        track's for a horizontal layer above, the pin centre's for a vertical one); a strip clear of PG metal on
+        both layers keeps that access point free wherever the cell goes."""
+        if self.n == 0 or len(pb) == 0:
+            return torch.zeros(len(pb), dtype=torch.bool, device=pb.device)
+        owner, _, y, _ = access_points(self.d, pb, lp, self.tp)
+        hit = torch.zeros(len(owner), dtype=torch.bool, device=pb.device)
+        for L in (lp[owner], (lp[owner] + 1).clamp(max=self.nL - 1)):
+            h = self.hw[L]
+            hit |= self.index.hits(torch.stack([x0[owner] - h, y - h, x1[owner] + h, y + h], 1), L)
+        n = torch.bincount(owner, minlength=len(pb))
+        ok = ~(self.bad[lp] | self.bad[(lp + 1).clamp(max=self.nL - 1)]) & self.via_only[lp]
+        return (torch.bincount(owner[hit], minlength=len(pb)) == n) & (n > 0) & ok
+
+
 def blocked_pins(d, pos=None, orient=None):
     """Per pin of the design (bool): a signal pin whose every access point is blocked by PG metal (module doc).
     Also returns counts: {'signal_pins', 'access_points', 'blocked_access_points', 'off_track_pins'}."""
     pos = d.pos if pos is None else pos
     orient = d.orient if orient is None else orient
     dev = pos.device
-    nP = len(d.p_cell)
-    out = torch.zeros(nP, dtype=torch.bool, device=dev)
+    out = torch.zeros(len(d.p_cell), dtype=torch.bool, device=dev)
     rel, layer = PDN.pin_shapes(d, dev)
     pins = torch.nonzero(layer >= 0).flatten()
     stats = {'signal_pins': len(pins), 'access_points': 0, 'blocked_access_points': 0, 'off_track_pins': 0}
-    pg = pg_shapes(d)
-    if len(pins) == 0 or len(pg) == 0:
+    ck = Checker(d, dev)
+    if len(pins) == 0 or ck.n == 0:
         return out, stats
-    tp = _tech(d)
     c = d.p_cell[pins]
     pb = PDN.place_boxes(rel[pins], d.size[c, 0].double(), d.size[c, 1].double(), orient[c], pos[c, 0].double(),
                          pos[c, 1].double())
-    lp = layer[pins]
-    nL = len(d.names['layers'])
-    owner, x, y, n_off = access_points(d, pb, lp, tp)
-    hw = torch.as_tensor(tp['layer_width'].astype(np.float64) / 2 / float(d.dbu), device=dev)
-    index = _Spacing(d, dev, pg)
-    blocked = torch.zeros(len(owner), dtype=torch.bool, device=dev)
-    for L in (lp[owner], (lp[owner] + 1).clamp(max=nL - 1)):     # the landing on the pin layer and on the one above
-        h = hw[L]
-        blocked |= index.hits(torch.stack([x - h, y - h, x + h, y + h], 1), L)
-    npts = torch.bincount(owner, minlength=len(pins))
-    nblk = torch.bincount(owner[blocked], minlength=len(pins))
-    out[pins[(nblk == npts) & (npts > 0)]] = True
-    stats.update({'access_points': len(owner), 'blocked_access_points': int(blocked.sum()), 'off_track_pins': n_off})
+    b, st = ck.blocked(pb, layer[pins])
+    out[pins[b]] = True
+    stats.update(st)
     return out, stats

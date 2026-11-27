@@ -334,7 +334,8 @@ class Evaluator:
 
     def pin_access(self, pos=None, per_pin=False, per_cell=False):
         """Signal pins the router cannot reach past the PDN (attar.rules.pin_access): every access point of the pin
-        (a track of the layer above crossing it) has a via landing closer than the layer's spacing to PG metal.
+        (a track of the layer above crossing it) has a via landing closer than the layer's spacing to PG metal; pins
+        below the lowest signal routing layer only (a pin on a routing layer can be left along that layer).
         On 988 routed Innovus runs of i3dPDK_NS3K the blocked pins are the signal-to-PG M1/M2 DRVs, one for one;
         OpenROAD dpl's PDN rule (legality()['pdn_blocked']) passes them. Signal-to-signal DRVs are not modelled.
         Returns {'blocked_pins', 'blocked_cells', 'signal_pins', 'access_points', 'blocked_access_points',

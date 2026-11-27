@@ -190,6 +190,56 @@ class TestPdnIndex(unittest.TestCase):
             ix.BUDGET = 1000                                                 # the same in many small slices
             self.assertTrue(torch.equal(ix.hits(boxes.to(d.device), lay.to(d.device)).cpu(), truth))
 
+    def test_spacing_index_is_euclidean(self):
+        # attar.rules.pin_access: a box hits a shape of its layer closer than g, measured between the rectangles
+        # (corner to corner Euclidean), for any box size, stripes included
+        from attar.rules import pin_access as PA
+        d = need(SMALL)
+        dbu = d.dbu
+        g = torch.Generator().manual_seed(1)
+        n = 400
+        x = torch.randint(0, 200 * dbu, (n,), generator=g).double(); y = torch.randint(0, 200 * dbu, (n,), generator=g).double()
+        w = torch.randint(1, dbu // 2, (n,), generator=g).double(); h = torch.randint(1, dbu // 2, (n,), generator=g).double()
+        h[:40] = 150 * dbu
+        L = torch.randint(0, 3, (n,), generator=g).double()
+        gr = torch.randint(0, dbu // 4, (n,), generator=g).double() + 0.75
+        pg = torch.stack([L, x - gr, y - gr, x + w + gr, y + h + gr, gr], 1).numpy()
+        ix = PA._Spacing(d, d.device, pg)
+        m = 20000
+        c = torch.rand(m, 2, generator=g, dtype=torch.float64) * 220 - 10
+        s = 10 ** (torch.rand(m, 2, generator=g, dtype=torch.float64) * 3.7 - 2)
+        boxes = torch.cat([c - s / 2, c + s / 2], 1)
+        lay = torch.randint(0, 3, (m,), generator=g)
+        R = torch.stack([x, y, x + w, y + h], 1) / dbu; G = gr / dbu
+        dx = torch.clamp(torch.maximum(R[None, :, 0] - boxes[:, None, 2], boxes[:, None, 0] - R[None, :, 2]), min=0)
+        dy = torch.clamp(torch.maximum(R[None, :, 1] - boxes[:, None, 3], boxes[:, None, 1] - R[None, :, 3]), min=0)
+        truth = ((dx ** 2 + dy ** 2 < G[None] ** 2) & (lay[:, None] == L.long()[None])).any(1)
+        self.assertGreater(int(truth.sum()), 1000)
+        self.assertTrue(torch.equal(ix.hits(boxes.to(d.device), lay.to(d.device)).cpu(), truth))
+        ix.BUDGET = 1000
+        self.assertTrue(torch.equal(ix.hits(boxes.to(d.device), lay.to(d.device)).cpu(), truth))
+
+
+class TestPinAccessPlacement(unittest.TestCase):
+    def test_legalize_and_detailed_place_keep_pins_reachable(self):
+        # NS3K aes from one global placement: OpenROAD dpl's PDN rule alone leaves tens of single-access pins next to
+        # PG vias (Evaluator.pin_access: signal-to-PG DRVs after routing); with pin_access (the default) the row DP
+        # and the detailed placer clear them, legal, for a fraction of a percent of HPWL
+        d = need('after_fp/ns3k/aes')
+        ev = attar.Evaluator(d)
+        naive.global_place(d, verbose=False)
+        p0, o0 = d.pos.clone(), d.orient.clone()
+        res = {}
+        for pa in (False, True):
+            d.pos = p0.clone(); d.orient = o0.clone(); d.update_orient()
+            naive.legalize(d, verbose=False, pin_access=pa)
+            naive.detailed_place(d, verbose=False, pin_access=pa)
+            res[pa] = (ev.pin_access()['blocked_pins'], float(ev.hpwl()), ev.legality()['legal'])
+        self.assertGreater(res[False][0], 20)
+        self.assertLessEqual(res[True][0], res[False][0] // 10)
+        self.assertTrue(res[False][2] and res[True][2])
+        self.assertLess(res[True][1], res[False][1] * 1.005)
+
 
 if __name__ == '__main__':
     unittest.main()

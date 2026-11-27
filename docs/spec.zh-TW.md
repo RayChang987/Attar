@@ -160,6 +160,7 @@ flow 自己的目標密度）、`d.plot()`、`d.export()`。
 | Global-routing 寄生 | `d.timing(routes=...)` | `estimate_parasitics -global_routing`（OpenROAD 自己的 routes） | 每條 net 的 R、C 與 SPEF 相同；WNS 誤差最多 0.08% |
 | Global routing | `d.global_route()` | OpenROAD `global_route`，14 個設計 | 線長比 OpenROAD 少 0.5–3.6%，每條 net 的線長 Pearson 至少 0.998；排序 placement 和 OpenROAD routed WL 一致（差距 1% 以上的配對 100%；HPWL 只有 74–88%）；快 16–41 倍；殘留少量 OpenROAD 沒有的 overflow |
 | GR overflow | `d.gr_overflow()` | OpenROAD 的 gcell 容量與 global route | 無 macro 時容量完全相同、有 macro 時 0.16% 以內；設計排序 Spearman 0.97 |
+| Pin access（PDN 擋住的 pin） | `ev.pin_access` | Innovus routeDesign + verify_drc，i3dPDK_NS3K 988 個 run（pa_pdn） | 標記的 pin 與 signal 對 PG 的 M1/M2 DRV 一一對應（156,665／156,665，無誤報）；OpenROAD dpl 的 PDN 規則只標出 66 個 cell；signal 對 signal 的 DRV 不在範圍內 |
 | Steiner WL、RUDY、density overflow | `ev.*` | 尚未比對 | — |
 
 再次評估只重算有變動的部分（1.0.6）：移動 cell 或 resize 後，`d.timing()` 只重算 pin 有變的 net 的寄生；換一組 routes 後
@@ -173,7 +174,7 @@ flow 自己的目標密度）、`d.plot()`、`d.export()`。
   繞線品質，需另行決定。
 - 匯出 Verilog、SDC 與精簡的 Liberty，方便和外部 baseline（Rsyn、DREAMPlace 4.0）比較。
 - zoo 的設計註記（是否有 reference placement、在 contest SDC 下是否有違規等）。
-- 尚未做的評估：blocked pin checking；尚未做的引擎：delay-balanced clock tree。
+- 尚未做的引擎：delay-balanced clock tree。
 
 ## 5. 資料層：事實、能力與來源
 
@@ -224,6 +225,7 @@ flow 自己的目標密度）、`d.plot()`、`d.export()`。
 | `sta` | netlist、pin_direction、timing（有 placement 才估線的 RC） |
 | `resize`、`netlist_edit` | netlist、cell_library、pin_offsets、timing、library |
 | `gr_overflow` | netlist、pin_offsets、placement、floorplan.die、tracks、routing |
+| `pin_access` | cell_geometry、pin_offsets、placement、tracks、pdn |
 | `export` | netlist、cell_library、def_frame |
 
 **題目與解答狀態分開**：題目基本不變；解答狀態（位置、方向）由演算法改寫，可以存成具名 snapshot（例如蒸餾時保留的

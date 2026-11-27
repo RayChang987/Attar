@@ -63,7 +63,7 @@ cva6 的 WNS 由 -195 ps 改善至 -75 ps，僅需 2.2 秒。</sub>
 
 ## 內容總覽
 
-<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="三張卡片的路線圖。資料：zoo 內 262 個設計。引擎（已完成）：晶片尺寸、區塊緊密排列（packing）、巨集擺置、IO 擺置、全域擺置、合法化、PDN 感知優化、細部擺置、時脈樹合成、全域繞線、閘尺寸調整、緩衝器插入與複製、移除緩衝器；尚未：延遲平衡時脈樹。評估（已完成）：HPWL、Steiner 線長、合法性、位移、密度溢位、RUDY、全域繞線溢位、setup/hold 時序、GR 寄生、傳播時脈與 CRPR、slew／電容／fanout 限制、功耗；尚未：被擋 pin 檢查。留給你的 P&R 工具：PDN 合成、細部繞線、繞線 DRC、sign-off" width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/roadmap.svg" alt="三張卡片的路線圖。資料：zoo 內 262 個設計。引擎（已完成）：晶片尺寸、區塊緊密排列（packing）、巨集擺置、IO 擺置、全域擺置、合法化、PDN 感知優化、細部擺置、時脈樹合成、全域繞線、閘尺寸調整、緩衝器插入與複製、移除緩衝器；尚未：延遲平衡時脈樹。評估（已完成）：HPWL、Steiner 線長、合法性、位移、密度溢位、RUDY、全域繞線溢位、setup/hold 時序、GR 寄生、傳播時脈與 CRPR、slew／電容／fanout 限制、功耗、被擋 pin 檢查。留給你的 P&R 工具：PDN 合成、細部繞線、繞線 DRC、sign-off" width="100%"></p>
 
 所有引擎與評估器，以及它們對比 OpenROAD 與 OpenSTA 的精確度：
 [docs/features.md](https://github.com/RayChang987/Attar/blob/main/docs/features.md).
@@ -106,18 +106,18 @@ Attar 如同量產流程，在電源網格（power grid）處將實體設計一�
 </tr>
 <tr>
 <td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_grov.png" alt="cva6 擺置後，依 OpenROAD gcell 的全域繞線負載著色"></td>
-<td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_pin_access.png" alt="ariane136 全域擺置後：訊號 pin 落在 PDN 上的 cell，沿電源網格呈條紋狀"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_pin_access.png" alt="ariane136 只用 OpenROAD dpl 的 PDN 規則合法化：1,254 個 router 接不到的訊號 pin，散布在標準元件區"></td>
 </tr>
 <tr>
 <td><sub><b>繞線壅塞</b> cva6，2.4 秒完成擺置。</sub></td>
-<td><sub><b>Pin access</b> ariane136：訊號 pin 位於 PDN via 上的 cell。</sub></td>
+<td><sub><b>Pin access</b> ariane136 只用 OpenROAD dpl 的 PDN 規則合法化：1,254 個 router 被電源網格擋住、接不到的 pin（Innovus 繞線後的 signal 對 PG DRV）。Attar 的合法化一個都不留。</sub></td>
 </tr>
 <tr>
 <td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/eval_placed.png" alt="ariane136 合法化後：合法，含 rail 與 PDN"></td>
 <td><img src="https://raw.githubusercontent.com/RayChang987/Attar/main/docs/images/gallery/fp_n300.png" alt="GSRC n300 以 B*-tree packing 完成 floorplan，標示區塊與 IO pin 之間最強的連線"></td>
 </tr>
 <tr>
-<td><sub><b>合法擺置</b> ariane136，含 rail 與 PDN，2.4 秒。</sub></td>
+<td><sub><b>合法擺置</b> ariane136，含 rail 與 PDN，2.2 秒。</sub></td>
 <td><sub><b>Floorplan</b> GSRC n300：300 個區塊、569 個 IO pin，43 秒完成 packing。</sub></td>
 </tr>
 </table>
