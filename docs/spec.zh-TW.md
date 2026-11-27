@@ -1,23 +1,23 @@
 # Attar 規格書
 
-Nov 22, 2026 · @JR · 對應版本 1.0.6
+Nov 27, 2026 · @JR · 對應版本 1.0.7（加上未發布的 pin access）
 
 > 本文最初是 2026-11-09 的 v0.1 MVP 規格，2026-11-22 依實際做出來的樣子改寫。原規劃中後來改變或放棄的部分，
 > 在各節以「原規劃」註明，保留做決定的理由。
 
 ## 0. 現況摘要
 
-- **套件**：PyPI `attar`，1.0.0（11-15）到 1.0.6（11-22）；MIT 授權；Python 3.8 以上、PyTorch 2.0 以上，CPU 與 CUDA 皆可。
+- **套件**：PyPI `attar`，1.0.0（11-15）到 1.0.7（11-24）；MIT 授權；Python 3.8 以上、PyTorch 2.0 以上，CPU 與 CUDA 皆可。
 - **資料**：Hugging Face `RayChang987/attar-zoo`，262 個設計、24 個 suite，第一次使用時自動下載。
 - **引擎**（`attar.naive` 與 Design 上的編輯）：die sizing、packing、macro placement、IO placement、global placement、
-  legalization（含 PDN）、detailed placement、global routing（含增量）、CTS、gate sizing、buffering 與 cloning、
+  legalization（含 PDN 與 pin access）、detailed placement、global routing（含增量）、CTS、gate sizing、buffering 與 cloning、
   debuffering。
 - **評估器**：HPWL、legality、setup／hold timing（placement 與 global-routing 寄生）、pin／net slack、DRV、power、
-  propagated clock 與 CRPR、GR overflow、RUDY 等。每一項都在同一份 netlist 與 placement 上和 OpenROAD／OpenSTA 比過
+  propagated clock 與 CRPR、GR overflow、pin access（PDN 擋住的 pin）、RUDY 等。每一項都在同一份 netlist 與 placement 上和 OpenROAD／OpenSTA 比過
   （第 7 節）。
 - **研究重現**：DAC 2026 的 LATTE、P11（混合 net–pin 加權）與 DATE 2025 的 pin 對加權都在 Attar 上重現，並有逐步
   講解的 Colab notebook。
-- **測試**：183 項（1 項略過），ruff 無錯誤。
+- **測試**：194 項（2 項略過），ruff 無錯誤。
 
 ## 1. 精神與定位
 
@@ -168,7 +168,7 @@ flow 自己的目標密度）、`d.plot()`、`d.export()`。
 
 ### 4.4 接下來
 
-- **1.0.7**：公開、帶版本號的 `TimingResult.stages()`（timer 的逐層排程與它自己算的 gate／wire delay），讓 LATTE 這類
+- **下一版**：公開、帶版本號的 `TimingResult.stages()`（timer 的逐層排程與它自己算的 gate／wire delay），讓 LATTE 這類
   可微分 timer 不必讀 timer 的私有欄位；之後把 LATTE notebook 換上去，驗收標準是結果逐輪不變。
 - 增量 routing 的 negotiation：重繞的 net 很多時（netcard_fast 移動 1% cell，1 萬條 net）不比全部重繞快；要改策略會影響
   繞線品質，需另行決定。
@@ -453,6 +453,8 @@ P11、DATE25，逐步講解）、`docs/`（concepts、features、benchmarks、ap
 | 11-19 | 1.0.4：與 ICCAD 2025 官方評估一致；GP 研究掛鉤、`critical_paths` |
 | 11-21 | 1.0.5：Abacus 預設、Early library、deterministic GP、timer 唯讀資料；三篇論文的重現回饋 |
 | 11-22 | 1.0.6：GR 寄生快 9–17 倍、增量寄生與增量 routing、GPU OOM 說明、英文逐步 Colab |
+| 11-24 | 1.0.7：長 PG stripe 設計的 detailed placement 不再 OOM；遠離空位的增量合法化 1,250 s → 15 s |
+| 11-27 | （未發布）pin access 評估與保持 pin 可達的合法化／detailed placement；LEF 層寬讀錯修正；ISPD 2018／2019 從 metal1 繞線 |
 
 成功標準（v0.1 時訂的，現況）：
 
@@ -467,7 +469,7 @@ P11、DATE25，逐步講解）、`docs/`（concepts、features、benchmarks、ap
 | 風險 | 影響 | 對策 |
 | --- | --- | --- |
 | 評估器與參考工具在新設計或新 SDC 上不一致 | 結果不可信 | 照 OpenSTA／OpenROAD 原始碼移植；不一致之處記在 `limitations`；每次發版跑 `docs/validation/` 的比對工具 |
-| 研究程式依賴 timer 的私有欄位 | timer 重構時研究程式壞掉 | 唯讀資料 API 帶版本號；1.0.7 補上 `stages()` |
+| 研究程式依賴 timer 的私有欄位 | timer 重構時研究程式壞掉 | 唯讀資料 API 帶版本號；下一版補上 `stages()` |
 | GPU 記憶體不足（共用 GPU、百萬 cell 設計） | 跑不起來 | 1.0.6 起錯誤訊息附解法；CPU 路徑也要在幾分鐘內完成（原則 4） |
 | 與文獻的數字無法直接比（ICCAD 2015 用 OpenTimer） | 使用者誤判 | 文件與 notebook 註明，只比方法間的倍數 |
 | 重現研究時移植出錯（例如 P11 重現中 DATE25 pin 對只用了第一次更新） | 錯誤結論 | 重現一律在 Attar 上跑、以 Attar 評估；對照組也要驗證和官方實作相當 |

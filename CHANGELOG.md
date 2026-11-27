@@ -14,6 +14,8 @@ New
   on those runs it flags 66 cells, 23 of them failing: a single-access M1 pin one M1 spacing from a PG via is
   legal, but its M2 landing is 0.040 um from the via's M2 pad (M2 spacing 0.048). Signal-to-signal DRVs (58% of
   the M2 markers there) are not modelled.
+- `tools/validate_pin_access.py` reproduces that check from the pa_pdn archive; the tables are in
+  `docs/validation/pin_access.md`.
 - `plot(tiles='unreachable_pins')`: those pins per tile. The README gallery shows them on ariane136 legalized with
   dpl's PDN rule only (1,254 pins); the roadmap marks blocked pin checking done.
 

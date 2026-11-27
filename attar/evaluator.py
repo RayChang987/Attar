@@ -7,7 +7,7 @@ follows from what the design has, as for capabilities. Implemented:
   TNS, hold, on placement parasitics), gr_overflow (GROV: RUDY demand against OpenROAD's gcell capacities),
   displacement (between two placements, as OpenROAD dpl reports it), pin_access (signal pins the router cannot reach
   past the PDN: attar.rules.pin_access).
-Listed for later: global-route wirelength and overflow, thermal.
+Listed for later: global-route wirelength (gr_wirelength), thermal.
 
 Speed: one HPWL call is ~0.15 ms up to ~1M pins (launch-bound). Exact speed-ups:
   fast=True     CUDA graph for hpwl (0.22 -> 0.05 ms on 43k pins)
