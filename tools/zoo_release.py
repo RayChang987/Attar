@@ -5,7 +5,7 @@ attar.zoo(remote=True) reads), designs.jsonl (the table the Hub's dataset viewer
 card) into both.
 
   python3 tools/zoo_release.py [--zoo DIR] [--hub DIR]     # default: zoo/ and zoo_hub/ in the checkout
-  hf upload-large-folder RayChang987/attar-zoo zoo_hub/ --repo-type dataset     # then upload (docs/benchmarks.md)
+  hf upload-large-folder RayChang987/attar-zoo zoo_hub/ --repo-type dataset     # then upload (docs/releasing.md)
 
 Packing is incremental: a file is compressed again only when the zoo copy is newer. Files of the upload folder the
 zoo no longer has are deleted (the hub keeps them until they are deleted there too).

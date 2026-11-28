@@ -26,7 +26,7 @@ THEME = {'light': dict(surface='#fbf8f3', text='#2b211c', text2='#6b5d52', grid=
                        base='#b9a993', muted='#a39486')}
 
 # Timing in the placement loop, Attar (GPU) vs OpenROAD kept warm in one session, same machine (RTX 4090, 32 cores,
-# 8 threads each), median of 3 rounds (docs/validation/timing_routing.md, "Inside the placement loop"):
+# 8 threads each), median of 3 rounds (docs/validation/speed_vs_openroad.md):
 # design, cells, GP update (every cell moved) OpenROAD s / Attar s, DP round (1% moved + legalized) OpenROAD s / Attar s
 LOOP = [('netcard_fast', 298384, 7.249, 0.3431, 5.190, 0.2421),
         ('superblue18', 744947, 13.011, 0.5609, 11.519, 0.3131),

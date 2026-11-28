@@ -20,4 +20,6 @@ For the maintainers. A release is a version on PyPI, a git tag, and (when the da
    On the first release, also refresh the zoo's card (it says `pip install attar`): `python tools/zoo_release.py`,
    then `hf upload RayChang987/attar-zoo zoo_hub/README.md README.md --repo-type dataset`.
 7. **Zoo** (only when it changed): `python tools/zoo_release.py`, then
-   `hf upload-large-folder RayChang987/attar-zoo zoo_hub/ --repo-type dataset` ([benchmarks](benchmarks.md)).
+   `hf upload-large-folder RayChang987/attar-zoo zoo_hub/ --repo-type dataset`. On the Hub arrays and large JSON
+   are zstd-compressed (`<file>.zst`; `attar.fetch` decompresses); the upload does not delete stale files there
+   (`hf repo-files delete`).

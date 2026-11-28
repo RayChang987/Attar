@@ -1,21 +1,16 @@
 # Global routing: parasitics and router against OpenROAD
 
-All numbers below are OpenROAD (the ORFS image, `openroad/orfs:26Q4-368-g9ca2a9e76`) on the same netlist and
-placement as Attar: the zoo design (`after_fp/orfs_<platform>`) at its reference placement (ORFS `3_3_place_gp`).
-OpenROAD routes with the flow's settings (routing layers from the manifest, the platform's `fastroute.tcl`,
-`global_route -congestion_iterations 30 -allow_congestion`) but without `pin_access`: pins then connect from their
-shapes, the information the IR has (`tools/gr_truth.py`, cached in `orfs_runs/gr_par/`).
+Truth: OpenROAD (ORFS image `openroad/orfs:26Q4-368-g9ca2a9e76`) on the same netlist and placement: the zoo design
+`after_fp/orfs_<platform>` at ORFS's `3_3_place_gp`. OpenROAD routes with the flow's settings (routing layers from
+the manifest, the platform's `fastroute.tcl`, `global_route -congestion_iterations 30 -allow_congestion`) but without
+`pin_access`, so pins connect from their shapes, as in the IR (`tools/gr_truth.py`, cached in `orfs_runs/gr_par/`).
 
 ## 1. Parasitics from global routes (`Timer(parasitics='global_routing')`, `d.timing(routes=...)`)
 
-`attar.timing.grpar` ports `est::MakeWireParasitics` (OpenROAD's `estimate_parasitics -global_routing`): a node per
-route point and layer, each segment a resistor with its capacitance split to its ends (a gcell holding pins stands
-for the median of those pins), vias as cut resistances, each pin tied to its gcell's node one layer above its
-connection layer; then OpenSTA's reduction (`reduceToPiElmore`: admittance moments, pi model, Elmore per load).
-Input: OpenROAD's own routes (`write_global_route_segments`, read by `attar.route.read_segments`) and grt's pin
-model ported from its source (`attar.route.pins_from_shapes`, checked against `write_pin_locations`).
-Truth: OpenSTA after `estimate_parasitics -global_routing` on the same routes, and its SPEF of them
-(`tools/validate_gr_parasitics.py`).
+`attar.timing.grpar` ports OpenROAD's `estimate_parasitics -global_routing` (`est::MakeWireParasitics`) and OpenSTA's
+reduction (`reduceToPiElmore`). Input: OpenROAD's routes (`write_global_route_segments`) and grt's pin model
+(`attar.route.pins_from_shapes`, checked against `write_pin_locations`). Truth: OpenSTA after `estimate_parasitics
+-global_routing` on the same routes, and its SPEF (`tools/validate_gr_parasitics.py`).
 
 | design | pins | pin gcell = grt | loop nets | wire C (per net / total) | wire R (per net / total) | setup Pearson | setup MAE ps | max ps | WNS ours / OpenSTA ps | TNS err | hold MAE ps | re-time |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -34,24 +29,22 @@ Truth: OpenSTA after `estimate_parasitics -global_routing` on the same routes, a
 | nangate45 tinyRocket | 101,959 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -117.33 / -117.33 | 0.00% | 0.00 | 46 ms |
 | nangate45 picorv32 | 60,295 | 100% | 0 | 1.00000 / 0.000% | 1.0000 / 0.000% | 1.00000 | 0.000 | 0.00 | -311.20 / -311.20 | 0.00% | 0.00 | 31 ms |
 
-Re-time: one `Timer.run()` on an RTX 3080 Ti (GPU 1, shared with other jobs; `--device cuda`, the script's default
-is the CPU), the networks reduced once per set of pin capacitances (Attar 1.0.6).
-Residual: cva6, a few endpoints behind its two nets whose route closes a resistor loop: OpenSTA reduces a loop over
-its depth-first tree, Attar over a breadth-first one (the same tree wherever there is no loop). Nangate45 has no `set_layer_rc -via`: its cut resistances are the LEF's
-(`RESISTANCE`), which the zoo stores with the routing fact (`routing.cut_res`) and the timer uses by itself; the
-table was made from the zoo alone (no `via_res=`, no `adjustment=`).
+Re-time: one `Timer.run()` on a shared RTX 3080 Ti (Attar 1.0.6; `--device cuda`, the script defaults to the CPU).
+The cva6 residual comes from its two nets whose route forms a resistor loop: OpenSTA reduces a loop over a
+depth-first tree, Attar over a breadth-first one. Nangate45 cut resistances are the LEF's (`RESISTANCE`, zoo
+`routing.cut_res`); the table uses the zoo alone (no `via_res=`, no `adjustment=`).
 
 ## 2. The global router (`d.global_route()`, `attar.route.global_route`)
 
-Not a FastRoute port: OpenROAD's gcell grid and edge capacities (exact per layer, `attar.rules.routing.capacity`;
-Nangate45 with its fastroute.tcl's per-layer adjustments, stored in the zoo as `routing.layer_adjustments`), OpenROAD's Prim-Dijkstra tree (alpha 0) per net over its
-pins' gcells, every tree edge pattern-routed (Z / L, negotiated rip-up and reroute as gsta's ggr), then a chunked
-layer assignment (runs of up to 10 gcells, lowest layer with room, negotiated) and via stacks at tree points and pins.
-`tools/validate_router.py`: Attar's routes vs OpenROAD's on the same placement (the truth of section 1).
-WL as grt reports it (each segment + one gcell); per-net figures over the nets OpenROAD routes beyond two gcells;
-overflow: Attar's 3D total (OpenROAD's: H / V / total of its final congestion report); timing: Attar's timer on Attar's
-routes vs OpenSTA on OpenROAD's routes (`WNS or`: Attar's timer on OpenROAD's routes, = OpenSTA by section 1).
-Times: Attar on an RTX 3080 Ti (after a warm-up run), OpenROAD's `global_route` with 4 threads.
+Not a FastRoute port. Gcell grid and edge capacities are OpenROAD's (exact per layer; Nangate45 with its
+fastroute.tcl per-layer adjustments). Per net: OpenROAD's Prim-Dijkstra tree (alpha 0) over its pins' gcells, Z / L
+pattern routes with negotiated rip-up and reroute, then chunked layer assignment (runs of up to 10 gcells) and via
+stacks.
+
+`tools/validate_router.py` compares Attar's routes with OpenROAD's on the same placement. WL is as grt reports it
+(each segment + one gcell). Per-net figures cover nets OpenROAD routes beyond two gcells. Overflow: Attar's 3D total;
+OpenROAD's from its final congestion report. Timing: Attar's timer on Attar's routes vs OpenSTA on OpenROAD's
+routes. Times: Attar on an RTX 3080 Ti after a warm-up run; OpenROAD's `global_route` with 4 threads.
 
 | design | WL | WL OpenROAD | WL err | per-net Pearson | per-net median / p90 err | overflow (Attar / OpenROAD) | vias / OpenROAD's | time / OpenROAD's | WNS on Attar routes / OpenSTA | slack Pearson | slack MAE ps |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -70,19 +63,19 @@ Times: Attar on an RTX 3080 Ti (after a warm-up run), OpenROAD's `global_route` 
 | nangate45 tinyRocket | 636,048 | 645,601 | -1.48% | 1.000 | 0.0% / 9.1% | 149 / 0 | 155,836 / 142,837 | 1.13 s / 4.95 s | -116.3 / -117.3 | 0.9996 | 4.82 |
 | nangate45 picorv32 | 320,140 | 323,942 | -1.17% | 1.000 | 0.0% / 10.0% | 21 / 0 | 88,244 / 83,961 | 0.88 s / 1.84 s | -310.0 / -311.2 | 0.9998 | 2.36 |
 
-What this shows: wirelength 0.6-2.3% below OpenROAD's on every design (its trees are FLUTE's, Attar's Prim-Dijkstra;
-its segments split where Attar's runs continue), per net Pearson 0.998-1.000 with half the nets exact; 16-41x faster
-on jpeg, ethmac, cva6 and swerv, about as fast on the small designs, slower on gcd. Not equal: Attar leaves overflow OpenROAD does not (12-363 on the larger designs: no
-maze stage; a chunk keeps one layer), uses 2-10% more vias, and its timing differs by a few ps per endpoint (WNS
-within 10 ps on 12 of 14; nangate45 ibex 38 ps apart: its worst paths take other layers).
+Wirelength is 0.6-2.3% below OpenROAD's on every design (FLUTE trees vs Prim-Dijkstra). Per-net Pearson is
+0.998-1.000; half the nets are exact. Attar is 16-41x faster on jpeg, ethmac, cva6 and swerv, and slower on gcd.
+Limits: Attar leaves overflow where OpenROAD has none (no maze stage; a chunk keeps one layer) and uses 2-10% more
+vias. Slacks differ by a few ps per endpoint: WNS within 10 ps on 12 of 14; nangate45 ibex 38 ps apart, as its worst
+paths take other layers.
 
 ## 3. Ranking placements as OpenROAD's router does
 
-`tools/rank_router.py`: per design 7 placements of the same netlist (ORFS's global placement, it with 10% of the cells
-moved, Attar's `place()` at target density 0.60 / 0.75 (two seeds) / 0.90 / 0.95), each exported as DEF and routed by
-OpenROAD (the settings above) and by Attar; 7 designs (asap7 aes, jpeg, dynamic_node, picorv32, riscv32i-mock-sram;
-nangate45 ibex, picorv32), 147 pairs. A pair agrees when a predictor orders the two placements as OpenROAD's
-wirelength does; pairs binned by how far apart OpenROAD puts them.
+`tools/rank_router.py`: 7 placements of the same netlist per design: ORFS's global placement, the same with 10% of
+the cells moved, and Attar's `place()` at target density 0.60 / 0.75 (two seeds) / 0.90 / 0.95. OpenROAD and Attar
+route each. 7 designs (asap7 aes, jpeg, dynamic_node, picorv32, riscv32i-mock-sram; nangate45 ibex, picorv32), 147
+pairs. A pair agrees when a predictor orders the two placements as OpenROAD's wirelength does. Pairs are binned by
+how far apart OpenROAD puts them.
 
 | OpenROAD GR wirelength difference | pairs | HPWL agrees | Attar's router agrees |
 |---|---|---|---|
@@ -91,7 +84,4 @@ wirelength does; pairs binned by how far apart OpenROAD puts them.
 | 2-5% | 49 | 87.8% | **100%** |
 | 5% and more | 57 | 100% | **100%** |
 
-Attar's wirelength sits 0.5-3.6% below OpenROAD's on every one of the 49 placements (the offset is steady, so the order holds). This
-is the claim the README makes. (An earlier study, 2026-11-13, found gsta's ggr no better than HPWL at ranking ORFS's
-global-route wirelength: there the truth was ORFS's flow continued through CTS and repair, a different netlist per
-placement; here the netlist is the same and only the router differs.)
+Attar's wirelength is 0.5-3.6% below OpenROAD's on all 49 placements; the offset is steady, so the order holds.

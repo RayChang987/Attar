@@ -5,24 +5,18 @@ DRC results of routed Innovus runs.
 
 ## Method
 
-The data are the routed runs of pa_pdn on i3dPDK_NS3K: 17 designs, two PDN styles, about 60 placement methods each.
-- PDN styles: M3 VDD/VSS stripe pairs (`stripe`), and M5 straps tied to the rails by via pillars (`pillar`).
-- Router: Innovus 21.13, unidirectional; M1 is used for pin access only.
+Data: the routed runs of pa_pdn on i3dPDK_NS3K, 17 designs, about 60 placement methods each, two PDN styles: M3
+VDD/VSS stripe pairs (`stripe`) and M5 straps tied to the rails by via pillars (`pillar`). Router: Innovus 21.13,
+unidirectional, M1 for pin access only. Each run's final DEF is written right after `routeDesign`, so it holds the
+placement the router got and the PDN.
 
-Each run's final DEF is written right after `routeDesign`. Its placement is therefore the one the router got, and it
-carries the PDN.
+Per run, `tools/validate_pin_access.py` distills that DEF, computes `Evaluator.pin_access` per pin, and reads
+`rpt/drc.rpt` (`verify_drc`). Each M1 or M2 marker goes to the nearest pin of its regular net within 0.5 um (LEF x4
+units). A pin fails when a signal-to-PG marker lands on it.
 
-For every run, `tools/validate_pin_access.py`:
-- distills that DEF and computes `Evaluator.pin_access` per pin;
-- reads `rpt/drc.rpt` (`verify_drc`) and assigns every M1 or M2 marker to the nearest pin of its regular net within
-  0.5 um (LEF x4 units);
-- counts a pin as failing when a signal-to-PG marker lands on it.
-
-The rule is geometry only and has no fitted constant:
-- An access point is a track of the layer above (M2) crossing the pin.
-- The via lands a square of the layer's width on M1 and on M2.
-- A landing closer than the layer's minimum spacing to PG metal (Euclidean) is blocked.
-- A pin is blocked when all of its access points are.
+The rule is geometry only, with no fitted constant. An access point is a track of the layer above (M2) crossing the
+pin. The via lands a square of the layer's width on M1 and on M2. A landing closer than the layer's minimum spacing
+to PG metal (Euclidean) is blocked. A pin is blocked when all its access points are.
 
 ```bash
 python tools/validate_pin_access.py ~/scratch/pin_access --ns3k ~/i3dPDK_NS3K --jobs 8 --report docs/validation/pin_access.md
@@ -73,27 +67,23 @@ python tools/validate_pin_access.py ~/scratch/pin_access --ns3k ~/i3dPDK_NS3K --
 
 ## What it shows
 
-**OpenROAD dpl's PDN rule passes these pins.** The rule is `legality()['pdn_blocked']` and `plot(tiles='pin_access')`.
-A typical failing pin:
-- It is a single-access M1 pin (AOI21 A, XNOR2 A, XOR2 A: 0.064 um high, one M2 track).
-- It sits in the same column as a PG via pillar, exactly one M1 spacing (0.032 um) from its M1 metal. That is legal.
-- Its M2 landing is 0.040 um from the via's M2 pad, under the M2 spacing (0.048 um).
-- After routing it is a signal-to-PG M2 spacing violation.
+**OpenROAD dpl's PDN rule (`legality()['pdn_blocked']`) passes these pins.** The typical failing pin is a
+single-access M1 pin (AOI21 A, XNOR2 A, XOR2 A: 0.064 um high, one M2 track) beside a PG via pillar. It is exactly one M1
+spacing (0.032 um) from the pillar's M1 metal, which is legal, but its M2 landing is 0.040 um from the via's M2 pad,
+under the M2 spacing (0.048 um). Taller pins at the same gap have other M2 tracks and never fail.
 
-**Taller pins at the same gap never fail.** They have other M2 tracks to use.
+**The distance must be Euclidean.** A per-axis distance also flags pins diagonal to a pillar: 12,325 false positives
+in the runs whose straps are off the site grid.
 
-**The distance must be Euclidean.** A square (per-axis) distance also flags pins diagonal to a pillar: 12,325 false
-positives in the older runs whose straps are off the site grid.
-
-Marker counts can exceed pin counts. 162 of the 156,827 signal-to-PG markers lie farther than 0.5 um from every
-pin of their net, and some pins carry two markers. In dynamic_node stripe, for example, 926 markers fall on 805 pins.
+Markers can outnumber pins: 162 signal-to-PG markers lie farther than 0.5 um from every pin of their net, and some
+pins carry two.
 
 ## Limits
 
 - **Signal-to-signal markers are not modelled.** They are 58% of the M2 markers, mostly with the stripe PDN, so
   against all M1/M2 markers the per-design tau is lower.
 - **Pins on a routing layer are left out.** The rule covers pins below the lowest signal routing layer (the design's
-  `routing` range): there a via is the only way in. A pin on a routing layer can be left along that layer. ISPD
-  2018/2019 route from metal1, so the rule does not apply to them.
-- **No DRVs to compare on other PDKs.** ASAP7 and Nangate45 placements have no blocked pin. That agrees with the zero
-  DRVs ORFS's detailed router leaves there, but no failing pins were available to compare against.
+  `routing` range), where a via is the only way in. ISPD 2018/2019 route from metal1, so the rule does not apply to
+  them.
+- **No DRVs to compare on other PDKs.** ASAP7 and Nangate45 placements have no blocked pin, which agrees with the
+  zero DRVs ORFS's detailed router leaves there; no failing pins were available to compare.
