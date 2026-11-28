@@ -168,9 +168,9 @@ def chain(ir_dir, manifest):
 def arrays(d, c_master=None):
     """The timer's per-design arrays, functions and arc `when` conditions: looked up along the design's library chain
     (attar.timing.library.design_arrays) when it references one, else timing.safetensors and timing.json."""
-    with open(os.path.join(d.path, 'timing.json')) as f:
-        info = json.load(f)
     if 'library' not in d.manifest:
+        with open(os.path.join(d.path, 'timing.json')) as f:
+            info = json.load(f)
         t, _ = st.load(os.path.join(d.path, 'timing.safetensors'))
         return t, info.get('functions') or {}, info.get('arc_when') or {}
     from .library import design_arrays

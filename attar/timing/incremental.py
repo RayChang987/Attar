@@ -2,39 +2,20 @@
 parasitics changed are timed again, then only the arcs whose input arrival or slew changed, level by level, until
 nothing changes (OpenSTA's incremental_delay_tolerance 0). Each recomputed pin takes every arc into it, with the same
 GPU kernels as a full run fed only those arcs; arrivals are maxima and minima, so the result is bit for bit a full
-run's. Timer.run uses it after a full run (Timer.incremental); the checks (setup, hold, CRPR) are then evaluated as
-after a full run.
+run's. Timer.run uses it after a full run (Timer.incremental) and after a netlist edit the timer followed in place
+(attar.timing.inplace); the checks (setup, hold, CRPR) are then evaluated as after a full run. The index over the
+stages stays on the device (a stage's arcs are gathered there).
 
 Not covered (a full run instead): the CPU path, global-routing parasitics, latch time borrowing, pin clock latencies,
 a resize (the arcs' tables change), a change on a propagated clock network (its cone is the design), and a cone over
 MAX_SHARE of the arcs (a full run is then faster). Timer.run also keeps the average time of both kinds of run and
 re-times incrementally only while that is the faster one."""
-import heapq
 import time
 
 import numpy as np
 import torch
 
 INF = float('inf')
-
-
-def _upload(parts, dev):
-    """Copy the 1-d arrays `parts` to the device in one copy (one host sync), each starting on a 16-byte boundary
-    (Triton compiles one kernel per pointer alignment: aligned views reuse the full run's kernels); returns their
-    views on the device, in their own dtypes."""
-    offs, o = [], 0
-    for x in parts:
-        offs.append(o)
-        o += -(-x.nbytes // 16) * 16
-    buf = np.zeros(max(o, 16), np.uint8)
-    for x, a in zip(parts, offs):
-        buf[a:a + x.nbytes] = np.ascontiguousarray(x).view(np.uint8)
-    t = torch.from_numpy(buf).to(dev)
-    return [t[a:a + x.nbytes].view(_TORCH[x.dtype]) for x, a in zip(parts, offs)]
-
-
-_TORCH = {np.dtype(np.int32): torch.int32, np.dtype(np.int64): torch.int64, np.dtype(np.float32): torch.float32,
-          np.dtype(np.bool_): torch.bool}
 
 
 class Incremental:
@@ -54,17 +35,17 @@ class Incremental:
             self._index()
 
     def _index(self):
-        """Host indices over the stages of the fused run (Timer.tri_lev, in run order): every arc (entry) with its
-        stage, input row and output row (pin * 2 + transition); every load lane with its row; CSR maps from a row to
-        the entries into it and the entries out of it, and from an entry to its lanes. Rows written by more than one
-        stage, or both as an output and a load, make the timer unsupported (none in practice)."""
+        """Indices over the stages of the fused run (Timer.tri_lev, in run order): every arc (entry) with its stage,
+        input row and output row (pin * 2 + transition) and the kernel's inputs; every load lane with its row; CSR
+        maps from a row to the entries into it and the entries out of it, and from an entry to its lanes. Rows written
+        by more than one stage, or both as an output and a load, make the timer unsupported (none in practice)."""
         T = self.T
         dev = T.dev
         P2 = T.P * 2
         self.stages = []
         fi_l, ti_l, ld_l, le_l, ei_l, ef_l, en_l = [], [], [], [], [], [], []
         off = loff = 0
-        for lv in T.tri_lev:                            # (built on the device: sorts there are seconds faster)
+        for lv in T.tri_lev:
             lib, fi, t, orf, net, t0, tag, ea, en, s0, arr = lv
             N, M = len(lib), len(ea)
             fi_l.append(fi.long())
@@ -72,7 +53,6 @@ class Incremental:
             ea_l = ea.long()
             ld_l.append(T.n_to[en.long()] * 2 + orf.long()[ea_l])
             le_l.append(ea_l + off)
-            # the kernel's per-arc and per-lane inputs, on the host (a stage's subset goes up in one copy)
             ei_l.append(torch.stack([lib, fi, t, orf, net, tag, arr], 1))
             ef_l.append(torch.stack([t0.float(), s0.float()], 1))
             en_l.append(en.to(torch.int32))
@@ -80,28 +60,31 @@ class Incremental:
             off += N; loff += M
         cat = lambda xs, *shape, dt=torch.long: torch.cat(xs) if xs else torch.zeros(0, *shape, dtype=dt, device=dev)  # noqa: E731
         e_int = cat(ei_l, 7, dt=torch.int32)
-        self.e_int = e_int.cpu().numpy()
-        self.e_flt = cat(ef_l, 2, dt=torch.float32).cpu().numpy()
-        self.lane_en = cat(en_l, dt=torch.int32).cpu().numpy()
+        self.e_cols = [e_int[:, i].contiguous() for i in range(7)]   # (lib, fi, t, orf, net, tag, arr)
+        e_flt = cat(ef_l, 2, dt=torch.float32)
+        self.e_flt0, self.e_flt1 = e_flt[:, 0].contiguous(), e_flt[:, 1].contiguous()
+        self.lane_en = cat(en_l, dt=torch.int32)
         self.n_ent = off
-        fi, ti, lane_row, lane_ent = cat(fi_l), cat(ti_l), cat(ld_l), cat(le_l)
-        ent_stage = torch.repeat_interleave(torch.arange(len(self.stages), device=dev),
-                                            torch.as_tensor([s[1] for s in self.stages], device=dev, dtype=torch.long))
-        rows = torch.arange(P2 + 1, device=dev)
-        o = torch.sort(ti, stable=True)[1]
-        to_ptr = torch.searchsorted(ti[o], rows)
-        self.to_ord, self.to_ptr = o.cpu().numpy(), to_ptr.cpu().numpy()
-        v = torch.nonzero(fi >= 0).flatten()
-        o = v[torch.sort(fi[v], stable=True)[1]]
-        self.fr_ord, self.fr_ptr = o.cpu().numpy(), torch.searchsorted(fi[o], rows).cpu().numpy()
-        self.lane_ptr = torch.searchsorted(lane_ent, torch.arange(self.n_ent + 1, device=dev)).cpu().numpy()  # lanes
-        self.lane_drv = ti[lane_ent].cpu().numpy()      # the driver row of each lane            ascend by entry
-        self.lane_ok = ((e_int[lane_ent, 6] & 2) == 0).cpu().numpy()
-        self.lane_row, self.ti, self.ent_stage = lane_row.cpu().numpy(), ti.cpu().numpy(), ent_stage.cpu().numpy()
+        fi, ti, self.lane_row, lane_ent = cat(fi_l), cat(ti_l), cat(ld_l), cat(le_l)
+        self.ti, self.fi, self.lane_ent = ti, fi, lane_ent
+        self.ent_stage = torch.repeat_interleave(torch.arange(len(self.stages), device=dev),
+                                                 torch.as_tensor([s[1] for s in self.stages], device=dev,
+                                                                 dtype=torch.long))
+        self.lane_drv = ti[lane_ent]                    # the driver row of each lane
+        self.lane_ok = (e_int[lane_ent, 6] & 2) == 0
+        # per row: the stage that writes it, the first and the last stage that read it
+        nst = len(self.stages)
+        self.row_stage = torch.full((P2,), nst, dtype=torch.long, device=dev).scatter_reduce_(
+            0, ti, self.ent_stage, 'amin')
+        v = fi >= 0
+        self.first_use = torch.full((P2,), 1 << 30, dtype=torch.long, device=dev).scatter_reduce_(
+            0, fi[v], self.ent_stage[v], 'amin')
+        self.last_use = torch.full((P2,), -1, dtype=torch.long, device=dev).scatter_reduce_(
+            0, fi[v], self.ent_stage[v], 'amax')
         # who writes each row: stage entries (outputs), stage lanes (loads), input ports' wires, constraints; a row
         # with two writers (keys) has a smallest key below its largest
-        w_row = torch.cat([ti, lane_row])
-        w_key = torch.cat([ent_stage * 2, ent_stage[lane_ent] * 2 + 1])
+        w_row = torch.cat([ti, self.lane_row])
+        w_key = torch.cat([self.ent_stage * 2, self.ent_stage[lane_ent] * 2 + 1])
         kmin = torch.full((P2,), 1 << 62, dtype=torch.long, device=dev).scatter_reduce_(0, w_row, w_key, 'amin')
         kmax = torch.full((P2,), -1, dtype=torch.long, device=dev).scatter_reduce_(0, w_row, w_key, 'amax')
         ext = torch.zeros(P2, dtype=torch.bool, device=dev)
@@ -130,8 +113,12 @@ class Incremental:
     def run(self, dirty, cw, elm, budget=None):
         """Re-time after wires() redid the nets in `dirty` (a mask over nets; None: every net). Updates the timer's
         arrivals, slews, wire delays, loads and recorded delays in place; False (nothing usable done): a full run.
-        budget: seconds after which a full run is cheaper (the timer's average full run, doubled)."""
+        budget: seconds after which a full run is cheaper (the timer's average full run, doubled).
+        The stages are swept in run order with two row masks on the device: rows to recompute (the dirty nets'
+        drivers, and the outputs of arcs whose input changed) and rows that changed; a stage recomputes every entry
+        into a marked row, then marks the rows that changed; the sweep ends at the last stage that reads one."""
         T = self.T
+        dev = T.dev
         t_start = time.perf_counter()
         if dirty is None or (self.pclk_net is not None and bool((dirty & self.pclk_net).any())):
             return False
@@ -140,111 +127,89 @@ class Incremental:
         dn = torch.nonzero(dirty).flatten()
         if not len(dn):
             return True
-        drv = torch.as_tensor(T.net_driver, device=T.dev)[dn]
-        drv = drv[drv >= 0].cpu().numpy()
-        seeds = np.concatenate([drv * 2, drv * 2 + 1])
+        drv = torch.as_tensor(T.net_driver, device=dev)[dn]
+        drv = drv[drv >= 0]
         P2, NT = T.P * 2, T.NT
         A, Am = T.amax.view(P2, NT), T.amin.view(P2, NT)
         S, Sm = T.smax.view(-1), T.smin.view(-1)
-        changed = []
+        mark = torch.zeros(P2, dtype=torch.int32, device=dev)   # rows to recompute
+        chg = torch.zeros(P2, dtype=torch.int32, device=dev)    # rows that changed
+        seeds = torch.cat([drv * 2, drv * 2 + 1])
+        mark[seeds] = 1
+        nst_all = len(self.stages)
+        rs = self.row_stage[seeds]
+        lo = torch.cat([rs, torch.full((1,), 1 << 30, dtype=torch.long, device=dev)]).min()
+        hi = torch.cat([torch.where(rs < nst_all, rs, -1), torch.full((1,), -1, dtype=torch.long, device=dev)]).max()
         if self.pa_net is not None:
             k = torch.nonzero(dirty[self.pa_net]).flatten()
             if len(k):
-                changed.append(self._ports(k, elm, A, Am, S, Sm))
-        pending = {}
-        heap = []
-
-        def add(rows):
-            """Queue the output rows `rows` for recomputation at their stage."""
-            rows = np.unique(rows)
-            n = self.to_ptr[rows + 1] - self.to_ptr[rows]
-            rows = rows[n > 0]
-            if not len(rows):
-                return
-            st = self.ent_stage[self.to_ord[self.to_ptr[rows]]]
-            o = np.argsort(st, kind='stable')
-            st, rows = st[o], rows[o]
-            cut = np.flatnonzero(np.diff(st)) + 1
-            for s, part in zip(st[np.concatenate([[0], cut])].tolist(), np.split(rows, cut)):
-                if s not in pending:
-                    pending[s] = []
-                    heapq.heappush(heap, s)
-                pending[s].append(part)
-
-        def consumers(rows):
-            """The output rows of the arcs out of `rows`."""
-            if not len(rows):
-                return
-            lo, hi = self.fr_ptr[rows], self.fr_ptr[rows + 1]
-            n = hi - lo
-            if not n.sum():
-                return
-            idx = np.repeat(lo - np.cumsum(n) + n, n) + np.arange(int(n.sum()))
-            add(self.ti[self.fr_ord[idx]])
-
-        add(seeds)
-        for c in changed:
-            consumers(c)
+                R, diff = self._ports(k, elm, A, Am, S, Sm)
+                chg[R] |= diff.int()
+                lo = torch.minimum(lo, torch.where(diff, self.first_use[R], 1 << 30).min())
+                hi = torch.maximum(hi, torch.where(diff, self.last_use[R], -1).max())
+        s, hi = (int(x) for x in torch.stack([lo, hi]).cpu())
         work = nst = 0
         budget, time_budget = self.MAX_SHARE * self.n_ent, budget
         self.last = {'dirty_nets': int(len(dn)), 'stages': 0, 'entries': 0, 'full': False}
         pi, elc = T.pi.contiguous(), elm.contiguous()
-        while heap:
-            s = heapq.heappop(heap)
-            rows = np.unique(np.concatenate(pending.pop(s)))
-            lo, hi = self.to_ptr[rows], self.to_ptr[rows + 1]
-            n = hi - lo
-            ents = np.sort(self.to_ord[np.repeat(lo - np.cumsum(n) + n, n) + np.arange(int(n.sum()))])
-            work += len(ents); nst += 1
-            self.last.update(stages=nst, entries=work)
-            if work > budget or (time_budget is not None and time.perf_counter() - t_start > time_budget):
-                self.last['full'] = True
-                return False
-            ch = self._stage(s, ents, rows, A, Am, S, Sm, pi, elc)
-            consumers(ch)
+        while s <= hi:
+            off, N, loff, M = self.stages[s]
+            fi_s, ti_s = self.fi[off:off + N], self.ti[off:off + N]
+            hit = (chg[fi_s.clamp(min=0)] & (fi_s >= 0).int())   # arcs whose input changed: their outputs again
+            mark.scatter_reduce_(0, ti_s, hit, 'amax')
+            em = mark[ti_s] > 0                                   # every arc into a marked row
+            ents = torch.nonzero(em).flatten()
+            if len(ents):
+                work += len(ents); nst += 1
+                self.last.update(stages=nst, entries=work)
+                if work > budget or (time_budget is not None and time.perf_counter() - t_start > time_budget):
+                    self.last['full'] = True
+                    return False
+                R, diff = self._stage(s, em, ents, A, Am, S, Sm, pi, elc)
+                chg[R] |= diff.int()
+                h = int(torch.where(diff, self.last_use[R], -1).max()) if len(R) else -1
+                hi = max(hi, h)
+            s += 1
         return True
 
-    def _stage(self, s, ents, rows, A, Am, S, Sm, pi, elc):
-        """Recompute the entries `ents` (global, sorted; every entry into `rows`) of stage s and all their loads, with
-        the fused kernel; returns the rows whose arrival or slew changed. The subset's kernel inputs and indices are
-        made on the host and copied up at once."""
+    def _stage(self, s, em, ents, A, Am, S, Sm, pi, elc):
+        """Recompute the entries `ents` (local to stage s, sorted; em: their mask) of stage s and all their loads,
+        with the fused kernel; returns the rows written (outputs, loads) and which of them changed. The kernel's
+        inputs are gathered on the device into new tensors (aligned: Triton compiles a kernel per pointer alignment,
+        these reuse the full run's)."""
         T = self.T
         dev = T.dev
         off, N, loff, M = self.stages[s]
-        lo, hi = self.lane_ptr[ents], self.lane_ptr[ents + 1]
-        n = hi - lo
-        k, m = len(ents), int(n.sum())
-        lanes = np.repeat(lo - np.cumsum(n) + n, n) + np.arange(m)
-        u, inv = np.unique(self.lane_row[lanes], return_inverse=True)
-        d = np.empty(len(u), np.int64)
-        d[inv] = self.lane_drv[lanes]
-        r = len(rows)
-        ei = self.e_int[ents]
-        i64 = lambda x: np.asarray(x, np.int64)  # noqa: E731
-        (lib, fi, t, orf, net, tag, arr, ea_s, en, t0, s0, R, inv_t, d_t, e_t, l_t, ok) = _upload(
-            [ei[:, i] for i in range(7)] + [np.repeat(np.arange(k, dtype=np.int32), n), self.lane_en[lanes],
-                                            self.e_flt[ents, 0], self.e_flt[ents, 1],
-                                            i64(np.concatenate([rows, u])), i64(inv), d, i64(ents - off),
-                                            i64(lanes - loff), self.lane_ok[lanes]], dev)
-        u_t = R[r:]
+        le = self.lane_ent[loff:loff + M] - off                  # the stage's lanes' entries (local)
+        lanes = torch.nonzero(em[le]).flatten()
+        m = len(lanes)
+        pos = torch.cumsum(em, 0, dtype=torch.int32) - 1         # entry -> its position among ents
+        ea_s = pos[le[lanes]]
+        eg, lg = ents + off, lanes + loff
+        lib, fi, t, orf, net, tag, arr = (c[eg] for c in self.e_cols)
+        t0, s0 = self.e_flt0[eg], self.e_flt1[eg]
+        en = self.lane_en[lg]
+        u = self.lane_row[lg]                                     # load rows (repeats: the same value twice)
+        R = torch.cat([self.ti[eg], u])
+        ok = self.lane_ok[lg]
         old = (A.index_select(0, R), Am.index_select(0, R), S.index_select(0, R), Sm.index_select(0, R))
         A.index_fill_(0, R, -INF); Am.index_fill_(0, R, INF); S.index_fill_(0, R, 0.0); Sm.index_fill_(0, R, INF)
         wbx, wbn = T._wb
-        wbx.index_fill_(0, u_t, -INF); wbn.index_fill_(0, u_t, INF)
+        wbx.index_fill_(0, u, -INF); wbn.index_fill_(0, u, INF)
         sub = (lib, fi, t, orf, net, t0, tag, ea_s, en, s0, arr)
         dmax, wx, dmin, wn = T.triton.stage(T.tri_tables, sub, T.tri_sthr, pi, elc, T.tri_nto, A, Am, S, Sm,
                                             T.precision, lmin=T.lmin)
         if m:
-            T._load_arr(A, Am, (inv_t, u_t, d_t, ok), wx, wn)
+            T._load_arr(A, Am, (torch.arange(m, device=dev), u, self.lane_drv[lg], ok), wx, wn)
         v, sx = Sm.index_select(0, R), S.index_select(0, R)
         Sm.index_copy_(0, R, torch.where(torch.isfinite(v), v, sx))      # Timer: smin falls back to smax
         rec = T._rec[s]
-        rec[0].index_copy_(0, e_t, dmax); rec[2].index_copy_(0, e_t, dmin)
+        rec[0].index_copy_(0, ents, dmax); rec[2].index_copy_(0, ents, dmin)
         if m:
-            rec[1].index_copy_(0, l_t, wx); rec[3].index_copy_(0, l_t, wn)
+            rec[1].index_copy_(0, lanes, wx); rec[3].index_copy_(0, lanes, wn)
         diff = ((A.index_select(0, R) != old[0]).any(1) | (Am.index_select(0, R) != old[1]).any(1)
                 | (sx != old[2]) | (Sm.index_select(0, R) != old[3]))
-        return R[diff].cpu().numpy()
+        return R, diff
 
     def _ports(self, k, elm, A, Am, S, Sm):
         """Recompute the loads of the port-driven net arcs pa[k] (Timer._run_core's input-port wires); returns the
@@ -269,4 +234,4 @@ class Incremental:
             prev[1][k] = wds[0]; prev[2][k] = wds[1]
         Sm[R] = torch.where(torch.isfinite(Sm[R]), Sm[R], S[R])
         diff = (A[R] != old[0]).any(1) | (Am[R] != old[1]).any(1) | (S[R] != old[2]) | (Sm[R] != old[3])
-        return R[diff].cpu().numpy()
+        return R, diff

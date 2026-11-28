@@ -1,10 +1,13 @@
 """Incremental re-timing (attar.timing.incremental): after cells move, re-timing only the cone of the nets whose
-parasitics changed gives a full run's result bit for bit. GPU only (the CPU path always runs in full)."""
+parasitics changed gives a full run's result bit for bit (GPU only: the CPU path always runs in full). After a netlist
+edit the timer follows in place (attar.timing.inplace) and gives what a new timer gives, bit for bit."""
 import unittest
 
+import numpy as np
 import torch
 
 from common import MEDIUM, attar
+from attar.timing.sta import Timer
 
 
 def _gpu(name):
@@ -82,3 +85,102 @@ class IncrementalTimingTest(unittest.TestCase):
         self.assertTrue(T._inc_full)
         d.timing()
         self.assertFalse(T._inc_full)
+
+
+def _same(test, a, b):
+    for x, y in zip(a, b):
+        test.assertEqual(x.shape, y.shape)
+        test.assertTrue(bool(((x == y) | (torch.isnan(x) & torch.isnan(y))).all()))
+
+
+def _data_net(d, e, rng):
+    """A net with 3+ pins a cell drives, off the clock network and not constant."""
+    T, a = d._timer, d.raw
+    clk = e.clock_nets()
+    nptr = a['n_ptr']
+    for k in rng.permutation(len(nptr) - 1).tolist():
+        dr = T.net_driver[k]
+        if k in clk or nptr[k + 1] - nptr[k] < 3 or dr < 0 or a['p_mpin'][dr] < 0 or T.const_net[k] >= 0:
+            continue
+        if T.clk_of[nptr[k]:nptr[k + 1]].max() < 0:
+            return k
+    raise unittest.SkipTest('no data net')
+
+
+class InPlaceEditTest(unittest.TestCase):
+    """insert_buffer, clone, and a buffer removed: the timer is not rebuilt, and its timing (the cone re-timed on the
+    GPU, or a full run) is a new timer's."""
+
+    def _check(self, d):
+        T = d._timer
+        self.assertEqual(d._timer_edit, '')
+        r1 = d.timing()
+        self.assertIs(d._timer, T)
+        st = lambda r, T: [r.setup, r.hold, T.amax, T.amin, T.smax, T.smin, T.load, T.load_min]  # noqa: E731
+        a = [x.clone() for x in st(r1, T)]
+        F = Timer(d)
+        b = st(F.run(), F)
+        _same(self, a, b)
+        T._inc_full = True                              # and a full run of the updated timer
+        _same(self, [x.clone() for x in st(d.timing(), T)], b)
+        self.assertTrue(np.array_equal(T.level, F.level))
+        F.release('compared')
+
+    def _edits(self, dev, n=3):
+        try:
+            d = attar.load(MEDIUM, dev, download=False).restore('reference')
+        except FileNotFoundError as e:
+            raise unittest.SkipTest(str(e)) from None
+        d.timing(); d.timing()
+        rng = np.random.default_rng(3)
+        with d.edit() as e:
+            k = _data_net(d, e, rng)
+            loads = [p for p in sorted(e._net_pins(k)) if d.raw['p_dir'][p] != 1]
+            e.insert_buffer(k, loads[:max(1, len(loads) // 2)])
+        self._check(d)
+        if n == 1:
+            return
+        with d.edit() as e:
+            k = _data_net(d, e, rng)
+            c = int(d.raw['p_cell'][d._timer.net_driver[k]])
+            loads = [p for p in sorted(e._net_pins(k)) if d.raw['p_dir'][p] != 1]
+            e.clone(c, loads[:1])
+        self._check(d)
+        b = len(d.names['cells']) - 2                   # the buffer of the first edit goes again
+        pn = d.p_net.cpu().numpy()
+        with d.edit() as e:
+            ps = e.cell_pins(b)
+            ni = [int(pn[p]) for p in ps if d.raw['p_dir'][p] != 1][0]
+            no = [int(pn[p]) for p in ps if d.raw['p_dir'][p] == 1][0]
+            e.remove_cell(b)
+            e.move([p for p in e._net_pins(no) if p not in set(ps.tolist())], ni)
+        self._check(d)
+
+    def test_gpu(self):
+        if not torch.cuda.is_available():
+            self.skipTest('no GPU')
+        self._edits('cuda')
+
+    def test_cpu(self):                                 # (the device changes nothing else: one edit)
+        self._edits('cpu', n=1)
+
+    def test_a_clock_net_rebuilds(self):
+        try:
+            d = attar.load(MEDIUM, 'cpu', download=False)
+        except FileNotFoundError as e:
+            raise unittest.SkipTest(str(e)) from None
+        d.timing()
+        T = d._timer
+        reg = int(T.k_fr[0])                            # a register clock pin: its cell's other pins are data
+        c = int(d.raw['p_cell'][reg])
+        from attar.netlist import _single_input
+        with d.edit() as e:
+            buf = e.default_buffer()
+            a_, y_, _ = _single_input(d, buf)
+            nb = e.add_cell(buf, d.pos[c].tolist())
+            n2 = e.add_net()
+            e.connect(nb, a_, int(d.p_net[reg]))
+            e.connect(nb, y_, n2)
+            e.move([reg], n2)
+        self.assertNotEqual(d._timer_edit, '')
+        self.assertIsNone(d._timer)

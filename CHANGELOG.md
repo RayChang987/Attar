@@ -8,10 +8,19 @@ New
   the arcs whose input arrival or slew changed, level by level, until nothing changes. Each recomputed pin takes
   every arc into it with the same kernels as a full run, so the result is bit for bit a full run's (tested on
   ASAP7, Nangate45, NS3K, ICCAD 2015 and 2025 designs). The timer keeps the average time of both kinds of run and
-  uses the faster one. Moving 1 / 10 / 100 cells of jpeg_x20 (1.05M cells, RTX 4090): 31-47 / 72-81 / 104-160 ms
-  instead of 480 ms; superblue18 34-40 / 57-61 / 142-178 ms instead of 291 ms. Small designs, the CPU, latch time
+  uses the faster one. Moving 1 / 10 / 100 cells of jpeg_x20 (1.05M cells, RTX 4090): 54-67 / 78-82 / 92 ms
+  instead of 490 ms; superblue18 27-51 / 65-78 / 143-169 ms instead of 292 ms. Small designs, the CPU, latch time
   borrowing, pin clock latencies, global-routing parasitics, a resize and changes on a propagated clock network
   run in full as before.
+- The timer follows netlist edits in place (`attar.timing.inplace`), as OpenSTA updates its graph instead of
+  building it again: after `d.edit()` (`insert_buffer`, `clone`, `remove_cell`, `move`, ...) or `d.debuffer()`, the
+  pin-indexed arrays follow the new pin numbers, the new cells' arcs join the graph, levels and stages are made
+  again, and the last run's arrivals are kept, so the next `d.timing()` re-times only the cone of the edited nets.
+  The result is a new timer's bit for bit (tested on ASAP7, NS3K, ICCAD 2015 and 2025 designs, up to jpeg_x20).
+  One buffer inserted on jpeg_x20: 1.3-1.7 s for the edit and 65-70 ms for the timing, instead of a 9-10 s
+  rebuild and a 2.3 s first run. Edits on a clock network, a constant net, a net an input port drives, latches, pin clock
+  latencies, combinational loops or global-routing parasitics still rebuild the timer (`d._timer_edit` says why).
+- Building a timer: its stages, levels and reachability are made on the device (jpeg_x20: 5-6 s instead of 9-10 s).
 
 Fixes
 - The driver loads of a timing run (`arrivals().load`, read by `d.drv()` and `d.power()`) are summed in a fixed

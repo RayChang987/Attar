@@ -578,14 +578,7 @@ class Timer:
         self._arc_cell = p_cell[fr]                                      # its instance (resized())
 
         # nets: one driver, its sinks
-        drv = np.full(len(n_ptr) - 1, -1, np.int64)
-        is_drv = pdir == D_OUT
-        nd = np.bincount(p_net[is_drv], minlength=len(n_ptr) - 1)
-        one = nd == 1
-        drv[p_net[is_drv & one[p_net]]] = np.nonzero(is_drv & one[p_net])[0]
-        sink = (pdir == D_IN) | (pdir == D_INOUT) | (pdir == 3)
-        sink &= ~is_drv & (drv[p_net] >= 0)
-        n_to = np.nonzero(sink)[0]; n_fr = drv[p_net[n_to]]
+        drv, n_fr, n_to = self._net_arcs(pdir, p_net, len(n_ptr) - 1)
         self.net_driver = drv
 
         # clock network: from the clock source ports through nets and combinational arcs, up to register clock pins
@@ -650,11 +643,6 @@ class Timer:
         launch = edge & iclk[fr] & ~clk_net[to] & ~off
         self.net_iclk = np.zeros(len(n_ptr) - 1, bool)
         self.net_iclk[drv >= 0] = iclk[drv[drv >= 0]]
-        self.n_fr, self.n_to = T(n_fr[nk]), T(n_to[nk])
-        self.n_net = T(p_net[n_to[nk]])
-        sel = lambda m: (T(lib_id[m]), T(fr[m]), T(to[m]), T(asense[m]), T(atype[m]))
-        self.c_lib, self.c_fr, self.c_to, self.c_sense, self.c_type = sel(ck)
-        self.c_sense_lib = T(asense_lib[ck])
         # (a data pin into a propagated clock network, e.g. a clock gate's enable: its arrivals are data, not the
         # clock's (OpenSTA's tags are not clock tags there), so they do not become clock arrivals; slews only)
         d2c = ~clk_net[fr] & pclk[to]
@@ -663,49 +651,16 @@ class Timer:
         # reads a transformed copy of D's arrivals); one whose enable no clock reaches passes nothing (slews only)
         clocked = np.zeros(len(d.raw['c_master']) + 1, bool)
         clocked[p_cell[fr[edge & clk_net[fr]]]] = True
-        self._lq_c = np.nonzero((ldq & clocked[p_cell[fr]])[ck])[0]          # c-selection indices of the clocked ones
-        self.c_arr = T(((comb & ~iclk[fr] & ~iclk[to] & ~d2c & ~ldq) | plaunch)[ck] & ~off[ck])   # the search's
-        #                                                                                    (the rest: slews)
-        self.l_lib, self.l_fr, self.l_to, self.l_sense, self.l_type = sel(launch)
         chk = np.isin(atype, (T_SETUP_R, T_HOLD_R, T_SETUP_F, T_HOLD_F)) & (clk_of[fr] >= 0) & ~off
-        self.k_lib, self.k_fr, self.k_to, self.k_sense, self.k_type = sel(chk)
-        # each selection's instance arcs (resized() writes new Liberty arcs through these)
-        self._sel = {'c': np.nonzero(ck)[0], 'l': np.nonzero(launch)[0], 'k': np.nonzero(chk)[0]}
+        # per instance arc: delay calculation (ck), the arrival search (arr: the rest set slews only), launch and check
+        # arcs, the search's sense, latch D -> Q arcs (ldq) and the clocked ones (lq)
+        self._arc_flags = {'ck': ck, 'arr': ((comb & ~iclk[fr] & ~iclk[to] & ~d2c & ~ldq) | plaunch) & ~off,
+                           'launch': launch, 'chk': chk, 'asense': asense, 'ldq': ldq, 'lq': ldq & clocked[p_cell[fr]]}
+        self._psrc = np.nonzero(pclk & np.isin(p_cell, [c_ for _, c in clocks for c_ in c['sources']]))[0]
+        self._set_graph(n_fr[nk], n_to[nk], p_net, loop_net[nk])
 
-        # levels (Kahn) over net + combinational arcs (and the slew-only arcs)
-        gn = nk & ~loop_net                              # (a disabled loop wire still loads its net)
-        g_fr = np.concatenate([n_fr[gn], fr[ck]]); g_to = np.concatenate([n_to[gn], to[ck]])
-        # latch D -> Q arcs: OpenSTA's levelization never follows them (Levelize::searchThru); here a cycle is broken
-        # there first (with propagated clocks, a clock gating latch closes one: register clock -> Q -> ... -> latch
-        # D -> Q -> gate enable -> gated clock tree -> register clock)
-        lev, dropped = self._levelize(P, g_fr, g_to, prefer=np.concatenate([np.zeros(int(gn.sum()), bool), ldq[ck]]))
-        self.n_cycle_edges = dropped
-        self.level = lev
-        psrc = np.nonzero(pclk & np.isin(p_cell, [c_ for _, c in clocks for c_ in c['sources']]))[0]
-        self._g_edges = (g_fr, g_to, np.concatenate([to[launch], psrc]))   # graph and seeds (structural reachability)
-        nl = lev[n_to[nk]]; cl = lev[to[ck]]
-        self.n_lev = T(nl); self.c_lev = T(cl)
-        self.max_level = int(max(nl.max(initial=0), cl.max(initial=0)))
-        self.n_by_lev = self._group(nl); self.c_by_lev = self._group(cl)
-
-        # library tables on the device
-        self.t_ix1, self.t_ix2 = T(t['a_ix1']), T(t['a_ix2'])
-        # thresholds: drivers per arc and output transition; loads per pin (ports: the first library read)
-        dflt = _default_thresholds(info)
-        self.t_thr = T(t['a_thr']) if 'a_thr' in t else T(np.tile(dflt, (len(t['a_master']), 1, 1)))
+        self._set_tables(t, tmin)
         self.sink_thr = T(sthr)
-        self.t_val, self.t_n = T(t['a_val']), T(t['a_n'].astype(np.int64))
-        # an Early library: its tables after the Late ones; the min analysis reads Liberty arc a at a + lmin (the
-        # arcs line up one to one, ir.ALIGN). lmin = 0: one library for both analyses
-        self.n_lib, self.lmin = len(t['a_master']), 0
-        if tmin is not None:
-            thr_e = T(tmin['a_thr']) if 'a_thr' in tmin else T(np.tile(dflt, (len(tmin['a_master']), 1, 1)))
-            self.t_ix1, self.t_ix2, self.t_val = (_stack_tables(self.t_ix1, T(tmin['a_ix1'])),
-                                                  _stack_tables(self.t_ix2, T(tmin['a_ix2'])),
-                                                  _stack_tables(self.t_val, T(tmin['a_val'])))
-            self.t_n = torch.cat([self.t_n, T(tmin['a_n'].astype(np.int64))])
-            self.t_thr = torch.cat([self.t_thr, thr_e])
-            self.lmin = self.n_lib
 
         # clocks and constraints
         self.clocks = [c for _, c in clocks]
@@ -788,6 +743,77 @@ class Timer:
             if self.triton is not None:
                 _first_compile_notice()
         self._mp_names = None; self._sink_drv = None
+
+    def _set_tables(self, t, tmin):
+        """The Liberty arcs' tables on the device (Late, then an Early library's: the min analysis reads Liberty arc a at
+        a + lmin; the arcs line up one to one, ir.ALIGN; lmin = 0: one library for both analyses) and their driver
+        thresholds per output transition."""
+        T = lambda x: torch.as_tensor(np.asarray(x), device=self.dev)  # noqa: E731
+        dflt = _default_thresholds(self.info)
+        self._a_master = t['a_master'].astype(np.int64)            # (attar.timing.inplace: Liberty arcs per master)
+        self.t_ix1, self.t_ix2 = T(t['a_ix1']), T(t['a_ix2'])
+        self.t_thr = T(t['a_thr']) if 'a_thr' in t else T(np.tile(dflt, (len(t['a_master']), 1, 1)))
+        self.t_val, self.t_n = T(t['a_val']), T(t['a_n'].astype(np.int64))
+        self.n_lib, self.lmin = len(t['a_master']), 0
+        if tmin is not None:
+            thr_e = T(tmin['a_thr']) if 'a_thr' in tmin else T(np.tile(dflt, (len(tmin['a_master']), 1, 1)))
+            self.t_ix1, self.t_ix2, self.t_val = (_stack_tables(self.t_ix1, T(tmin['a_ix1'])),
+                                                  _stack_tables(self.t_ix2, T(tmin['a_ix2'])),
+                                                  _stack_tables(self.t_val, T(tmin['a_val'])))
+            self.t_n = torch.cat([self.t_n, T(tmin['a_n'].astype(np.int64))])
+            self.t_thr = torch.cat([self.t_thr, thr_e])
+            self.lmin = self.n_lib
+
+    @staticmethod
+    def _net_arcs(pdir, p_net, E):
+        """Per net its driver (the one output pin; -1: none or several), and the net arcs (driver, sink) of the nets
+        with one, in sink order."""
+        drv = np.full(E, -1, np.int64)
+        is_drv = pdir == D_OUT
+        nd = np.bincount(p_net[is_drv], minlength=E)
+        one = nd == 1
+        drv[p_net[is_drv & one[p_net]]] = np.nonzero(is_drv & one[p_net])[0]
+        sink = (pdir == D_IN) | (pdir == D_INOUT) | (pdir == 3)
+        sink &= ~is_drv & (drv[p_net] >= 0)
+        n_to = np.nonzero(sink)[0]
+        return drv, drv[p_net[n_to]], n_to
+
+    def _set_graph(self, n_fr, n_to, p_net, loop_net, lev=None):
+        """The timing graph from the instance arcs and their classification (_arcs_all, _arc_flags) and the net arcs
+        (driver, sink; loop_net: the wires that break a loop): the selections c_*, l_*, k_* on the device, the levels
+        (longest path; lev: given). (Timer.__init__; attar.timing.inplace after a
+        netlist edit.)"""
+        dev, P = self.dev, self.P
+        T = lambda x, dt=None: torch.as_tensor(np.asarray(x), device=dev, dtype=dt)  # noqa: E731
+        lib_id, fr, to, atype, asense_lib = self._arcs_all
+        f = self._arc_flags
+        ck, launch, chk, asense = f['ck'], f['launch'], f['chk'], f['asense']
+        self.n_fr, self.n_to = T(n_fr), T(n_to)
+        self.n_net = T(p_net[n_to])
+        sel = lambda m: (T(lib_id[m]), T(fr[m]), T(to[m]), T(asense[m]), T(atype[m]))  # noqa: E731
+        self.c_lib, self.c_fr, self.c_to, self.c_sense, self.c_type = sel(ck)
+        self.c_sense_lib = T(asense_lib[ck])
+        self._lq_c = np.nonzero(f['lq'][ck])[0]                  # c-selection indices of the clocked latch D -> Q arcs
+        self.c_arr = T(f['arr'][ck])
+        self.l_lib, self.l_fr, self.l_to, self.l_sense, self.l_type = sel(launch)
+        self.k_lib, self.k_fr, self.k_to, self.k_sense, self.k_type = sel(chk)
+        # each selection's instance arcs (resized() writes new Liberty arcs through these)
+        self._sel = {'c': np.nonzero(ck)[0], 'l': np.nonzero(launch)[0], 'k': np.nonzero(chk)[0]}
+        # levels (Kahn) over net + combinational arcs (and the slew-only arcs)
+        gn = ~loop_net                                   # (a disabled loop wire still loads its net)
+        g_fr = np.concatenate([n_fr[gn], fr[ck]]); g_to = np.concatenate([n_to[gn], to[ck]])
+        # latch D -> Q arcs: OpenSTA's levelization never follows them (Levelize::searchThru); here a cycle is broken
+        # there first (with propagated clocks, a clock gating latch closes one: register clock -> Q -> ... -> latch
+        # D -> Q -> gate enable -> gated clock tree -> register clock)
+        if lev is None:
+            lev, self.n_cycle_edges = self._levelize(P, g_fr, g_to,
+                                                     prefer=np.concatenate([np.zeros(int(gn.sum()), bool), f['ldq'][ck]]),
+                                                     dev=dev)
+        self.level = lev
+        self._g_edges = (g_fr, g_to, np.concatenate([to[launch], self._psrc]))   # graph and seeds (reachability)
+        nl = lev[n_to]; cl = lev[to[ck]]
+        self.n_lev = T(nl); self.c_lev = T(cl)
+        self.max_level = int(max(nl.max(initial=0), cl.max(initial=0)))
 
     def _nonleaf_clock_nets(self, d, p_net, regclk):
         """Per net: USE CLOCK and no register clock pin on it (GlobalRouter::isNonLeafClock; LibertyPort::isRegClk:
@@ -1039,9 +1065,41 @@ class Timer:
         return lib_dq[lib_id] & (atype == T_COMB)
 
     @staticmethod
-    def _levelize(P, fr, to, prefer=None):
+    def _levels_dev(P, fr, to, dev):
+        """Longest-path levels (Kahn by layers) on the device, or None when a cycle is left (_levelize breaks it)."""
+        fr, to = torch.as_tensor(fr, device=dev), torch.as_tensor(to, device=dev)
+        indeg = torch.bincount(to, minlength=P)
+        o = torch.sort(fr, stable=True)[1]
+        t2 = to[o]
+        ptr = torch.searchsorted(fr[o], torch.arange(P + 1, device=dev))
+        lev = torch.zeros(P, dtype=torch.long, device=dev)
+        cur = torch.nonzero(indeg == 0).flatten()
+        seen, k = 0, 0
+        while len(cur):
+            seen += len(cur)
+            lev[cur] = k
+            lo = ptr[cur]
+            rep = ptr[cur + 1] - lo
+            tot = int(rep.sum())
+            if not tot:
+                break
+            ei = torch.repeat_interleave(lo - torch.cumsum(rep, 0) + rep, rep, output_size=tot) + \
+                torch.arange(tot, device=dev)
+            cand, cnt = torch.unique(t2[ei], return_counts=True)
+            indeg[cand] -= cnt
+            cur = cand[indeg[cand] == 0]
+            k += 1
+        return lev.cpu().numpy() if seen == P else None
+
+    @staticmethod
+    def _levelize(P, fr, to, prefer=None, dev=None):
         """Longest-path levels of a DAG (Kahn by layers). Edges inside cycles are dropped (count returned): those
-        marked prefer first (latch D -> Q arcs, as OpenSTA's levelization), the rest only if cycles remain."""
+        marked prefer first (latch D -> Q arcs, as OpenSTA's levelization), the rest only if cycles remain. dev: try
+        on that device first (the same levels)."""
+        if dev is not None and dev.type == 'cuda':
+            lev = Timer._levels_dev(P, fr, to, dev)
+            if lev is not None:
+                return lev, 0
         dropped = 0
         while True:
             indeg = np.bincount(to, minlength=P)
@@ -1182,21 +1240,20 @@ class Timer:
                     stack.pop(); on_path.discard(v)
         return back
 
-    def _group(self, lev):
-        if not len(lev):
-            return [None] * (self.max_level + 1)
-        o = np.argsort(lev, kind='stable')
-        b = np.searchsorted(lev[o], np.arange(self.max_level + 2))
-        return [torch.as_tensor(o[b[k]:b[k + 1]], device=self.dev) for k in range(self.max_level + 1)]
-
     # -- wires ------------------------------------------------------------------------------------------------------
-    def _wire_setup(self):
-        """Placement-independent parts of the wire model: the pins' locations (_pin_setup), Steiner (RMST) buckets
-        and the tree plan, so that wires() has no host sync (CUDA-graph capturable)."""
+    def _wire_setup(self, locs=None):
+        """Placement-independent parts of the wire model: the pins' locations (_pin_setup; locs: given, (_loc_n,
+        _loc_ok)), Steiner (RMST) buckets and the tree plan, so that wires() has no host sync (CUDA-graph
+        capturable)."""
         from ..evaluator import Evaluator
         ev = self.ev = Evaluator(self.d)
         ev.off = ev.off.clone()                         # the timer's own pin offsets (_pin_setup), updated in place
-        self._pin_setup()
+        if locs is None:
+            self._pin_setup()
+        else:
+            self._loc_n, self._loc_ok = locs
+            self._pin_key = None
+            self._sync_pins()
         drv = torch.as_tensor(self.net_driver, device=self.dev)
         drv_local = torch.where(drv >= 0, drv - ev.ptr[:-1], torch.full_like(drv, -1))
         self.plan_clk = None
@@ -1395,17 +1452,22 @@ class Timer:
         """Pins a data arrival can reach (structural): from launch arcs, constrained inputs and the input ports a
         path delay exception starts from (set_max_delay -from), over net and combinational arcs, level by level."""
         g_fr, g_to, seeds = self._g_edges
-        reach = np.zeros(self.P, bool)
-        reach[seeds] = True
-        reach[[p for p, _, _ in self.in_delay]] = True
-        reach[sorted(getattr(self, 'ex_ports', ()))] = True
-        o = np.argsort(self.level[g_fr], kind='stable')
+        dev = self.dev
+        T = lambda x: torch.as_tensor(np.asarray(x, np.int64), device=dev)  # noqa: E731
+        reach = torch.zeros(self.P, dtype=torch.int32, device=dev)
+        reach[T(seeds)] = 1
+        reach[T([p for p, _, _ in self.in_delay])] = 1
+        reach[T(sorted(getattr(self, 'ex_ports', ())))] = 1
+        lev = T(self.level)
+        g_fr, g_to = T(g_fr), T(g_to)
+        lf = lev[g_fr]
+        o = torch.sort(lf, stable=True)[1]
         g_fr, g_to = g_fr[o], g_to[o]
-        bounds = np.searchsorted(self.level[g_fr], np.arange(int(self.level.max(initial=0)) + 2))
+        bounds = torch.searchsorted(lf[o], torch.arange(int(self.level.max(initial=0)) + 2, device=dev)).cpu().tolist()
         for a, b in zip(bounds[:-1], bounds[1:]):
             if b > a:
-                reach[g_to[a:b][reach[g_fr[a:b]]]] = True       # np.logical_or.at, without ufunc.at
-        return reach
+                reach.scatter_reduce_(0, g_to[a:b], reach[g_fr[a:b]], 'amax')
+        return reach.cpu().numpy() > 0
 
     def _big_update(self, pos, nets=None):
         """The large nets' parasitics at pos, on the host (attar.timing.steiner_big), into plan['big_buf']. nets: a
@@ -1462,6 +1524,9 @@ class Timer:
             pins = (p != w['p']).any(1) | (caps != w['caps']).any(1) | (self.pin_rvia != w['rv'])
             dirty = torch.zeros(E, dtype=torch.bool, device=self.dev)
             dirty[self.pin_net[pins]] = True
+            fd = self.__dict__.pop('_force_dirty', None)    # nets a netlist edit changed (attar.timing.inplace)
+            if fd is not None:
+                dirty |= fd
             if self._iclk_pi is not None:            # ideal clock nets: their parasitics are not read (below)
                 dirty &= ~self.net_iclk_t
             if int(dirty.sum()) > self.INCREMENTAL_WIRES * E:
@@ -1606,51 +1671,59 @@ class Timer:
         else:
             self.lc = None
         # data net arcs grouped by driver: a driver's arcs expand to its loads (OpenSTA: gate delay + wire delay per arc)
-        nf_np = self.n_fr.cpu().numpy()
-        na_o = np.argsort(nf_np, kind='stable'); na_ptr = np.searchsorted(nf_np[na_o], np.arange(P + 1))
+        # (on the device: these are the timer's largest arrays)
+        nf = self.n_fr
+        na_o = torch.sort(nf, stable=True)[1]
+        na_ptr = torch.searchsorted(nf[na_o], torch.arange(P + 1, device=dev))
 
         def expand(drv):
-            """For arcs into driver pins drv (numpy): (arc index, net arc index) for every load of the driver."""
-            lo, hi = na_ptr[drv], na_ptr[drv + 1]
-            rep_ = hi - lo
-            ai = np.repeat(np.arange(len(drv)), rep_)
-            ni = na_o[np.repeat(lo - np.cumsum(rep_) + rep_, rep_) + np.arange(rep_.sum())] if rep_.sum() else np.zeros(0, np.int64)
-            return T(ai), T(ni)
+            """For arcs into driver pins drv: (arc index, net arc index) for every load of the driver."""
+            lo = na_ptr[drv]
+            rep_ = na_ptr[drv + 1] - lo
+            tot = int(rep_.sum())
+            ai = torch.repeat_interleave(torch.arange(len(drv), device=dev), rep_, output_size=tot)
+            ni = na_o[torch.repeat_interleave(lo - torch.cumsum(rep_, 0) + rep_, rep_, output_size=tot)
+                      + torch.arange(tot, device=dev)]
+            return ai, ni
         # nets driven by input ports (no gate: DelayCalcBase::dspfWireDelaySlew)
-        port_drv = self.d.raw['p_mpin'][nf_np] < 0
-        self.pa = T(np.nonzero(port_drv)[0])
+        pm_t = torch.as_tensor(self.d.raw['p_mpin'], device=dev)
+        self.pa = torch.nonzero(pm_t[nf] < 0).flatten()
         # cell arcs per level: (arc, output transition, input transition) allowed by the sense, with a table
-        cl, cs, clev = self.c_lib.cpu().numpy(), self.c_sense.cpu().numpy(), self.c_lev.cpu().numpy()
-        csl, carr, ctype = self.c_sense_lib.cpu().numpy(), self.c_arr.cpu().numpy(), self.c_type.cpu().numpy()
-        cto = self.c_to.cpu().numpy()
+        cl, cs, clev, csl, carr, ctype = self.c_lib, self.c_sense, self.c_lev, self.c_sense_lib, self.c_arr, self.c_type
+        comb = (ctype == T_COMB) | (ctype == T_TRISTATE)
         allowed = lambda sense, irf, orf: ((sense == S_NON) | ((sense == S_POS) & (irf == orf))  # noqa: E731
                                            | ((sense == S_NEG) & (irf != orf)))
         combos = []
         for orf in (0, 1):
             for irf in (0, 1):
                 # delay calculation: the Liberty sense (an edge arc: from its clock edge); the search: the sim's
-                ok = (tn[cl, orf, 0] > 0) & np.where(np.isin(ctype, (T_COMB, T_TRISTATE)), allowed(csl, irf, orf), True)
-                ok &= np.where(ctype == T_RISE_EDGE, irf == 0, np.where(ctype == T_FALL_EDGE, irf == 1, True))
-                m = np.nonzero(ok)[0]
-                arr = carr[m] & np.where(np.isin(ctype[m], (T_COMB, T_TRISTATE)), allowed(cs[m], irf, orf), True)
-                combos.append(np.stack([m, np.full(len(m), orf), np.full(len(m), irf), arr], 1))
-        cb = np.concatenate(combos) if combos else np.zeros((0, 4), np.int64)
-        o = np.argsort(clev[cb[:, 0]], kind='stable'); cb = cb[o]
-        b = np.searchsorted(clev[cb[:, 0]], np.arange(self.max_level + 2))
+                ok = (self.t_n[cl, orf, 0] > 0) & (~comb | allowed(csl, irf, orf))
+                ok &= torch.where(ctype == T_RISE_EDGE, irf == 0, torch.where(ctype == T_FALL_EDGE, irf == 1, True))
+                m = torch.nonzero(ok).flatten()
+                arr = carr[m] & (~comb[m] | allowed(cs[m], irf, orf))
+                combos.append(torch.stack([m, torch.full_like(m, orf), torch.full_like(m, irf), arr.long()], 1))
+        cb = torch.cat(combos)
+        cb = cb[torch.sort(clev[cb[:, 0]], stable=True)[1]]
+        n_lv = torch.bincount(clev[cb[:, 0]], minlength=self.max_level + 1).cpu().numpy() if len(cb) else \
+            np.zeros(self.max_level + 1, np.int64)
+        ea_all, en_all = expand(self.c_to[cb[:, 0]])                    # lanes ascend by entry
+        e_off = np.concatenate([[0], np.cumsum(n_lv)])
+        l_off = torch.searchsorted(ea_all, torch.as_tensor(e_off, device=dev)).cpu().numpy()
+        src_all = cb[:, 0].cpu().numpy()
         self.cb_lev = []
         self._cb_src = []                                        # c-selection index of each entry, per level
         for k in range(self.max_level + 1):
-            x = cb[b[k]:b[k + 1]]
-            self._cb_src.append(x[:, 0] if len(x) else None)
-            if len(x):
-                a_ = T(x[:, 0])
-                ea, en = expand(cto[x[:, 0]])
-                self.cb_lev.append((self.c_lib[a_], self.c_fr[a_], self.c_to[a_], T(x[:, 1]), T(x[:, 2]), ea, en,
-                                    T(x[:, 3].astype(bool), torch.bool)))
+            a0, a1, l0, l1 = int(e_off[k]), int(e_off[k + 1]), int(l_off[k]), int(l_off[k + 1])
+            self._cb_src.append(src_all[a0:a1] if a1 > a0 else None)
+            if a1 > a0:
+                x = cb[a0:a1]
+                a_ = x[:, 0]
+                self.cb_lev.append((self.c_lib[a_], self.c_fr[a_], self.c_to[a_], x[:, 1].contiguous(),
+                                    x[:, 2].contiguous(), ea_all[l0:l1] - a0, en_all[l0:l1], x[:, 3].bool()))
             else:
                 self.cb_lev.append(None)
         if self.lc is not None:
-            self.lc_ex = expand(self.lc[1].cpu().numpy())
+            self.lc_ex = expand(self.lc[1])
         # register checks
         if len(self.k_lib):
             ck = clk_of[self.k_fr]
@@ -2006,7 +2079,7 @@ class Timer:
                 else:
                     self._ws[0].copy_(cw); self._ws[1].copy_(elm); self._ws[2].copy_(self.pi)
                 self.pi = self._ws[2]
-                if self._graph is not None and self.incremental and not getattr(self, '_inc_full', False) \
+                if self.__dict__.get('_timed') and self.incremental and not getattr(self, '_inc_full', False) \
                         and self._inc_choose():
                     self._inc_get()                    # (its one-time index is not part of a run's time)
                     t0 = time.perf_counter()
@@ -2030,6 +2103,7 @@ class Timer:
                 self._graph = g
             self._pos_buf.copy_(pos)
             self._graph.replay()
+            self._timed = True                          # (the incremental re-timing starts from here)
             self._loads(self._cw)                       # eager (a fixed-order sum, not capturable)
             r = self._result(self._g_out[0].clone(), self._g_out[1].clone(), crpr=crpr)
             if replay:
@@ -2469,7 +2543,8 @@ class TimingResult:
     (graph, library, arrivals, parasitics, trees), read only, for research code built on the timer."""
 
     def __init__(self, timer, setup, hold):
-        self.timer = timer
+        self._timer = timer
+        self._gen = timer.__dict__.get('_gen', 0)
         self.setup, self.hold = setup, hold
         self._pin_slack = None
         ep = torch.isfinite(setup)
@@ -2483,6 +2558,15 @@ class TimingResult:
         self.whs = float(min(0.0, h.min().item())) if len(h) else 0.0
         self.ths = float(h.clamp(max=0).sum().item())
         self.hold_violations = int((h < 0).sum().item())
+
+    @property
+    def timer(self):
+        """The Timer of this result; an error once the netlist was edited since (its pins are numbered anew)."""
+        T = self._timer
+        if T.__dict__.get('_gen', 0) != self._gen:
+            raise RuntimeError('this timing result is stale: the netlist was edited since; time the design again '
+                               '(d.timing())')
+        return T
 
     def pin_slack(self):
         """Setup slack of every pin (P,), ps; inf where no constrained path passes: the worst path through the pin,
@@ -2517,7 +2601,7 @@ class TimingResult:
         """The known gaps that affect this timing (a list of str, empty when none): SDC commands not applied, pin
         latencies not modeled, nets with a lumped wire model, a benchmark's Early library not read (hold checks on Late
         delays). Each but the last was also warned when the timer was built."""
-        return list(self.timer.__dict__.get('limitations', []))
+        return list(self._timer.__dict__.get('limitations', []))
 
     def summary(self):
         """WNS / TNS / worst slack / violations / endpoints (setup), WHS / THS / violations (hold), and exact: False

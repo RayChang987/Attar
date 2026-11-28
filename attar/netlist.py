@@ -124,6 +124,19 @@ def library_cells(d, inverting):
     return list(res)
 
 
+class _Names:
+    """Names taken: the design's (a set kept on the design, Design._name_set) and this edit's own."""
+
+    def __init__(self, base):
+        self.base, self.new = base, set()
+
+    def __contains__(self, x):
+        return x in self.new or x in self.base
+
+    def add(self, x):
+        self.new.add(x)
+
+
 class Edit:
     """A batch of netlist edits on a Design (see the module doc). Cells, nets and pins are given by index or by name
     ('inst', 'net', 'inst/PIN'); indices of new cells and nets are returned at once and stay valid after apply()."""
@@ -141,7 +154,7 @@ class Edit:
         self.removed = set()   # cells removed in this edit
         self.pin_map = None    # after apply(): old pin index -> new (-1: the pin is gone)
         self._net_id = None
-        self._names = set(d.names['cells']); self._net_names = None
+        self._names = _Names(d._name_set('cells')); self._net_names = None
         self._joined = {}      # net -> pins that joined it in this edit (some may have left again: checked on use)
         self._clk = None
         self._default_buffer = None
@@ -232,8 +245,8 @@ class Edit:
         if os.path.exists(tj):
             clocks = d._timing_info().get('clocks', {})     # with Design.set_timing's changes
             src = {int(c) for ck in clocks.values() for c in ck.get('sources', [])}
-            pc = d.raw['p_cell']
-            out |= {int(d.p_net[p]) for p in np.nonzero(np.isin(pc, list(src)))[0]}
+            hit = torch.isin(d.p_cell, torch.as_tensor(sorted(src), dtype=d.p_cell.dtype, device=d.device))
+            out |= set(d.p_net[hit].tolist())
         self._clk = out
         return out
 
@@ -275,7 +288,7 @@ class Edit:
         """A new net (no pins yet). Returns its index."""
         self._open()
         if self._net_names is None:
-            self._net_names = set(self.d.names['nets'])
+            self._net_names = _Names(self.d._name_set('nets'))
         if name is None:
             name = self._unique('attar_net', self._net_names)
         elif name in self._net_names:
@@ -475,6 +488,7 @@ class Edit:
                     d.snapshots[k] = (torch.cat([snap[0], T(xy, snap[0].dtype)]),
                                       torch.cat([snap[1], T(o, snap[1].dtype)]), snap[2])
             nm['cells'].extend(c[4] for c in self.cells)
+            d._name_set('cells', added=[c[4] for c in self.cells])
             if getattr(d, '_cell_id', None) is not None:
                 d._cell_id.update({c[4]: self.N0 + i for i, c in enumerate(self.cells)})
         # nets: appended (weight 1, no flags)
@@ -483,6 +497,7 @@ class Edit:
             d.n_weight = torch.cat([d.n_weight, torch.ones(len(self.nets), dtype=d.n_weight.dtype, device=dev)])
             d.n_flags = torch.cat([d.n_flags, torch.zeros(len(self.nets), dtype=d.n_flags.dtype, device=dev)])
             nm['nets'].extend(self.nets)
+            d._name_set('nets', added=self.nets)
         E = self.E0 + len(self.nets)
         # removed cells: tombstones (ASIDE | REMOVED), not placed, no pins (dropped below)
         if self.removed:
@@ -546,7 +561,7 @@ class Edit:
         if 'p_dir' in a and 'pin_direction' in d.manifest:
             d.manifest['pin_direction'] = pin_dir_counts(a['p_dir'], a['n_ptr'])
         d.manifest['netlist_edits'] = d.manifest.get('netlist_edits', 0) + 1
-        d._netlist_changed('the netlist was edited')
+        d._netlist_edited(self)
         return self
 
 

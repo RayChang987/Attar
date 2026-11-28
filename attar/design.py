@@ -701,7 +701,9 @@ class Design:
     def edit(self):
         """A batch of netlist edits (attar.netlist.Edit): `with d.edit() as e:` e.insert_buffer, e.clone, e.add_cell,
         e.add_net, e.connect, e.move; applied when the block ends. New cells and nets are appended (no cell or net
-        index moves); pins are renumbered (e.pin_map); the timer is rebuilt on the next timing()."""
+        index moves); pins are renumbered (e.pin_map). The timer follows the edit in place (attar.timing.inplace: the
+        next timing() re-times the edited nets' cone, bit for bit a new timer); edits it does not cover (clock
+        networks, constant nets, latches, ...) make the next timing() build a new one."""
         from .netlist import Edit
         return Edit(self)
 
@@ -732,6 +734,39 @@ class Design:
             self._timer = None
         if getattr(self, '_gr_timer', None) is not None:
             self._gr_timer[1].release(why)
+        self._gr_timer = None
+
+    def _name_set(self, kind, added=None):
+        """The set of names[kind] ('cells' or 'nets'), kept (netlist edits check new names against it); added: names
+        just appended to names[kind]."""
+        sets = self.__dict__.setdefault('_name_sets', {})
+        names = self.names[kind]
+        hit = sets.get(kind)
+        if hit is not None and added is not None and hit[0] + len(added) == len(names):
+            hit[1].update(added)
+            hit = sets[kind] = (len(names), hit[1])
+        if hit is None or hit[0] != len(names):
+            hit = sets[kind] = (len(names), set(names))
+        return hit[1]
+
+    def _netlist_edited(self, e):
+        """After Edit.apply: the timer follows the edit in place where it can (attar.timing.inplace; the next timing()
+        re-times the edited nets' cone), else it is released as on any netlist change; a global-routing timer is
+        released (route again). _timer_edit: '' when followed in place, else why not."""
+        T = self._timer
+        self._timer_edit = why = 'no timer'
+        if T is not None:
+            from .timing.inplace import update
+            try:
+                why = update(T, e)
+            except Exception:
+                T.release('the netlist was edited'); self._timer = None
+                raise
+            self._timer_edit = why
+            if why:
+                T.release('the netlist was edited'); self._timer = None
+        if getattr(self, '_gr_timer', None) is not None:
+            self._gr_timer[1].release('the netlist was edited')
         self._gr_timer = None
 
     def _netlist_changed(self, why):

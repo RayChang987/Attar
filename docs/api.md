@@ -42,7 +42,7 @@ environment variables.
 | `timing_settings()`, `set_timing(**settings)`, `reset_timing()`, `ideal_clocks(clocks=None)` | edit the timing constraints in memory (the files stay), e.g. `s = d.timing_settings(); s['clocks']['clk']['period'] = 300; d.set_timing(clocks=s['clocks'])` |
 | `propagate_clocks(clocks=None)` | time clocks through their trees (`set_propagated_clock`), with CRPR |
 | `equivalents(cell)`, `resize(cells, masters)` | gate sizing within a master's equivalence class |
-| `edit()` | a `with` block of netlist edits: `insert_buffer`, `clone`, `add_cell`, `add_net`, `connect`, `move`, `remove_cell`; no cell or net index moves |
+| `edit()` | a `with` block of netlist edits: `insert_buffer`, `clone`, `add_cell`, `add_net`, `connect`, `move`, `remove_cell`; no cell or net index moves; the timer follows the edit in place and the next `timing()` re-times the edited nets' cone (bit for bit a new timer; edits on clock networks, constant nets or latches rebuild it) |
 | `debuffer(buffers=True, inverters=True)` | remove buffers and double inversions, as OpenROAD `remove_buffers`; returns counts |
 | `buffers()`, `inverters()` | the library's buffer and inverter cells, smallest first |
 | `macro_grid(mac)`, `tracks()` | positions that put macro pins on tracks; `{(axis, layer): (start, step)}` |
