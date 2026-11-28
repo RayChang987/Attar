@@ -498,11 +498,6 @@ class Timer:
             from .drv import SegSum
             tot = SegSum(d.p_net, self.ev.E)(torch.cat([self.pin_cap, self.pin_cap_min], 1))
             self._iclk_pi.copy_(torch.stack([tot, torch.zeros_like(tot), torch.zeros_like(tot)], -1))
-        b = getattr(self, '_big', None)
-        if b is not None:
-            pins_b = b['pins'].cpu().numpy()
-            b['cap'] = np.concatenate([cap, cap_min], 1)[pins_b]
-            b['rv'] = self.pin_rvia.cpu().numpy()[pins_b]
         self._pin_setup()                               # locations (the master's pin rectangles), into ev.off in place
         self._mp_names = None; self._sink_drv = None
         self._power = None                              # its functions and tables are the old masters' (OpenSTA:
@@ -519,6 +514,7 @@ class Timer:
             if self.__dict__.get('_in_update'):
                 raise RuntimeError('attar.timing: %s read during an in-place update' % name)
             self._materialize()
+            self._prefer_full = True                    # (the levels are read between edits: later edits keep them)
             return getattr(self, name)
         raise AttributeError(name)
 
@@ -527,7 +523,7 @@ class Timer:
         hold it stay valid: same netlist), and run it in full at the last placement (run: the state then matches
         the CPU engine's bit for bit)."""
         d, args = self.d, self._init_args
-        keep = {k: self.__dict__[k] for k in ('_gen', '_state_ver', '_inc_t') if k in self.__dict__}
+        keep = {k: self.__dict__[k] for k in ('_gen', '_state_ver', '_inc_t', '_prefer_full') if k in self.__dict__}
         pos, timed = self.__dict__.get('_last_pos'), self.__dict__.get('_timed', False)
         self.__dict__.clear()
         self.__init__(d, **args)
@@ -1305,7 +1301,8 @@ class Timer:
             self._loc_n, self._loc_ok = locs
             self._pin_key = None
             self._sync_pins()
-        drv = torch.as_tensor(self.net_driver, device=self.dev)
+        drv = self.__dict__.pop('_net_driver_t', None)       # (on the device already: attar.timing.inplace)
+        drv = torch.as_tensor(self.net_driver, device=self.dev) if drv is None else drv
         drv_local = torch.where(drv >= 0, drv - ev.ptr[:-1], torch.full_like(drv, -1))
         self.plan_clk = None
         if self.net_clkrc.any():                    # non-leaf clock nets: their own plan, timed with clock RC
@@ -1323,7 +1320,7 @@ class Timer:
         if (big is not None or self.exact_trees) and steiner_big.available():
             # nets above the GPU buckets: OpenROAD's tree on the host each run (exact), into static buffers; only
             # those that can carry a data arrival (clock nets are ideal, the rest keep the lumped model: unused)
-            ptr, deg = ev.ptr.cpu().numpy(), ev.deg.cpu().numpy()
+            deg = ev.deg.cpu().numpy()
             if self.exact_trees:
                 bn = np.nonzero((drv_local.cpu().numpy() >= 0) & (deg >= 2))[0]
             else:
@@ -1340,14 +1337,14 @@ class Timer:
                 bn = bn[reach[self.net_driver[bn]] & ~self.net_clkrc[bn]]      # (clock RC nets: plan_clk)
             big = torch.as_tensor(bn, device=self.dev)
         if big is not None and len(big) and steiner_big.available():
-            cnt = deg[bn]
-            pins = np.repeat(ptr[bn] - np.concatenate([[0], np.cumsum(cnt)[:-1]]), cnt) + np.arange(int(cnt.sum()))
-            caps = torch.cat([self.pin_cap, self.pin_cap_min], 1).cpu().numpy()
-            pins_t = torch.as_tensor(pins, device=self.dev)
+            cnt = ev.deg[big]                                   # their pins (in net order), on the device
+            tot = int(cnt.sum())
+            start = torch.cumsum(cnt, 0) - cnt
+            pins_t = torch.repeat_interleave(ev.ptr[big] - start, cnt, output_size=tot) + \
+                torch.arange(tot, device=self.dev)
             self._big = {'nets': bn, 'ptr': np.concatenate([[0], np.cumsum(deg[bn])]), 'drv': drv_local.cpu().numpy()[bn],
-                         'cap': caps[pins], 'rv': self.pin_rvia.cpu().numpy()[pins], 'cell': ev.cell[pins_t],
-                         'off': ev.off[pins_t], 'pins': pins_t}
-            self.plan['big_buf'] = (big, pins_t, torch.zeros(len(pins), 4, device=self.dev),
+                         'cell': ev.cell[pins_t], 'off': ev.off[pins_t], 'pins': pins_t}    # (caps: _big_update)
+            self.plan['big_buf'] = (big, pins_t, torch.zeros(tot, 4, device=self.dev),
                                     torch.zeros(len(bn), 4, 3, device=self.dev), torch.zeros(len(bn), device=self.dev))
         elif big is not None and not steiner_big.available():
             self._limit('%d nets above %d pins use a lumped wire model (%s)'
@@ -1534,9 +1531,12 @@ class Timer:
         b = self._big
         _, _, elm_b, pi_b, len_b = self.plan['big_buf']
         pos = self.d.pos if pos is None else pos
+        caps = lambda pins: (torch.cat([self.pin_cap[pins], self.pin_cap_min[pins]], 1).cpu().numpy(),  # noqa: E731
+                             self.pin_rvia[pins].cpu().numpy())
         if nets is None:
             q = torch.round((pos[b['cell']] + b['off']) * self.d.dbu).cpu().numpy()
-            elm, pi, length = steiner_big.pd_rc(q[:, 0], q[:, 1], b['ptr'], b['drv'], b['cap'], b['rv'], self.r_sig,
+            cap, rv = caps(b['pins'])
+            elm, pi, length = steiner_big.pd_rc(q[:, 0], q[:, 1], b['ptr'], b['drv'], cap, rv, self.r_sig,
                                                 self.c_sig, self.d.dbu)
             elm_b.copy_(torch.from_numpy(elm)); pi_b.copy_(torch.from_numpy(pi)); len_b.copy_(torch.from_numpy(length))
             return None
@@ -1548,8 +1548,9 @@ class Timer:
         pin_rows = np.repeat(b['ptr'][k] - np.concatenate([[0], np.cumsum(cnt)[:-1]]), cnt) + np.arange(int(cnt.sum()))
         pr = torch.as_tensor(pin_rows, device=self.dev)
         q = torch.round((pos[b['cell'][pr]] + b['off'][pr]) * self.d.dbu).cpu().numpy()
+        cap, rv = caps(b['pins'][pr])
         elm, pi, length = steiner_big.pd_rc(q[:, 0], q[:, 1], np.concatenate([[0], np.cumsum(cnt)]), b['drv'][k],
-                                            b['cap'][pin_rows], b['rv'][pin_rows], self.r_sig, self.c_sig, self.d.dbu)
+                                            cap, rv, self.r_sig, self.c_sig, self.d.dbu)
         kt = torch.as_tensor(k, device=self.dev)
         elm_b[pr] = torch.from_numpy(elm).to(elm_b); pi_b[kt] = torch.from_numpy(pi).to(pi_b)
         len_b[kt] = torch.from_numpy(length).to(len_b)

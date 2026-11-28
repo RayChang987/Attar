@@ -50,13 +50,14 @@ def _sha256(path):
 def pin_dir_counts(p_dir, n_ptr):
     """Manifest counts for a pin direction array: pins per direction, and nets by their number of drivers."""
     p_dir = np.asarray(p_dir, np.uint8); n_ptr = np.asarray(n_ptr, np.int64)
-    if not (p_dir != D_UNKNOWN).any():                # the source states no directions: nothing to count per net
+    if not len(p_dir) or not (p_dir != D_UNKNOWN).any():   # the source states no directions: nothing per net
         return {'unknown': int(len(p_dir))}
     c = np.concatenate([[0], np.cumsum(p_dir == D_OUT)])     # drivers per net (the pins are in net order)
     drv = c[n_ptr[1:]] - c[n_ptr[:-1]]
     deg = np.diff(n_ptr)
-    return {'sinks': int((p_dir == D_IN).sum()), 'drivers': int((p_dir == D_OUT).sum()),
-            'inout': int((p_dir == D_INOUT).sum()), 'unknown': int((p_dir == D_UNKNOWN).sum()),
+    cnt = np.bincount(p_dir, minlength=max(D_IN, D_OUT, D_INOUT, D_UNKNOWN) + 1)
+    return {'sinks': int(cnt[D_IN]), 'drivers': int(cnt[D_OUT]),
+            'inout': int(cnt[D_INOUT]), 'unknown': int(cnt[D_UNKNOWN]),
             'nets_one_driver': int(((drv == 1) & (deg >= 2)).sum()), 'nets_no_driver': int(((drv == 0) & (deg >= 2)).sum()),
             'nets_multi_driver': int(((drv > 1) & (deg >= 2)).sum())}
 

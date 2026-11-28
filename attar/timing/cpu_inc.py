@@ -117,9 +117,10 @@ class CpuEngine:
             ('wbx', np.full(2 * P, -INF, np.float32), -INF), ('wbn', np.full(2 * P, INF, np.float32), INF))}
         # per pin handle; per net
         self.H = {k: Grow(v, f) for k, v, f in (
-            ('elm', np.zeros((P, 4), np.float32), 0), ('sthr', h(T.tri_sthr, np.float32).reshape(P, 8), 0),
-            ('pin', np.arange(P, dtype=np.int64), -1))}
-        self.h_of_pin = np.arange(P, dtype=np.int64)
+            ('elm', np.zeros((P, 4), np.float32), 0), ('sthr', h(T.tri_sthr, np.float32).reshape(P, 8), 0))}
+        self.h_of_pin = np.arange(P, dtype=np.int64)            # design pin -> handle, on the host and the device
+        self.h_dev = torch.arange(P, device=T.dev)
+        self._pin_dev = None                                    # handle -> design pin (-1: gone), made when read
         self.pi = Grow(h(T.pi, np.float32).reshape(-1, 12), 0)
         self.O = {'val': Grow(np.zeros(0, np.int32), 0), 'next': Grow(np.zeros(0, np.int32), -1)}
         ix1, ix2, val, n32, thr = T.tri_tables
@@ -158,13 +159,21 @@ class CpuEngine:
             setattr(s, k, _ptr(a))
 
     # -- the state ----------------------------------------------------------------------------------------------------
+    def _pins(self):
+        """Handle -> design pin (-1: gone), on the device."""
+        if self._pin_dev is None:
+            pin = torch.full((self.H['elm'].n,), -1, dtype=torch.long, device=self.T.dev)
+            pin[self.h_dev] = torch.arange(len(self.h_dev), device=self.T.dev)
+            self._pin_dev = pin
+        return self._pin_dev
+
     def _mirror(self, pi, elm):
         """Copy the timer's state to the host (after a full run) into the handles' rows."""
         T, R, NT = self.T, self.R, self.NT
-        pin = self.H['pin'].v
-        hs = np.nonzero(pin >= 0)[0]
-        rows_h = np.stack([hs * 2, hs * 2 + 1], 1).reshape(-1)
-        rows_d = torch.as_tensor(np.stack([pin[hs] * 2, pin[hs] * 2 + 1], 1).reshape(-1), device=T.dev)
+        pin = self._pins()
+        hs = torch.nonzero(pin >= 0).flatten()
+        rows_h = torch.stack([hs * 2, hs * 2 + 1], 1).reshape(-1).cpu().numpy()
+        rows_d = torch.stack([pin[hs] * 2, pin[hs] * 2 + 1], 1).reshape(-1)
         g = lambda t, w: t.detach().reshape(-1, w)[rows_d].cpu().numpy()  # noqa: E731
         R['A'].a[rows_h] = g(T.amax, NT); R['Am'].a[rows_h] = g(T.amin, NT)
         R['S'].a[rows_h] = g(T.smax, 1)[:, 0]; R['Sm'].a[rows_h] = g(T.smin, 1)[:, 0]
@@ -180,8 +189,7 @@ class CpuEngine:
         self.pi.reserve(len(pi))
         self.pi.n = max(self.pi.n, len(pi))
         self.pi.a[:len(pi)] = pi.detach().reshape(-1, 12).cpu().numpy()
-        n_to = T.n_to.cpu().numpy()
-        self.H['elm'].a[self.h_of_pin[n_to]] = elm.detach().cpu().numpy()
+        self.H['elm'].a[self.h_dev[T.n_to].cpu().numpy()] = elm.detach().cpu().numpy()
 
     def run(self, dirty, dn, seeds, pi, elm, max_ents):
         """Re-time from the seed rows (design rows, a device tensor) after wires() redid the nets dn. Returns True
@@ -222,9 +230,9 @@ class CpuEngine:
         P2 = T.P * 2
         pk = np.concatenate([R['A'].a[rows], R['Am'].a[rows],
                              np.stack([R['S'].a[rows], R['Sm'].a[rows], R['wbx'].a[rows], R['wbn'].a[rows]], 1)], 1)
-        d_rows = self.H['pin'].a[rows // 2] * 2 + rows % 2
+        rt = torch.from_numpy(rows).to(dev)
+        r_t = self._pins()[rt // 2] * 2 + rt % 2
         pk_t = torch.from_numpy(pk).to(dev)
-        r_t = torch.from_numpy(d_rows).to(dev)
         T.amax.view(P2, NT).index_copy_(0, r_t, pk_t[:, :NT])
         T.amin.view(P2, NT).index_copy_(0, r_t, pk_t[:, NT:2 * NT])
         T.smax.view(-1).index_copy_(0, r_t, pk_t[:, 2 * NT])
@@ -280,7 +288,7 @@ class CpuEngine:
         self.O['next'].append([head.a[i]])
         head.a[i] = n
 
-    def edit(self, e, T, t, lmap, tn, src, newp):
+    def edit(self, e, T, t, lmap, tn, remap, newp):
         """Follow the applied edit e (attar.netlist.Edit; T already in the new pin numbering, attar.timing.inplace):
         handles for the new pins, the removed cells' arcs dead, the new cells' arcs (each combinational arc per
         transition pair its sense and tables allow, as a new timer's stages), the edited nets' loads, a level key
@@ -291,22 +299,21 @@ class CpuEngine:
         a = d.raw
         P0 = e.P0
         pm = np.asarray(e.pin_map, np.int64)
-        P = T.P
-        p_cell, p_mpin = T.p_cell_np, a['p_mpin'].astype(np.int64)
-        p_net = d.p_net.cpu().numpy()
+        p_cell, p_mpin = T.p_cell_np, a['p_mpin']
+        from ..netlist import NetOf
+        p_net = NetOf(a['n_ptr'])                           # (a few pins' nets)
         drv = T.net_driver
         E, L, R, H = self.E, self.L, self.R, self.H
-        # handles: the old pins keep theirs, the new pins get new ones
+        # handles: the old pins keep theirs (remap: Edit.pin_src by runs), the new pins get new ones
         h_old = self.h_of_pin
-        h = np.full(P, -1, np.int64)
-        kept = np.nonzero(pm[:P0] >= 0)[0]
-        h[pm[kept]] = h_old[kept]
-        H['pin'].a[h_old[kept]] = pm[kept]
-        dead_h = h_old[np.nonzero(pm[:P0] < 0)[0]]
-        H['pin'].a[dead_h] = -1
+        dead_h = h_old[np.fromiter(e.dropped, np.int64, len(e.dropped))] if e.dropped else np.zeros(0, np.int64)
         nh = len(newp)
-        hs = np.arange(H['pin'].n, H['pin'].n + nh)
-        H['pin'].append(newp)
+        hs = np.arange(H['elm'].n, H['elm'].n + nh)
+        h = remap(h_old, -1)
+        h[newp] = hs
+        hd = remap(self.h_dev, -1)
+        hd[torch.as_tensor(newp, device=T.dev)] = torch.as_tensor(hs, device=T.dev)
+        self.h_dev, self._pin_dev = hd, None
         H['elm'].append(np.zeros((nh, 4), np.float32))
         H['sthr'].append(T.sink_thr[torch.as_tensor(newp, device=T.dev)].reshape(nh, 8).cpu().numpy())
         h[newp] = hs
@@ -397,11 +404,14 @@ class CpuEngine:
         self.rec_ok = False
         return self._keys(new_rows, e, pm, P0, h, p_net, drv)
 
-    def _driver_row(self, u, h, p_net, drv):
-        """The driver row of load row u (its net's driver, same transition), or -1."""
-        p = int(self.H['pin'].a[u // 2])
-        dp = int(drv[p_net[p]]) if p >= 0 else -1
-        return -1 if dp < 0 else int(h[dp]) * 2 + u % 2
+    def _driver_rows(self, us, h, p_net, drv):
+        """The driver rows of load rows us (their nets' drivers, same transition; -1: none)."""
+        if not len(us):
+            return np.zeros(0, np.int64)
+        us = np.asarray(us, np.int64)
+        p = self._pins()[torch.as_tensor(us // 2, device=self.T.dev)].cpu().numpy()
+        dp = np.where(p >= 0, drv[p_net[np.maximum(p, 0)]], -1)
+        return np.where(dp >= 0, h[np.maximum(dp, 0)] * 2 + us % 2, -1)
 
     def _readers(self, r):
         """The rows whose arcs read row r or one of its loads."""
@@ -426,12 +436,14 @@ class CpuEngine:
         key = self.R['key'].a
         E = self.E
         parents, children, lb, ub = {}, {}, {}, {}
+        fan = {r: [int(E['fi'].a[x]) for x in self._ins(r) if E['alive'].a[x] and E['fi'].a[x] >= 0]
+               for r in new_rows}
+        us = sorted({u for v in fan.values() for u in v})
+        drow = dict(zip(us, self._driver_rows(us, h, p_net, drv).tolist()))
         for r in new_rows:
             ps, lo = set(), -np.inf
-            for x in self._ins(r):
-                if not E['alive'].a[x] or E['fi'].a[x] < 0:
-                    continue
-                dr = self._driver_row(int(E['fi'].a[x]), h, p_net, drv)
+            for u in fan[r]:
+                dr = drow[u]
                 if dr < 0:
                     continue
                 if dr in new_rows:

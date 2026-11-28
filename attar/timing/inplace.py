@@ -70,7 +70,9 @@ def unsupported(T, e, tn, t, funcs, lmap):
         return 'latches'
     if T._lat_at or T._ideal_pin_lat is not None or T.info.get('pin_latency'):
         return 'pin clock latencies'
-    ex_cells = {int(c) for x in T.ex for c in list(x['from']) + list(x['to'])}
+    ex_cells = T.__dict__.get('_ex_cells')                 # (the exceptions' cells: kept, as T.ex)
+    if ex_cells is None:
+        ex_cells = T._ex_cells = {int(c) for x in T.ex for c in list(x['from']) + list(x['to'])}
     if ex_cells & (set(e.removed) | {int(T.p_cell_np[p]) for p in e.moves if p < e.P0}):
         return 'a cell a path delay exception names'
     if len(T.loop_edges[0]) or len(T.loop_edges[1]) or T.n_cycle_edges:
@@ -158,6 +160,8 @@ def light_ok(T):
         return 'not timed yet'
     if bool(T.prop_clk.any()):
         return 'propagated clocks (CRPR)'
+    if T.__dict__.get('_prefer_full'):              # (required times, graph(), ... read after an edit: a rebuild each
+        return 'the levels are read between edits'  # time would cost more than updating them)
     if T.__dict__.get('_cpu') is None:
         if T.__dict__.get('_heavy_stale') or T.__dict__.get('_cpu_failed'):
             return 'no CPU engine'
@@ -465,24 +469,22 @@ def update_light(T, e, tn, t, functions, arc_when, lmap):
     P0, E0 = e.P0, e.E0
     pm = np.asarray(e.pin_map, np.int64)
     pmo = pm[:P0]                                           # old pin -> new pin (-1: gone)
-    p_cell = a['p_cell'].astype(np.int64); p_mpin = a['p_mpin'].astype(np.int64)
+    p_cell = a['p_cell'] if a['p_cell'].dtype == np.int64 else a['p_cell'].astype(np.int64)
+    p_mpin = a['p_mpin']
     P = len(p_cell)
     E = len(a['n_ptr']) - 1
     pdir = a['p_dir'] if 'p_dir' in a else np.full(P, 3)
-    p_net = d.p_net.cpu().numpy()
-    src = np.full(P, -1, np.int64)                          # new pin -> its handle in the edit (old pin, or P0 + j)
-    live = np.nonzero(pm >= 0)[0]
-    src[pm[live]] = live
-    was = src < P0
-    so = np.where(was, src, 0)
+    from ..netlist import NetOf
+    p_net = NetOf(a['n_ptr'])                               # (a few pins' nets)
+    rows = e.pin_runs                                       # a pin-indexed array in the new numbering (by runs)
+    was = rows.was
     newp = np.nonzero(~was)[0]
     drv_t, n_fr_t, n_to_t = T._net_arcs_dev(d.pin_dir, d.p_net, E)
     drv = drv_t.cpu().numpy()
     # reachability (which nets get the exact host tree): the new pins from their nets' drivers (new cells are
     # combinational); an edit that changes an old pin's would change trees elsewhere
     reach_old = T._reachable()
-    reach = np.zeros(P, bool)
-    reach[was] = reach_old[so[was]]
+    reach = rows(reach_old, False)
     cells_new = sorted({int(p_cell[p]) for p in newp})
     for _ in range(len(cells_new) + 1):                     # (new cells feeding new cells: in order)
         for c in cells_new:
@@ -496,16 +498,6 @@ def update_light(T, e, tn, t, functions, arc_when, lmap):
         if p < P0 and q >= 0 and pdir[q] != D_OUT and drv[k] >= 0 and reach[drv[k]] != reach_old[p]:
             return 'a pin moved between nets of different reachability'
     in_sync = C.ver is not None and C.ver == T.__dict__.get('_state_ver', 0)
-    so_t = torch.as_tensor(so, device=dev); was_t = torch.as_tensor(was, device=dev)
-
-    def rows(x, fill):                                      # a pin-indexed array in the new numbering
-        if isinstance(x, torch.Tensor):
-            y = x[so_t]
-            y[~was_t] = fill
-            return y
-        y = x[so]
-        y[~was] = fill
-        return y
     old_state = {k: T.__dict__.get(k) for k in ('amax', 'amin', 'smax', 'smin', '_wb', '_w')}
     # -- the library tables (the used masters changed: Liberty arcs renumbered by lmap)
     info = T.info
@@ -569,6 +561,7 @@ def update_light(T, e, tn, t, functions, arc_when, lmap):
     loc_n, loc_ok = rows(T._loc_n, 0.0), rows(T._loc_ok, False)
     loc_n[nt] = torch.as_tensor(np.nan_to_num(loc), dtype=loc_n.dtype, device=dev)
     loc_ok[nt] = torch.as_tensor(lok, device=dev)
+    T._net_driver_t = drv_t
     T._wire_setup(locs=(loc_n, loc_ok))
     T.limitations = lim + [m for m in T.limitations if m not in lim]
     # -- the levels and stages go (sta.HEAVY); so do the CUDA graph and what was made over the old pins
@@ -598,7 +591,7 @@ def update_light(T, e, tn, t, functions, arc_when, lmap):
     T._timed = True
     T._gen = T.__dict__.get('_gen', 0) + 1
     # -- the CPU engine
-    why = C.edit(e, T, t, lmap, tn, src, newp)
+    why = C.edit(e, T, t, lmap, tn, rows, newp)
     if why:                                                 # (the next run rebuilds the timer)
         T._cpu = None
     elif in_sync:

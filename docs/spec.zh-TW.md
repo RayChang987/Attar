@@ -65,15 +65,16 @@ Attar 的定位是「一致的評估加上可替換的基本引擎」：評估�
 兩種題目：`before_fp`（die、IO、macro 是答案；Attar 不畫電源網）與 `after_fp`（cell 位置是答案，之後 sizing、buffering、
 routing、timing）。引擎與評估器的完整清單與精度見 [features.md](features.md)。再次評估只重算有變動的 net；GPU 上搬動
 cell 後只重算受影響的 timing 範圍（結果與完整重算逐位元相同）：範圍小時在 CPU 上掃（C++ 的延遲計算與 GPU kernel 逐位元
-相同），大時在 GPU 上掃；CPU 與 GPU 的 timer 結果也逐位元相同。netlist 編輯（插 buffer、clone、拆 buffer）後 timer
-原地更新、不重建，下一次 timing 只重算編輯過的 net 的影響範圍（結果與新建的 timer 逐位元相同；動到 clock、constant、
-latch 時才重建）。
+相同），大時在 GPU 上掃；CPU 與 GPU 的 timer 結果也逐位元相同。netlist 編輯（插 buffer、clone、拆 buffer）後由 CPU
+引擎跟著更新（自己不變的 pin 編號、可插入的排序鍵），GPU 的 level 與 stage 結構先丟掉，有人讀或範圍太大時才重建；下一次
+timing 只重算編輯過的 net 的影響範圍（結果與新建的 timer 逐位元相同；動到 clock、constant、latch 時才重建）。jpeg_x20
+插一個 buffer：編輯約 140 ms、timing 約 30 ms。
 
 接下來：
 
-- netlist 編輯的結構更新只跟編輯大小有關：CPU 掃描用自己不變的 pin 編號與可插入的排序鍵，GPU 的 stage 結構等需要完整
-  重算時才重建，讓 1M cell 的單次編輯從秒級降到幾十毫秒。
-- 搬動後剩下的固定成本：`wires()` 約 13 ms、checks 與結果約 6 ms（jpeg_x20）。
+- 編輯後的 required time（`pin_slack`）在 CPU 上增量算，不必重建 level（目前讀了就改回完整更新）；propagated clock
+  （CRPR）下也走 CPU 引擎。
+- 剩下的固定成本：`Edit.apply` 的 O(P) 陣列複製、`wires()` 約 13 ms、checks 與結果約 6 ms（jpeg_x20）。
 - 增量 routing 的 negotiation：重繞的 net 很多時不比全部重繞快；改策略會影響品質，需另行決定。
 - 匯出 Verilog、SDC 與精簡 Liberty，方便和外部 baseline（Rsyn、DREAMPlace 4.0）比較。
 - zoo 的設計註記（是否有 reference placement、contest SDC 下是否違規）。

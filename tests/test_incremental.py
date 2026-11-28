@@ -146,6 +146,8 @@ class InPlaceEditTest(unittest.TestCase):
         T._inc_full = True                              # and a full run of the updated timer
         _same(self, [x.clone() for x in st(d.timing(), T)], b)
         self.assertTrue(np.array_equal(T.level, F.level))
+        T.__dict__.pop('_prefer_full', None)            # (the full run rebuilt the levels: the next edits still go
+                                                        # to the CPU engine)
         F.release('compared')
 
     def _edits(self, dev, n=3):
@@ -182,6 +184,19 @@ class InPlaceEditTest(unittest.TestCase):
         if not torch.cuda.is_available():
             self.skipTest('no GPU')
         self._edits('cuda')
+
+    def test_levels_read_between_edits_keep_them(self):
+        if not torch.cuda.is_available():
+            self.skipTest('no GPU')
+        d = attar.load(MEDIUM, 'cuda', download=False).restore('reference')
+        d.timing(); d.timing()
+        rng = np.random.default_rng(5)
+        for i in range(2):
+            with d.edit() as e:
+                e.insert_buffer(_data_net(d, e, rng))
+            T = d._timer
+            self.assertEqual(bool(T.__dict__.get('_heavy_stale')), i == 0)     # the CPU engine, then the levels
+            d.timing().pin_slack()                      # (required times: the levels)
 
     def test_cpu(self):                                 # (the device changes nothing else: one edit)
         self._edits('cpu', n=1)

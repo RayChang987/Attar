@@ -26,6 +26,17 @@ New
   state is mirrored on the host and the recomputed rows are copied back. Cones over 10,000 arcs (or 5% of the
   design) go to the GPU sweep as before. jpeg_x20, one cell moved: the sweep takes 4-6 ms instead of 21-34 ms, the
   whole `d.timing()` about 25 ms instead of 55-65 ms.
+- Netlist edits no longer rebuild the timer's levels (`attar.timing.inplace.update_light`, `attar.timing.cpu_inc`):
+  on a timed GPU timer the CPU engine follows the edit under its own pin handles (the design renumbers its pins;
+  the engine only remaps its handle maps), adds the new cells' arcs and the edited nets' loads, and gives each new
+  driver a level key between its fanin and its readers, as OpenSTA updates its graph. The levels and stages are
+  dropped and rebuilt only when something reads them (required times, `graph()`, `stages()`) or a run is too
+  large for the CPU (over a fifth of the arcs); once the levels are read between edits, later edits keep them up
+  to date instead. jpeg_x20, one buffer inserted: the edit takes 130-150 ms and the next `d.timing()` 27-30 ms
+  (was 1.3-1.7 s and 65-70 ms; 9-10 s and 2.3 s before in-place edits); the first edit after a full run also
+  builds the engine (about 2 s). Every result is a new timer's bit for bit (tested on aes, NS3K aes, jpeg_x20:
+  buffers, clones, removed buffers, cells moved between edits). Propagated clocks (CRPR) still take the full
+  in-place update.
 - The CPU and the GPU timer give the same bits: the C++ delay calculation keeps the driver waveform in float64
   between an arc and its loads, as the GPU kernels do, and the PyTorch reference, the C++ and the Triton kernels
   agree bit for bit (tested).
@@ -33,6 +44,10 @@ New
 Fixes
 - The driver loads of a timing run (`arrivals().load`, read by `d.drv()` and `d.power()`) are summed in a fixed
   order on the GPU; CUDA's atomic adds made their last bits differ from run to run. They are summed when read.
+- `Design.resize` kept the incremental re-timing's copies of the old Liberty arcs: after the full run that follows
+  a resize, a cone re-timing used the old cells' tables. They are made again.
+- Netlist edits on large designs: `Edit.apply` moves the pin arrays by slices (the stable sort by net moves blocks)
+  and updates the manifest's pin direction counts from what changed; timing.json is read once per design.
 - The GPU delay kernels in float64 used float32 values of OpenSTA's constants (1.4, 0.01, 1e-3, ...: Triton reads a
   float literal as float32) and float32 differences of table axis values, and contracted multiply-adds into FMAs;
   they now use the double constants and separate operations, as OpenSTA on x86. GPU arrivals change in the last

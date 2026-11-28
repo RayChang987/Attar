@@ -174,8 +174,8 @@ def arrays(d, c_master=None):
         t, _ = st.load(os.path.join(d.path, 'timing.safetensors'))
         return t, info.get('functions') or {}, info.get('arc_when') or {}
     from .library import design_arrays
-    cm = d.raw['c_master'] if c_master is None else c_master
-    used = set(np.unique(np.asarray(cm)[np.asarray(cm) >= 0]).tolist())
+    cm = np.asarray(d.raw['c_master'] if c_master is None else c_master)
+    used = set(np.flatnonzero(np.bincount(cm[cm >= 0], minlength=len(d.names['masters']))).tolist())
     # kept on the design: a timer rebuilt after a netlist edit or a resize with the same masters needs the same arrays
     key = (len(d.names['masters']), tuple(sorted(used)))
     hit = getattr(d, '_timing_arrays', None)

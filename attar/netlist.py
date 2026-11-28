@@ -23,7 +23,8 @@ are ideal (pre-CTS), so a buffer there would mean nothing to the timer."""
 import numpy as np
 import torch
 
-from .io.distill import ASIDE, D_IN, D_OUT, FIXED, N_CLOCK, N_REMOVED, PLACED, REMOVED, TERMINAL, pin_dir_counts
+from .io.distill import (ASIDE, D_IN, D_INOUT, D_OUT, D_UNKNOWN, FIXED, N_CLOCK, N_REMOVED, PLACED, REMOVED, TERMINAL,
+                         pin_dir_counts)
 
 
 def _memo(L, kind):
@@ -153,6 +154,7 @@ class Edit:
         self.dropped = set()   # pins of cells removed in this edit
         self.removed = set()   # cells removed in this edit
         self.pin_map = None    # after apply(): old pin index -> new (-1: the pin is gone)
+        self.pin_src = None    # after apply(): new pin index -> old (or P0 + the new pin's handle)
         self._net_id = None
         self._names = _Names(d._name_set('cells')); self._net_names = None
         self._joined = {}      # net -> pins that joined it in this edit (some may have left again: checked on use)
@@ -257,13 +259,49 @@ class Edit:
             k += 1
         return '%s_%d' % (base, k)
 
+    def _dir_counts(self, old, p_dir_old):
+        """The manifest's pin_direction counts after apply (old: before), from what changed: the new and the dropped
+        pins, and the nets they or the moved pins are on (attar.io.distill.pin_dir_counts over the whole netlist
+        gives the same)."""
+        a = self.d.raw
+        if 'unknown' in old and len(old) == 1:              # (no directions stated: nothing per net)
+            return pin_dir_counts(a['p_dir'], a['n_ptr'])
+        out = dict(old)
+        name = {D_IN: 'sinks', D_OUT: 'drivers', D_INOUT: 'inout', D_UNKNOWN: 'unknown'}
+        for q in self.pins:
+            out[name[int(q[2])]] = out.get(name[int(q[2])], 0) + 1
+        for p in self.dropped:
+            k = name[int(p_dir_old[p])]
+            out[k] = out.get(k, 0) - 1
+        nets = set(range(self.E0, self.E0 + len(self.nets))) | {int(q[3]) for q in self.pins}
+        nets |= {int(self._pnet[p]) for p in self.dropped} | set(self.moves.values())
+        nets |= {int(self._pnet[p]) for p in self.moves if p < self.P0}
+
+        def cls(p_dir, n_ptr, ks):
+            c = {'nets_one_driver': 0, 'nets_no_driver': 0, 'nets_multi_driver': 0}
+            for k in ks:
+                if k + 1 >= len(n_ptr):
+                    continue
+                lo, hi = int(n_ptr[k]), int(n_ptr[k + 1])
+                if hi - lo < 2:
+                    continue
+                nd = int((p_dir[lo:hi] == D_OUT).sum())
+                c['nets_one_driver' if nd == 1 else 'nets_no_driver' if nd == 0 else 'nets_multi_driver'] += 1
+            return c
+        before, after = cls(p_dir_old, self._nptr, nets), cls(a['p_dir'], a['n_ptr'], nets)
+        for k in before:
+            out[k] = out.get(k, 0) + after[k] - before[k]
+        return out
+
     def default_buffer(self):
         """The buffer insert_buffer takes by default: the smallest buffer the design already uses (its flow's threshold
         voltage and cell choice), else the library's smallest (d.buffers()[0])."""
         if self._default_buffer is None:          # the design does not change inside an edit: worked out once
             d = self.d
             bufs = d.buffers()
-            used = set(d.names['masters'][m] for m in np.unique(d.raw['c_master']) if m >= 0)
+            cm = np.asarray(d.raw['c_master'])
+            used = set(d.names['masters'][m] for m in np.flatnonzero(np.bincount(cm[cm >= 0],
+                                                                                  minlength=len(d.names['masters']))))
             self._default_buffer = (next((b for b in bufs if b in used), bufs[0] if bufs else None),)
         return self._default_buffer[0]
 
@@ -520,12 +558,15 @@ class Edit:
             keep[np.fromiter(self.dropped, np.int64, len(self.dropped))] = False
         idx = np.nonzero(keep)[0]
         order = idx[np.argsort(net[idx], kind='stable')]
-        self.pin_map = np.full(P1, -1, np.int64); self.pin_map[order] = np.arange(len(order))
+        self.pin_src = order                                 # new pin -> old pin (or P0 + new pin's handle)
+        self.pin_runs = runs = Runs(order, self.P0)          # (the arrays follow by slices)
+        self.pin_map = runs.inverse(P1)
         pc = np.array([q[0] for q in self.pins], np.int64); pm = np.array([q[1] for q in self.pins], np.int64)
         pd = np.array([q[2] for q in self.pins], np.int64)
-        a['p_cell'] = cat('p_cell', pc)[order]; a['p_mpin'] = cat('p_mpin', pm)[order]
+        a['p_cell'] = runs.take(cat('p_cell', pc)); a['p_mpin'] = runs.take(cat('p_mpin', pm))
+        p_dir_old = a.get('p_dir')
         if 'p_dir' in a:
-            a['p_dir'] = cat('p_dir', pd)[order]
+            a['p_dir'] = runs.take(cat('p_dir', pd))
         deg_old = np.concatenate([np.diff(self._nptr), np.zeros(len(self.nets), np.int64)])
         deg_new = np.bincount(net[order], minlength=E)
         a['n_ptr'] = np.concatenate([[0], np.cumsum(deg_new)]).astype(a['n_ptr'].dtype)
@@ -542,11 +583,10 @@ class Edit:
                 ctr = (a['m_size'][a['c_master'][pc]].astype(np.float64) * d.scale) / 2
         else:
             ctr = np.zeros((0, 2))
-        ot = T(order)
-        d.p_cell = torch.cat([d.p_cell, T(pc, d.p_cell.dtype)])[ot]
-        d.pin_dir = torch.cat([d.pin_dir, T(pd, d.pin_dir.dtype)])[ot]
-        d._p_ctr_n = torch.cat([d._p_ctr_n, T(ctr, d._p_ctr_n.dtype)])[ot]
-        d._p_term = torch.cat([d._p_term, torch.zeros(len(self.pins), dtype=torch.bool, device=dev)])[ot]
+        d.p_cell = runs.take(torch.cat([d.p_cell, T(pc, d.p_cell.dtype)]))
+        d.pin_dir = runs.take(torch.cat([d.pin_dir, T(pd, d.pin_dir.dtype)]))
+        d._p_ctr_n = runs.take(torch.cat([d._p_ctr_n, T(ctr, d._p_ctr_n.dtype)]))
+        d._p_term = runs.take(torch.cat([d._p_term, torch.zeros(len(self.pins), dtype=torch.bool, device=dev)]))
         d.n_ptr = T(a['n_ptr'].astype(np.int64))
         deg = d.n_ptr[1:] - d.n_ptr[:-1]
         d.p_net = torch.repeat_interleave(torch.arange(E, device=dev), deg)
@@ -559,10 +599,84 @@ class Edit:
             if key in c:
                 c[key] += n
         if 'p_dir' in a and 'pin_direction' in d.manifest:
-            d.manifest['pin_direction'] = pin_dir_counts(a['p_dir'], a['n_ptr'])
+            d.manifest['pin_direction'] = self._dir_counts(d.manifest['pin_direction'], p_dir_old)
         d.manifest['netlist_edits'] = d.manifest.get('netlist_edits', 0) + 1
         d._netlist_edited(self)
         return self
+
+
+class NetOf:
+    """p_net[pins] from the CSR (n_ptr), for a few pins: no copy of the pin array."""
+
+    def __init__(self, n_ptr):
+        self.n_ptr = n_ptr
+
+    def __getitem__(self, p):
+        return np.searchsorted(self.n_ptr, p, side='right') - 1
+
+
+class Runs:
+    """The pin order after an edit (src: new pin -> its source, an old pin or P0 + a new pin's handle; Edit.pin_src)
+    as runs of consecutive sources: the stable sort by net moves blocks of pins, so arrays follow it by slices
+    (gathering a million elements costs about ten copies). take: an array over the sources (old pins, then the new
+    pins' handles); remap: an array over the old pins only (new pins filled); inverse: Edit.pin_map. With many runs,
+    by gathering."""
+    MAX_RUNS = 4096
+
+    def __init__(self, src, P0):
+        src = np.asarray(src, np.int64)
+        self.src, self.P, self.P0 = src, len(src), P0
+        self.was = was = src < P0
+        brk = np.flatnonzero((np.diff(src) != 1) | (was[1:] != was[:-1])) + 1
+        a, b = np.r_[0, brk], np.r_[brk, len(src)]
+        self.runs = None if len(a) > self.MAX_RUNS else list(zip(a.tolist(), b.tolist(), src[a].tolist()))
+        self._t = {}
+
+    def _gather(self, x, fill):
+        t = isinstance(x, torch.Tensor)
+        if t:
+            key = x.device
+            if key not in self._t:
+                self._t[key] = (torch.as_tensor(self.src, device=x.device), torch.as_tensor(self.was, device=x.device))
+            src, was = self._t[key]
+        else:
+            src, was = self.src, self.was
+        if fill is None:
+            return x[src]
+        y = x[torch.where(was, src, torch.zeros_like(src)) if t else np.where(was, src, 0)]
+        y[~was] = fill
+        return y
+
+    def _apply(self, x, fill):
+        if self.runs is None:
+            return self._gather(x, fill)
+        shape = (self.P,) + tuple(x.shape[1:])
+        y = torch.empty(shape, dtype=x.dtype, device=x.device) if isinstance(x, torch.Tensor) else np.empty(shape, x.dtype)
+        P0 = self.P0
+        for lo, hi, o in self.runs:
+            if fill is not None and o >= P0:
+                y[lo:hi] = fill
+            else:
+                y[lo:hi] = x[o:o + hi - lo]
+        return y
+
+    def take(self, x):
+        return self._apply(x, None)
+
+    def remap(self, x, fill):
+        return self._apply(x, fill)
+
+    __call__ = remap
+
+    def inverse(self, n):
+        """Source -> new pin (-1: dropped), for n sources."""
+        out = np.full(n, -1, np.int64)
+        if self.runs is None:
+            out[self.src] = np.arange(self.P)
+        else:
+            for lo, hi, o in self.runs:
+                out[o:o + hi - lo] = np.arange(lo, hi)
+        return out
 
 
 def check(d):
