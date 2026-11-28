@@ -898,12 +898,16 @@ class Design:
     # -- timing settings: timing.json's constraints, editable in memory ------------------------------------------
     _TIMING_FIXED = ('functions', 'arc_when', 'sources', 'units', 'missing_cells', 'unsupported', 'io_layer')
 
-    def _timing_info(self):
-        """timing.json with this design's in-memory changes (set_timing, propagate_clocks, ideal_clocks)."""
-        with open(os.path.join(self.path, 'timing.json')) as f:
-            info = json.load(f)
-        for k, v in (getattr(self, '_timing_over', None) or {}).items():
-            info[k] = copy.deepcopy(v)
+    def _timing_info(self, keys=None):
+        """timing.json with this design's in-memory changes (set_timing, propagate_clocks, ideal_clocks): a copy
+        (keys: only these entries). The file is read once per design."""
+        raw = self.__dict__.get('_timing_json')
+        if raw is None:
+            with open(os.path.join(self.path, 'timing.json')) as f:
+                raw = self._timing_json = json.load(f)
+        over = getattr(self, '_timing_over', None) or {}
+        ks = raw.keys() | over.keys() if keys is None else keys
+        info = {k: copy.deepcopy(over[k] if k in over else raw[k]) for k in ks if k in over or k in raw}
         return info
 
     def timing_settings(self):

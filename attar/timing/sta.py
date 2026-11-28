@@ -369,6 +369,19 @@ def tree_elmore(p, plan, n_nets, cap, r, c, length, dbu, rcut=0.0, into=None):
     return out, pi, tlen
 
 
+# The timer's structures over its levels and stages (the GPU run, the GPU sweep's index, required times, graph()):
+# after a netlist edit followed in place by the CPU engine (attar.timing.inplace.update_light) they are dropped, and
+# reading any of them rebuilds the timer from the design (Timer._materialize) and runs it in full first.
+HEAVY = frozenset((
+    '_g_edges', '_lq_c', '_sel', 'c_arr', 'c_fr', 'c_lev', 'c_lib', 'c_sense', 'c_sense_lib', 'c_to', 'c_type', 'l_fr',
+    'l_lib', 'l_sense', 'l_to', 'l_type', 'level', 'max_level', 'n_lev',                                  # _set_graph
+    '_cb_src', '_lc_lat', '_lc_src', 'cb_lev', 'in_ix_max', 'in_ix_min', 'in_sl_n', 'in_sl_p', 'in_sl_v', 'in_v_max',
+    'in_v_min', 'lc', 'lc_ex', 'pa',                                                                 # _prepare_static
+    '_tri_k', '_tri_src', 'tri_lev', 'tri_nto', 'tri_sthr', 'tri_tables',                           # _prepare_triton
+    '_cb_fwd', '_lat_pins', '_ld_lc', '_ld_lev',                              # _latch_prepare, pin latencies, loads
+    '_arc_cell', '_arc_flags', '_arcs_all', 'cond_off',                                           # the instance arcs
+    '_rec', '_pa_w'))                                                                          # the last full run's
+
 class Timer:
     """Build once per design (graph, levels, constraints); run() times a placement."""
 
@@ -494,13 +507,35 @@ class Timer:
         self._mp_names = None; self._sink_drv = None
         self._power = None                              # its functions and tables are the old masters' (OpenSTA:
         self._inc_full = True                           # replaceEquivCellAfter -> Power::powerInvalid); the arcs'
-        return True                                     # tables changed: the next run is a full one
+        self._inc = None                                # tables changed: the next run is a full one, and the
+        self._cpu = None                                # incremental indices (copies of the arcs) are made again
+        return True
 
     def __getattr__(self, name):
         stale = self.__dict__.get('_stale')
         if stale is not None:
             raise RuntimeError('this timing result is stale: %s since; time the design again (d.timing())' % stale)
+        if name in HEAVY and self.__dict__.get('_heavy_stale'):
+            if self.__dict__.get('_in_update'):
+                raise RuntimeError('attar.timing: %s read during an in-place update' % name)
+            self._materialize()
+            return getattr(self, name)
         raise AttributeError(name)
+
+    def _materialize(self, run=True):
+        """Build the timer again from the design (its levels and stages: HEAVY), keeping its identity (results that
+        hold it stay valid: same netlist), and run it in full at the last placement (run: the state then matches
+        the CPU engine's bit for bit)."""
+        d, args = self.d, self._init_args
+        keep = {k: self.__dict__[k] for k in ('_gen', '_state_ver', '_inc_t') if k in self.__dict__}
+        pos, timed = self.__dict__.get('_last_pos'), self.__dict__.get('_timed', False)
+        self.__dict__.clear()
+        self.__init__(d, **args)
+        self.__dict__.update(keep)
+        self._state_ver = keep.get('_state_ver', 0) + 1
+        self._materialized = self.__dict__.get('_materialized', 0) + 1
+        if run and timed:
+            self.run(pos)
 
     def __init__(self, d, parasitics='placement', exact_trees=True, precision='double', routes=None, via_res=None):
         """parasitics: 'placement' (estimate_parasitics -placement: Steiner trees at the placement) or
@@ -514,6 +549,8 @@ class Timer:
         'retry' (float32, failing lanes in float64) or 'single'."""
         d.require('sta')
         self.d = d
+        self._init_args = dict(parasitics=parasitics, exact_trees=exact_trees, precision=precision, routes=routes,
+                               via_res=via_res)
         self.exact_trees = exact_trees
         self.precision = precision
         self.dev = dev = d.device
@@ -778,6 +815,18 @@ class Timer:
         sink = (pdir == D_IN) | (pdir == D_INOUT) | (pdir == 3)
         sink &= ~is_drv & (drv[p_net] >= 0)
         n_to = np.nonzero(sink)[0]
+        return drv, drv[p_net[n_to]], n_to
+
+    @staticmethod
+    def _net_arcs_dev(pdir, p_net, E):
+        """_net_arcs on the device (pdir, p_net: tensors): (driver per net, net arc drivers, net arc sinks)."""
+        is_drv = pdir == D_OUT
+        one = torch.bincount(p_net[is_drv], minlength=E) == 1
+        drv = torch.full((E,), -1, dtype=torch.long, device=p_net.device)
+        m = is_drv & one[p_net]
+        drv[p_net[m]] = torch.nonzero(m).flatten()
+        sink = ((pdir == D_IN) | (pdir == D_INOUT) | (pdir == 3)) & ~is_drv & (drv[p_net] >= 0)
+        n_to = torch.nonzero(sink).flatten()
         return drv, drv[p_net[n_to]], n_to
 
     def _set_graph(self, n_fr, n_to, p_net, loop_net, lev=None):
@@ -1452,7 +1501,11 @@ class Timer:
 
     def _reachable(self):
         """Pins a data arrival can reach (structural): from launch arcs, constrained inputs and the input ports a
-        path delay exception starts from (set_max_delay -from), over net and combinational arcs, level by level."""
+        path delay exception starts from (set_max_delay -from), over net and combinational arcs, level by level.
+        Kept (_reach) until the graph changes (attar.timing.inplace: dropped, or carried to the new pins)."""
+        r = self.__dict__.get('_reach')
+        if r is not None:
+            return r
         g_fr, g_to, seeds = self._g_edges
         dev = self.dev
         T = lambda x: torch.as_tensor(np.asarray(x, np.int64), device=dev)  # noqa: E731
@@ -1469,7 +1522,8 @@ class Timer:
         for a, b in zip(bounds[:-1], bounds[1:]):
             if b > a:
                 reach.scatter_reduce_(0, g_to[a:b], reach[g_fr[a:b]], 'amax')
-        return reach.cpu().numpy() > 0
+        self._reach = reach.cpu().numpy() > 0
+        return self._reach
 
     def _big_update(self, pos, nets=None):
         """The large nets' parasitics at pos, on the host (attar.timing.steiner_big), into plan['big_buf']. nets: a
@@ -2064,6 +2118,11 @@ class Timer:
         computation is recorded once as a CUDA graph and replayed (positions copied into a static buffer).
         crpr: with propagated clocks, remove clock reconvergence pessimism from register checks (OpenSTA's default,
         attar.timing.crpr; after the replay, eager); False: as OpenSTA's sta::set_crpr_enabled 0."""
+        if self.__dict__.get('_heavy_stale'):              # after netlist edits followed by the CPU engine
+            r = self._run_light(pos, crpr)
+            if r is not None:
+                return r
+            self._materialize(run=False)                    # (then a full run, below)
         pos = self.d.pos if pos is None else pos
         self._last_pos = pos.detach().clone()          # the run's placement (TimingResult.parasitics / trees)
         self._sync_pins()
@@ -2116,6 +2175,34 @@ class Timer:
     incremental = True          # run(): after a full run, re-time only the cone of the nets whose parasitics changed
     INC_PROBE = 16              # with incremental re-timing slower than a full run on average: try it every so often
 
+    def _run_light(self, pos, crpr):
+        """A run while the levels and stages are dropped (attar.timing.inplace.update_light): the wires of the
+        changed nets, the CPU engine's re-timing of their cone, the checks. None where it cannot (no engine, too
+        many nets changed, an input-port net changed, a cone over a fifth of the arcs): the caller rebuilds."""
+        C = self.__dict__.get('_cpu')
+        if C is None or not self.__dict__.get('_timed') or self.parasitics != 'placement' or \
+                self.__dict__.get('_inc_full'):
+            return None
+        pos = self.d.pos if pos is None else pos
+        self._last_pos = pos.detach().clone()
+        self._sync_pins()
+        cw, elm = self.wires(pos)
+        dirty = self._wires_dirty
+        if dirty is None:
+            return None
+        self._elm, self._cw = elm, cw
+        self._loads(cw)
+        dn = torch.nonzero(dirty).flatten()
+        if len(dn):
+            if bool(dirty[self._port_net].any()):
+                return None
+            drv = torch.as_tensor(self.net_driver, device=self.dev)[dn]
+            drv = drv[drv >= 0]
+            seeds = torch.cat([drv * 2, drv * 2 + 1])
+            if not C.run(dirty, dn, seeds, self.pi, elm, max(C.MAX_ENTRIES, C.n_alive() // 5)):
+                return None
+        return self._result(*self._checks(), crpr=crpr)
+
     def _inc_time(self, kind, sec):
         """Running averages of the incremental and the full runs' times (which one run() picks; both give the same
         result bit for bit)."""
@@ -2133,6 +2220,24 @@ class Timer:
             t['skip'] = 0
             return True
         return False
+
+    def _cpu_engine(self, inc):
+        """The CPU sweep's engine (attar.timing.cpu_inc.CpuEngine), made from the GPU index inc on its second
+        re-timing (its host copies cost about a hundred GPU sweeps of a small cone: an index used once keeps the GPU
+        sweep); None before, and where it cannot run (no compiler; a delay model in float32: only the float64
+        kernels have a CPU twin)."""
+        c = self.__dict__.get('_cpu')
+        if c is not None or self.precision != 'double' or self.__dict__.get('_cpu_failed'):
+            return c
+        inc.runs = inc.__dict__.get('runs', 0) + 1
+        if inc.runs < 2:
+            return None
+        from .cpu_inc import CpuEngine
+        try:
+            c = self._cpu = CpuEngine(inc)
+        except OSError:                                 # (no compiler: the GPU sweep only)
+            self._cpu_failed = True
+        return c
 
     def _inc_get(self):
         inc = getattr(self, '_inc', None)

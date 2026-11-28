@@ -48,11 +48,12 @@ class IncrementalTimingTest(unittest.TestCase):
         inc = T._inc_get()
         self.assertTrue(inc.ok, inc.why)
         if sweep == 'gpu':
-            inc.cpu = None
+            T._cpu_failed = True                        # (no CPU engine: the GPU sweep)
+            T._cpu = None
         else:
-            inc.__dict__.pop('cpu', None)
-            inc.runs = 1                                # (the CPU sweep is made on an index's second re-timing)
-            self.assertIsNotNone(inc._cpu_get())
+            T.__dict__.pop('_cpu_failed', None)
+            inc.runs = 1                                # (the CPU engine is made on an index's second re-timing)
+            self.assertIsNotNone(T._cpu_engine(inc))
         used = 0
         for k, seed in ((1, 1), (3, 2), (10, 3)):
             self._move(k, seed)
@@ -66,7 +67,7 @@ class IncrementalTimingTest(unittest.TestCase):
                 self.assertTrue(bool(((x == y) | (torch.isnan(x) & torch.isnan(y))).all()))
         self.assertGreater(used, 0)
         self.assertLess(inc.last['entries'], inc.n_ent)
-        inc.__dict__.pop('cpu', None)
+        T.__dict__.pop('_cpu_failed', None)
 
     def test_a_cone_equals_a_full_run_cpu_sweep(self):
         self._cone_equals_a_full_run('cpu')
@@ -123,13 +124,19 @@ def _data_net(d, e, rng):
 
 
 class InPlaceEditTest(unittest.TestCase):
-    """insert_buffer, clone, and a buffer removed: the timer is not rebuilt, and its timing (the cone re-timed on the
-    GPU, or a full run) is a new timer's."""
+    """insert_buffer, clone, and a buffer removed: the timer is not rebuilt, and its timing is a new timer's: on the
+    GPU the CPU engine follows the edit (the levels and stages dropped: attar.timing.inplace.update_light) and
+    re-times the cone; a full run then rebuilds them; on the CPU every structure is updated."""
 
     def _check(self, d):
         T = d._timer
         self.assertEqual(d._timer_edit, '')
+        if d.device.type == 'cuda':
+            self.assertTrue(T.__dict__.get('_heavy_stale'))
+            self.assertIsNotNone(T.__dict__.get('_cpu'))
         r1 = d.timing()
+        if d.device.type == 'cuda':
+            self.assertTrue(T.__dict__.get('_heavy_stale'))     # (the run was the engine's)
         self.assertIs(d._timer, T)
         st = lambda r, T: [r.setup, r.hold, T.amax, T.amin, T.smax, T.smin, T.load, T.load_min]  # noqa: E731
         a = [x.clone() for x in st(r1, T)]

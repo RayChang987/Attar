@@ -52,9 +52,8 @@ def pin_dir_counts(p_dir, n_ptr):
     p_dir = np.asarray(p_dir, np.uint8); n_ptr = np.asarray(n_ptr, np.int64)
     if not (p_dir != D_UNKNOWN).any():                # the source states no directions: nothing to count per net
         return {'unknown': int(len(p_dir))}
-    drv = np.zeros(len(n_ptr) - 1, np.int64)
-    if len(p_dir):
-        np.add.at(drv, np.repeat(np.arange(len(n_ptr) - 1), np.diff(n_ptr)), (p_dir == D_OUT).astype(np.int64))
+    c = np.concatenate([[0], np.cumsum(p_dir == D_OUT)])     # drivers per net (the pins are in net order)
+    drv = c[n_ptr[1:]] - c[n_ptr[:-1]]
     deg = np.diff(n_ptr)
     return {'sinks': int((p_dir == D_IN).sum()), 'drivers': int((p_dir == D_OUT).sum()),
             'inout': int((p_dir == D_INOUT).sum()), 'unknown': int((p_dir == D_UNKNOWN).sum()),

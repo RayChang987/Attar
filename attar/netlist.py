@@ -243,7 +243,7 @@ class Edit:
         out = set(np.nonzero(d.raw['n_flags'] & N_CLOCK)[0].tolist())
         tj = os.path.join(d.path, 'timing.json')
         if os.path.exists(tj):
-            clocks = d._timing_info().get('clocks', {})     # with Design.set_timing's changes
+            clocks = d._timing_info(('clocks', )).get('clocks', {})     # with Design.set_timing's changes
             src = {int(c) for ck in clocks.values() for c in ck.get('sources', [])}
             hit = torch.isin(d.p_cell, torch.as_tensor(sorted(src), dtype=d.p_cell.dtype, device=d.device))
             out |= set(d.p_net[hit].tolist())

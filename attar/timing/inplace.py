@@ -63,9 +63,10 @@ def unsupported(T, e, tn, t, funcs, lmap):
     """Why the timer cannot follow the applied edit e in place ('' when it can). tn: touched_nets(e); t, funcs: the
     new arrays and functions (ir.arrays); lmap: lib_map(T, t)."""
     d = T.d
+    stale = T.__dict__.get('_heavy_stale', False)          # (the levels and stages dropped: update_light)
     if T.parasitics != 'placement':
         return 'global-routing parasitics'
-    if T._lq_n or len(T._lq_c) or T._arc_flags['ldq'].any():
+    if T._lq_n or (not stale and (len(T._lq_c) or T._arc_flags['ldq'].any())):
         return 'latches'
     if T._lat_at or T._ideal_pin_lat is not None or T.info.get('pin_latency'):
         return 'pin clock latencies'
@@ -75,15 +76,18 @@ def unsupported(T, e, tn, t, funcs, lmap):
     if len(T.loop_edges[0]) or len(T.loop_edges[1]) or T.n_cycle_edges:
         return 'combinational loops'
     a = d.raw
-    cm = a['c_master'].astype(np.int64)
+    cm = a['c_master']
     for m in {int(c[0]) for c in e.cells}:
         if not _comb_master(t, m, funcs):
             return 'a new cell that is not combinational (%s)' % d.names['masters'][m]
-    if e.removed:                                   # (their arcs as the timer has them; a tie cell: a constant net)
+    if e.removed and stale:                         # (their masters' arcs)
+        if not all(np.isin(t['a_type'][t['a_master'] == int(cm[c])], (T_COMB, T_TRISTATE)).all() for c in e.removed):
+            return 'a removed cell that is not combinational'
+    elif e.removed:                                 # (their arcs as the timer has them; a tie cell: a constant net)
         gone = np.isin(T._arc_cell, np.fromiter(e.removed, np.int64))
         if not np.isin(T._arcs_all[3][gone], (T_COMB, T_TRISTATE)).all():
             return 'a removed cell that is not combinational'
-    if lmap is not None:
+    if lmap is not None and not stale:              # (stale: a master's block goes only with its last instance)
         lib_id, fr, to = T._arcs_all[:3]
         keep = (e.pin_map[fr] >= 0) & (e.pin_map[to] >= 0)
         if (lmap[lib_id[keep]] < 0).any():
@@ -107,13 +111,13 @@ def unsupported(T, e, tn, t, funcs, lmap):
         if (cm[T.p_cell_np[drv[drv >= 0]]] < 0).any():              # (IO pins have no master)
             return 'a net an input port drives'
     # after the edit (the design's numbering)
-    nptr = a['n_ptr'].astype(np.int64)
-    pdir = a['p_dir'].astype(np.int64) if 'p_dir' in a else np.full(len(a['p_cell']), 3)
+    nptr = a['n_ptr']
+    pdir = a['p_dir'] if 'p_dir' in a else None
     for k in tn.tolist():
-        ps = np.arange(nptr[k], nptr[k + 1])
+        ps = np.arange(int(nptr[k]), int(nptr[k + 1]))
         if not len(ps):
             continue
-        dr = ps[pdir[ps] == D_OUT]
+        dr = ps[pdir[ps] == D_OUT] if pdir is not None else ps[:0]
         if len(dr) != 1:
             return 'a net with several or no drivers'
         if a['p_mpin'][dr[0]] < 0:
@@ -123,13 +127,53 @@ def unsupported(T, e, tn, t, funcs, lmap):
 
 def update(T, e):
     """Follow the applied edit e in place. Returns '' when done, else why not: the caller then drops the timer (it
-    is unchanged, except after an edit that closed a combinational loop, found once the levels are made)."""
+    is unchanged, except after an edit that closed a combinational loop, found once the levels are made). With the
+    CPU engine (a timed GPU timer; made here on the first edit) the update is update_light's, else every structure
+    is made again (the levels and stages included)."""
     tn = touched_nets(e)
     t, functions, arc_when = timing_mod.arrays(T.d)
     lmap = lib_map(T, t)
     why = unsupported(T, e, tn, t, functions, lmap)
     if why:
         return why
+    stale = T.__dict__.get('_heavy_stale', False)
+    why = light_ok(T)
+    if not why:
+        T._in_update = True
+        try:
+            why = update_light(T, e, tn, t, functions, arc_when, lmap)
+        finally:
+            T.__dict__.pop('_in_update', None)
+        return why
+    if stale:                                       # (no levels to update: a new timer)
+        return why
+    return _update_full(T, e, tn, t, functions, arc_when, lmap)
+
+
+def light_ok(T):
+    """Why the CPU engine cannot follow edits for this timer ('' when it can: it is then made here if needed)."""
+    if T.dev.type != 'cuda' or T.triton is None or not T.fused or T.precision != 'double':
+        return 'no fused float64 GPU kernels'
+    if not T.__dict__.get('_timed'):
+        return 'not timed yet'
+    if bool(T.prop_clk.any()):
+        return 'propagated clocks (CRPR)'
+    if T.__dict__.get('_cpu') is None:
+        if T.__dict__.get('_heavy_stale') or T.__dict__.get('_cpu_failed'):
+            return 'no CPU engine'
+        inc = T._inc_get()
+        if not inc.ok:
+            return inc.why
+        from .cpu_inc import CpuEngine
+        try:
+            T._cpu = CpuEngine(inc)
+        except OSError:
+            T._cpu_failed = True
+            return 'no CPU engine (no compiler)'
+    return ''
+
+
+def _update_full(T, e, tn, t, functions, arc_when, lmap):
     d, dev = T.d, T.dev
     a = d.raw
     P0, E0 = e.P0, e.E0
@@ -243,6 +287,7 @@ def update(T, e):
     if T.n_cycle_edges:                                 # (a new timer breaks it where OpenSTA does: _loop_edges)
         return 'the edit closed a combinational loop'
     lim = list(T.limitations)
+    T.__dict__.pop('_reach', None)                      # (made again from the new levels by _wire_setup)
     T._prepare_static()
     T._big = None                                       # (the old one's pins: _wire_setup makes it again)
     loc = timing_mod.pin_locations(d)[p_mpin[newp]] if len(newp) else np.zeros((0, 2))
@@ -254,7 +299,7 @@ def update(T, e):
     T.limitations = lim + [m for m in T.limitations if m not in lim]
     if T.triton is not None:
         T._prepare_triton()
-    for k in ('_graph', '_ws', '_inc', '_crpr', '_power', '_load_seg', '_mp_names', '_sink_drv', '_g_out',
+    for k in ('_graph', '_ws', '_inc', '_cpu', '_crpr', '_power', '_load_seg', '_mp_names', '_sink_drv', '_g_out',
               '_pos_buf'):
         T.__dict__[k] = None
     _carry(T, old, rows, amap, tn, n_fr, n_to, pmo)
@@ -404,3 +449,159 @@ def _carry(T, old, rows, amap, tn, n_fr, n_to, pmo):
     force[torch.as_tensor(tn, device=dev)] = True
     T._force_dirty = force
     T._timed = True
+
+
+def update_light(T, e, tn, t, functions, arc_when, lmap):
+    """Follow the applied edit e with what the next run needs, as OpenSTA updates its graph: the pin-indexed arrays
+    (renumbered: Edit.pin_map), the nets, the checks' pins, the wire model, the device state; the CPU engine adds the
+    new cells' arcs and the edited nets' loads under its own pin handles (attar.timing.cpu_inc). The levels and
+    stages (sta.HEAVY) are dropped: reading them rebuilds the timer (Timer._materialize), and so does a run the
+    engine cannot take (Timer._run_light). Returns '' (done) or why not (before any change: the caller drops the
+    timer)."""
+    from .sta import HEAVY
+    d, dev = T.d, T.dev
+    a = d.raw
+    C = T._cpu
+    P0, E0 = e.P0, e.E0
+    pm = np.asarray(e.pin_map, np.int64)
+    pmo = pm[:P0]                                           # old pin -> new pin (-1: gone)
+    p_cell = a['p_cell'].astype(np.int64); p_mpin = a['p_mpin'].astype(np.int64)
+    P = len(p_cell)
+    E = len(a['n_ptr']) - 1
+    pdir = a['p_dir'] if 'p_dir' in a else np.full(P, 3)
+    p_net = d.p_net.cpu().numpy()
+    src = np.full(P, -1, np.int64)                          # new pin -> its handle in the edit (old pin, or P0 + j)
+    live = np.nonzero(pm >= 0)[0]
+    src[pm[live]] = live
+    was = src < P0
+    so = np.where(was, src, 0)
+    newp = np.nonzero(~was)[0]
+    drv_t, n_fr_t, n_to_t = T._net_arcs_dev(d.pin_dir, d.p_net, E)
+    drv = drv_t.cpu().numpy()
+    # reachability (which nets get the exact host tree): the new pins from their nets' drivers (new cells are
+    # combinational); an edit that changes an old pin's would change trees elsewhere
+    reach_old = T._reachable()
+    reach = np.zeros(P, bool)
+    reach[was] = reach_old[so[was]]
+    cells_new = sorted({int(p_cell[p]) for p in newp})
+    for _ in range(len(cells_new) + 1):                     # (new cells feeding new cells: in order)
+        for c in cells_new:
+            ps = newp[p_cell[newp] == c]
+            ins = ps[pdir[ps] != D_OUT]
+            r = bool(np.any([reach[drv[p_net[p]]] if drv[p_net[p]] >= 0 else False for p in ins]))
+            for p in ps:
+                reach[p] = r if pdir[p] == D_OUT else (reach[drv[p_net[p]]] if drv[p_net[p]] >= 0 else False)
+    for p, k in e.moves.items():                            # an old pin on another net: same reachability
+        q = int(pm[p])
+        if p < P0 and q >= 0 and pdir[q] != D_OUT and drv[k] >= 0 and reach[drv[k]] != reach_old[p]:
+            return 'a pin moved between nets of different reachability'
+    in_sync = C.ver is not None and C.ver == T.__dict__.get('_state_ver', 0)
+    so_t = torch.as_tensor(so, device=dev); was_t = torch.as_tensor(was, device=dev)
+
+    def rows(x, fill):                                      # a pin-indexed array in the new numbering
+        if isinstance(x, torch.Tensor):
+            y = x[so_t]
+            y[~was_t] = fill
+            return y
+        y = x[so]
+        y[~was] = fill
+        return y
+    old_state = {k: T.__dict__.get(k) for k in ('amax', 'amin', 'smax', 'smin', '_wb', '_w')}
+    # -- the library tables (the used masters changed: Liberty arcs renumbered by lmap)
+    info = T.info
+    tmin = T._min_arrays(d, t) if T.lmin else None
+    if lmap is not None:
+        info['functions'], info['arc_when'] = functions, arc_when
+        T._set_tables(t, tmin)
+        if T.host is not None:
+            T.host_tables = T.host.Tables(T.t_ix1, T.t_ix2, T.t_val, T.t_n)
+        if T.triton is not None:
+            T.t_n32 = T.t_n.to(torch.int32).contiguous()
+        if len(T.k_lib):
+            T.k_lib = torch.as_tensor(lmap, device=dev)[T.k_lib]
+    # -- pins
+    cap_n, capmin_n, ctp_n, sthr_n = T._pin_library(t, info, p_cell[newp], p_mpin[newp])
+    if tmin is not None:
+        capmin_n = T._pin_library(tmin, info, p_cell[newp], p_mpin[newp])[1]
+    rv_n = T._pin_vias(d, info, info.get('rc') or {}, p_cell[newp], p_mpin[newp], np.zeros(len(newp), bool))
+    nt = torch.as_tensor(newp, device=dev)
+
+    def pin_data(x, new):
+        y = rows(x, 0)
+        y[nt] = torch.as_tensor(new, device=dev, dtype=y.dtype)
+        return y
+    T.pin_cap, T.pin_cap_min = pin_data(T.pin_cap, cap_n), pin_data(T.pin_cap_min, capmin_n)
+    T.pin_ctp, T.sink_thr = pin_data(T.pin_ctp, ctp_n), pin_data(T.sink_thr, sthr_n)
+    T.pin_rvia = pin_data(T.pin_rvia, rv_n)
+    T.clk_of, T.par = rows(T.clk_of, -1), rows(T.par, 0)
+    T.pclk, T.iclk = rows(T.pclk, False), rows(T.iclk, False)
+    T.P, T.p_cell_np, T.pin_net = P, p_cell, d.p_net
+    T._reach = reach
+    # -- nets
+    T.net_driver = drv
+    T.const_net = np.concatenate([T.const_net, np.full(E - E0, -1, np.int64)])
+    T.net_clkrc = np.concatenate([T.net_clkrc, np.zeros(E - E0, bool)])
+    T.net_iclk = np.zeros(E, bool)
+    T.net_iclk[drv >= 0] = T.iclk[drv[drv >= 0]]
+    T.drv_nets = torch.nonzero(drv_t >= 0).flatten(); T.drv_pins = drv_t[T.drv_nets]
+    T.n_fr, T.n_to = n_fr_t, n_to_t
+    T.n_net = d.p_net[n_to_t]
+    pnet = np.zeros(E, bool)
+    pnet[drv >= 0] = p_mpin[drv[drv >= 0]] < 0
+    T._port_net = torch.as_tensor(pnet, device=dev)          # nets an input port drives (the GPU's port wires)
+    # -- ports, constraints and checks: pin numbers
+    pmo_t = torch.as_tensor(pmo, device=dev)
+    T._psrc = pmo[T._psrc]
+    T.in_delay = [(int(pmo[p]), ci, x) for p, ci, x in T.in_delay]
+    T.out_delay = [(int(pmo[p]), ci, x) for p, ci, x in T.out_delay]
+    same = T.in_slew_min is T.in_slew
+    T.in_slew = {int(pmo[p]): v for p, v in T.in_slew.items()}
+    T.in_slew_min = T.in_slew if same else {int(pmo[p]): v for p, v in T.in_slew_min.items()}
+    T.ex_ports = {int(pmo[p]) for p in T.ex_ports}
+    if len(T.k_lib):
+        T.k_fr, T.k_to = pmo_t[T.k_fr], pmo_t[T.k_to]
+    T.op_su, T.op_ho, T.op_ex = ((pmo_t[o[0]],) + tuple(o[1:]) if len(o[0]) else o for o in (T.op_su, T.op_ho, T.op_ex))
+    # -- the wire model
+    lim = list(T.limitations)
+    T._big = None
+    loc = timing_mod.pin_locations(d)[p_mpin[newp]] if len(newp) else np.zeros((0, 2))
+    lok = np.isfinite(loc).all(1)
+    loc_n, loc_ok = rows(T._loc_n, 0.0), rows(T._loc_ok, False)
+    loc_n[nt] = torch.as_tensor(np.nan_to_num(loc), dtype=loc_n.dtype, device=dev)
+    loc_ok[nt] = torch.as_tensor(lok, device=dev)
+    T._wire_setup(locs=(loc_n, loc_ok))
+    T.limitations = lim + [m for m in T.limitations if m not in lim]
+    # -- the levels and stages go (sta.HEAVY); so do the CUDA graph and what was made over the old pins
+    for k in HEAVY:
+        T.__dict__.pop(k, None)
+    T._heavy_stale = True
+    for k in ('_graph', '_ws', '_inc', '_crpr', '_power', '_load_seg', '_mp_names', '_sink_drv', '_g_out',
+              '_pos_buf', '_load', '_load_cw'):
+        T.__dict__.pop(k, None)
+    T._graph = None; T._ws = None; T._inc = None
+    # -- the device state in the new numbering; the edited nets' wires redone at the next run
+    T.amax, T.amin = rows(old_state['amax'], -INF), rows(old_state['amin'], INF)
+    T.smax, T.smin = rows(old_state['smax'], 0.0), rows(old_state['smin'], 0.0)
+    so_rows = lambda x, fill: rows(x[:len(x) // 2 * 2].view(-1, 2), fill).reshape(-1)  # noqa: E731
+    T._wb = (so_rows(old_state['_wb'][0], -INF), so_rows(old_state['_wb'][1], INF))
+    w = old_state['_w']
+    if w is not None:
+        grow = lambda x: torch.cat([x, torch.zeros(E - len(x), *x.shape[1:], dtype=x.dtype, device=dev)])  # noqa: E731
+        T._w = {'p': rows(w['p'], float('nan')), 'caps': rows(w['caps'], float('nan')),
+                'rv': rows(w['rv'], float('nan'))}
+        for key in ('main', 'clk'):
+            v = w[key]
+            T._w[key] = None if v is None else (rows(v[0], 0.0), grow(v[1]), grow(v[2]))
+    force = torch.zeros(E, dtype=torch.bool, device=dev)
+    force[torch.as_tensor(tn, device=dev)] = True
+    T._force_dirty = force
+    T._timed = True
+    T._gen = T.__dict__.get('_gen', 0) + 1
+    # -- the CPU engine
+    why = C.edit(e, T, t, lmap, tn, src, newp)
+    if why:                                                 # (the next run rebuilds the timer)
+        T._cpu = None
+    elif in_sync:
+        T._state_ver = T.__dict__.get('_state_ver', 0) + 1
+        C.ver = T._state_ver
+    return ''
