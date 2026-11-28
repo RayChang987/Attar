@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+New
+- Incremental re-timing on the GPU (`attar.timing.incremental`): after cells move, `d.timing()` re-times only the
+  cone of the nets whose parasitics changed, as OpenSTA's incremental search: the drivers of those nets, then only
+  the arcs whose input arrival or slew changed, level by level, until nothing changes. Each recomputed pin takes
+  every arc into it with the same kernels as a full run, so the result is bit for bit a full run's (tested on
+  ASAP7, Nangate45, NS3K, ICCAD 2015 and 2025 designs). The timer keeps the average time of both kinds of run and
+  uses the faster one. Moving 1 / 10 / 100 cells of jpeg_x20 (1.05M cells, RTX 4090): 31-47 / 72-81 / 104-160 ms
+  instead of 480 ms; superblue18 34-40 / 57-61 / 142-178 ms instead of 291 ms. Small designs, the CPU, latch time
+  borrowing, pin clock latencies, global-routing parasitics, a resize and changes on a propagated clock network
+  run in full as before.
+
+Fixes
+- The driver loads of a timing run (`arrivals().load`, read by `d.drv()` and `d.power()`) are summed in a fixed
+  order on the GPU; CUDA's atomic adds made their last bits differ from run to run.
+
 ## 1.0.9
 
 **Upgrading.** Nothing to do: results are the same as 1.0.8's and the zoo is unchanged.

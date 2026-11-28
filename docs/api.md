@@ -34,7 +34,7 @@ environment variables.
 | `snapshot(name)`, `restore(name)`, `unplace()` | solution state |
 | `read_placement(def_path, fixed=False)`, `set_positions(names, xy, orient=None)` | positions by instance name, from another tool's DEF or given |
 | `pin_names(pins=None)`, `pin_index(names)`, `cell_index(names)` | names as OpenSTA prints them, and back to indices |
-| `timing(pos=None, crpr=True, routes=None)`, `timing_report(pos=None, endpoints=10, path=True)` | static timing as OpenSTA, placement parasitics or (`routes=`) global-routing parasitics; a re-time redoes only the nets that changed. Returns a `TimingResult` (below) |
+| `timing(pos=None, crpr=True, routes=None)`, `timing_report(pos=None, endpoints=10, path=True)` | static timing as OpenSTA, placement parasitics or (`routes=`) global-routing parasitics; a re-time redoes only the nets that changed, and on the GPU only the timing cone they reach (bit for bit a full run). Returns a `TimingResult` (below) |
 | `gr_overflow(pos=None, adjustment=None, maps=False)` | global-routing overflow: RUDY demand against OpenROAD's gcell capacities |
 | `global_route(pos=None, verbose=True, previous=None, **kw)` | `(routes, stats)` on OpenROAD's gcell grid; `previous=routes` reroutes only the nets that moved |
 | `drv(pos=None)` | max slew, capacitance and fanout per pin, as OpenSTA `report_check_types` |

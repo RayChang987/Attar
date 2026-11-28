@@ -19,6 +19,7 @@ import re
 import math
 import os
 import sys
+import time
 import warnings
 
 import numpy as np
@@ -490,7 +491,8 @@ class Timer:
         self._pin_setup()                               # locations (the master's pin rectangles), into ev.off in place
         self._mp_names = None; self._sink_drv = None
         self._power = None                              # its functions and tables are the old masters' (OpenSTA:
-        return True                                     # replaceEquivCellAfter -> Power::powerInvalid)
+        self._inc_full = True                           # replaceEquivCellAfter -> Power::powerInvalid); the arcs'
+        return True                                     # tables changed: the next run is a full one
 
     def __getattr__(self, name):
         stale = self.__dict__.get('_stale')
@@ -1460,8 +1462,11 @@ class Timer:
             pins = (p != w['p']).any(1) | (caps != w['caps']).any(1) | (self.pin_rvia != w['rv'])
             dirty = torch.zeros(E, dtype=torch.bool, device=self.dev)
             dirty[self.pin_net[pins]] = True
+            if self._iclk_pi is not None:            # ideal clock nets: their parasitics are not read (below)
+                dirty &= ~self.net_iclk_t
             if int(dirty.sum()) > self.INCREMENTAL_WIRES * E:
                 dirty = None
+        self._wires_dirty = dirty                                        # None: every net (Incremental)
         if dirty is None:                                                # every net
             self._big_update(pos)
             main = tree_elmore(p, self.plan, E, caps, self.r_sig, self.c_sig, L, self.d.dbu, rcut=self.pin_rvia)
@@ -1990,7 +1995,9 @@ class Timer:
         if self.parasitics == 'global_routing':
             self._gr_update()
         if not self.use_graph:
-            return self._result(*self._run_core(pos), crpr=crpr)
+            out = self._run_core(pos)
+            self._loads(self._cw)                       # (driver loads: drv, power; not read by the timing)
+            return self._result(*out, crpr=crpr)
         with torch.cuda.device(self.dev):
             if self.parasitics == 'placement':          # eager (only the nets that changed), into static buffers
                 cw, elm = self.wires(pos)
@@ -1999,6 +2006,17 @@ class Timer:
                 else:
                     self._ws[0].copy_(cw); self._ws[1].copy_(elm); self._ws[2].copy_(self.pi)
                 self.pi = self._ws[2]
+                if self._graph is not None and self.incremental and not getattr(self, '_inc_full', False) \
+                        and self._inc_choose():
+                    self._inc_get()                    # (its one-time index is not part of a run's time)
+                    t0 = time.perf_counter()
+                    r = self._run_incremental(cw, elm, crpr)
+                    if r is not None:                  # (TimingResult reads its summary from the device: synced)
+                        self._inc_time('inc', time.perf_counter() - t0)
+                        return r
+            self._inc_full = False
+            replay = self._graph is not None
+            t0 = time.perf_counter()
             if self._graph is None:
                 self._pos_buf = pos.detach().clone()
                 st_ = torch.cuda.Stream(); st_.wait_stream(torch.cuda.current_stream())
@@ -2012,7 +2030,50 @@ class Timer:
                 self._graph = g
             self._pos_buf.copy_(pos)
             self._graph.replay()
-            return self._result(self._g_out[0].clone(), self._g_out[1].clone(), crpr=crpr)
+            self._loads(self._cw)                       # eager (a fixed-order sum, not capturable)
+            r = self._result(self._g_out[0].clone(), self._g_out[1].clone(), crpr=crpr)
+            if replay:
+                self._inc_time('full', time.perf_counter() - t0)
+            return r
+
+    incremental = True          # run(): after a full run, re-time only the cone of the nets whose parasitics changed
+    INC_PROBE = 16              # with incremental re-timing slower than a full run on average: try it every so often
+
+    def _inc_time(self, kind, sec):
+        """Running averages of the incremental and the full runs' times (which one run() picks; both give the same
+        result bit for bit)."""
+        t = getattr(self, '_inc_t', None)
+        if t is None:
+            t = self._inc_t = {'inc': None, 'full': None, 'skip': 0}
+        t[kind] = sec if t[kind] is None else 0.7 * t[kind] + 0.3 * sec
+
+    def _inc_choose(self):
+        t = getattr(self, '_inc_t', None)
+        if t is None or t['inc'] is None or t['full'] is None or t['inc'] < t['full']:
+            return True
+        t['skip'] += 1
+        if t['skip'] >= self.INC_PROBE:
+            t['skip'] = 0
+            return True
+        return False
+
+    def _inc_get(self):
+        inc = getattr(self, '_inc', None)
+        if inc is None:
+            from .incremental import Incremental
+            inc = self._inc = Incremental(self)
+        return inc
+
+    def _run_incremental(self, cw, elm, crpr):
+        """The cone-limited re-timing of attar.timing.incremental (bit for bit a full run's), or None: a full run."""
+        inc = self._inc_get()
+        if not inc.ok:
+            return None
+        t = getattr(self, '_inc_t', None)
+        budget = 2 * t['full'] if t is not None and t['full'] is not None else None
+        if not inc.run(self._wires_dirty, cw, elm, budget):
+            return None
+        return self._result(*self._checks(), crpr=crpr)
 
     def _result(self, setup, hold, crpr=True):
         cr = None
@@ -2027,6 +2088,24 @@ class Timer:
         res.crpr = None if cr is None else {'entries': cr.entries, 'uncovered': cr.uncovered, 'clock_muxes': cr.n_multi}
         return res
 
+    def _loads(self, cw):
+        """Loads per driver pin (net wire cap + sink pin caps), max and min pin capacitances, into self.load and
+        self.load_min (attar.timing.drv, power; the delay calculation reads the pi models); returns the per-net max
+        loads."""
+        dev, P = self.dev, self.P
+        seg = getattr(self, '_load_seg', None)
+        if seg is None:
+            from .drv import SegSum
+            seg = self._load_seg = SegSum(self.n_net, len(self.d.n_ptr) - 1)
+        net_load = seg(self.pin_cap[self.n_to])                  # summed in a fixed order (index_add_ is not)
+        net_min = seg(self.pin_cap_min[self.n_to])
+        if cw is not None:
+            net_load += cw[:, None]; net_min += cw[:, None]
+        load = torch.zeros(P, 2, device=dev); load[self.drv_pins] = net_load[self.drv_nets]
+        load_min = torch.zeros(P, 2, device=dev); load_min[self.drv_pins] = net_min[self.drv_nets]
+        self.load, self.load_min = load, load_min
+        return net_load
+
     def _run_core(self, pos):
         dev, P, NT = self.dev, self.P, self.NT
         if self.parasitics == 'global_routing':
@@ -2039,16 +2118,7 @@ class Timer:
             elm = torch.zeros(len(self.n_fr), 4, device=dev)
         self._elm = elm                                       # the run's wire delays, for required()
         self._cw = cw                                         # the run's wire capacitance per net (parasitics())
-        # loads per driver pin (net wire cap + sink pin caps), max and min pin capacitances
-        net_load = torch.zeros(len(self.d.n_ptr) - 1, 2, device=dev)
-        net_load.index_add_(0, self.n_net, self.pin_cap[self.n_to])
-        net_min = torch.zeros_like(net_load).index_add_(0, self.n_net, self.pin_cap_min[self.n_to])
-        if cw is not None:
-            net_load += cw[:, None]; net_min += cw[:, None]
-        load = torch.zeros(P, 2, device=dev); load[self.drv_pins] = net_load[self.drv_nets]
-        load_min = torch.zeros(P, 2, device=dev); load_min[self.drv_pins] = net_min[self.drv_nets]
-        self.load, self.load_min = load, load_min
-        pi = self.pi if self.pi is not None else torch.zeros(len(net_load), 4, 3, device=dev)
+        pi = self.pi if self.pi is not None else torch.zeros(len(self.d.n_ptr) - 1, 4, 3, device=dev)
         PX = (P + self._lq_n) * 2                             # + the latch D -> Q arcs' pseudo rows (_latch_prepare)
         amax = torch.full((PX, NT), -INF, device=dev); amin = torch.full((PX, NT), INF, device=dev)
         smax = torch.zeros(PX, device=dev); smin = torch.full((PX,), INF, device=dev)

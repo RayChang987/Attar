@@ -63,10 +63,12 @@ Attar 的定位是「一致的評估加上可替換的基本引擎」：評估�
 ## 4. 範圍與接下來
 
 兩種題目：`before_fp`（die、IO、macro 是答案；Attar 不畫電源網）與 `after_fp`（cell 位置是答案，之後 sizing、buffering、
-routing、timing）。引擎與評估器的完整清單與精度見 [features.md](features.md)。再次評估只重算有變動的 net。
+routing、timing）。引擎與評估器的完整清單與精度見 [features.md](features.md)。再次評估只重算有變動的 net；GPU 上搬動
+cell 後只重算受影響的 timing 範圍（結果與完整重算逐位元相同）。
 
 接下來：
 
+- netlist 編輯（插 buffer、clone）後原地更新 timer，接上只重算受影響範圍的引擎，取代整個重建。
 - 增量 routing 的 negotiation：重繞的 net 很多時不比全部重繞快；改策略會影響品質，需另行決定。
 - 匯出 Verilog、SDC 與精簡 Liberty，方便和外部 baseline（Rsyn、DREAMPlace 4.0）比較。
 - zoo 的設計註記（是否有 reference placement、contest SDC 下是否違規）。
