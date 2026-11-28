@@ -59,58 +59,60 @@ class Incremental:
         the entries into it and the entries out of it, and from an entry to its lanes. Rows written by more than one
         stage, or both as an output and a load, make the timer unsupported (none in practice)."""
         T = self.T
+        dev = T.dev
         P2 = T.P * 2
         self.stages = []
         fi_l, ti_l, ld_l, le_l, ei_l, ef_l, en_l = [], [], [], [], [], [], []
         off = loff = 0
-        for lv in T.tri_lev:
+        for lv in T.tri_lev:                            # (built on the device: sorts there are seconds faster)
             lib, fi, t, orf, net, t0, tag, ea, en, s0, arr = lv
             N, M = len(lib), len(ea)
-            fi_l.append(fi.long().cpu().numpy())
-            ti_l.append((t.long() * 2 + orf.long()).cpu().numpy())
+            fi_l.append(fi.long())
+            ti_l.append(t.long() * 2 + orf.long())
             ea_l = ea.long()
-            ld_l.append((T.n_to[en.long()] * 2 + orf.long()[ea_l]).cpu().numpy())
-            le_l.append(ea_l.cpu().numpy() + off)
+            ld_l.append(T.n_to[en.long()] * 2 + orf.long()[ea_l])
+            le_l.append(ea_l + off)
             # the kernel's per-arc and per-lane inputs, on the host (a stage's subset goes up in one copy)
-            ei_l.append(torch.stack([lib, fi, t, orf, net, tag, arr], 1).cpu().numpy())
-            ef_l.append(torch.stack([t0.float(), s0.float()], 1).cpu().numpy())
-            en_l.append(en.cpu().numpy())
+            ei_l.append(torch.stack([lib, fi, t, orf, net, tag, arr], 1))
+            ef_l.append(torch.stack([t0.float(), s0.float()], 1))
+            en_l.append(en.to(torch.int32))
             self.stages.append((off, N, loff, M))
             off += N; loff += M
-        self.e_int = np.concatenate(ei_l) if ei_l else np.zeros((0, 7), np.int32)
-        self.e_flt = np.concatenate(ef_l) if ef_l else np.zeros((0, 2), np.float32)
-        self.lane_en = np.concatenate(en_l).astype(np.int32) if en_l else np.zeros(0, np.int32)
+        cat = lambda xs, *shape, dt=torch.long: torch.cat(xs) if xs else torch.zeros(0, *shape, dtype=dt, device=dev)  # noqa: E731
+        e_int = cat(ei_l, 7, dt=torch.int32)
+        self.e_int = e_int.cpu().numpy()
+        self.e_flt = cat(ef_l, 2, dt=torch.float32).cpu().numpy()
+        self.lane_en = cat(en_l, dt=torch.int32).cpu().numpy()
         self.n_ent = off
-        fi = np.concatenate(fi_l) if fi_l else np.zeros(0, np.int64)
-        ti = np.concatenate(ti_l) if ti_l else np.zeros(0, np.int64)
-        self.lane_row = np.concatenate(ld_l) if ld_l else np.zeros(0, np.int64)
-        lane_ent = np.concatenate(le_l) if le_l else np.zeros(0, np.int64)
-        self.ent_stage = np.repeat(np.arange(len(self.stages)), [s[1] for s in self.stages])
-        self.ti = ti
-        o = np.argsort(ti, kind='stable')
-        self.to_ord, self.to_ptr = o, np.searchsorted(ti[o], np.arange(P2 + 1))
-        v = np.nonzero(fi >= 0)[0]
-        o = v[np.argsort(fi[v], kind='stable')]
-        self.fr_ord, self.fr_ptr = o, np.searchsorted(fi[o], np.arange(P2 + 1))
-        self.lane_ptr = np.searchsorted(lane_ent, np.arange(self.n_ent + 1))     # lanes ascend by entry
-        self.lane_drv = ti[lane_ent] if len(lane_ent) else np.zeros(0, np.int64)  # the driver row of each lane
-        self.lane_ok = (self.e_int[lane_ent, 6] & 2) == 0 if len(lane_ent) else np.zeros(0, bool)
-        # who writes each row: stage entries (outputs), stage lanes (loads), input ports' wires, constraints
-        lane_stage = self.ent_stage[lane_ent] if len(lane_ent) else np.zeros(0, np.int64)
-        w_row = np.concatenate([ti, self.lane_row])
-        w_key = np.concatenate([self.ent_stage * 2, lane_stage * 2 + 1])
-        u = np.unique(np.stack([w_row, w_key], 1), axis=0) if len(w_row) else np.zeros((0, 2), np.int64)
-        cnt = np.bincount(u[:, 0], minlength=P2) if len(u) else np.zeros(P2, np.int64)
-        ext = np.zeros(P2, bool)
+        fi, ti, lane_row, lane_ent = cat(fi_l), cat(ti_l), cat(ld_l), cat(le_l)
+        ent_stage = torch.repeat_interleave(torch.arange(len(self.stages), device=dev),
+                                            torch.as_tensor([s[1] for s in self.stages], device=dev, dtype=torch.long))
+        rows = torch.arange(P2 + 1, device=dev)
+        o = torch.sort(ti, stable=True)[1]
+        to_ptr = torch.searchsorted(ti[o], rows)
+        self.to_ord, self.to_ptr = o.cpu().numpy(), to_ptr.cpu().numpy()
+        v = torch.nonzero(fi >= 0).flatten()
+        o = v[torch.sort(fi[v], stable=True)[1]]
+        self.fr_ord, self.fr_ptr = o.cpu().numpy(), torch.searchsorted(fi[o], rows).cpu().numpy()
+        self.lane_ptr = torch.searchsorted(lane_ent, torch.arange(self.n_ent + 1, device=dev)).cpu().numpy()  # lanes
+        self.lane_drv = ti[lane_ent].cpu().numpy()      # the driver row of each lane            ascend by entry
+        self.lane_ok = ((e_int[lane_ent, 6] & 2) == 0).cpu().numpy()
+        self.lane_row, self.ti, self.ent_stage = lane_row.cpu().numpy(), ti.cpu().numpy(), ent_stage.cpu().numpy()
+        # who writes each row: stage entries (outputs), stage lanes (loads), input ports' wires, constraints; a row
+        # with two writers (keys) has a smallest key below its largest
+        w_row = torch.cat([ti, lane_row])
+        w_key = torch.cat([ent_stage * 2, ent_stage[lane_ent] * 2 + 1])
+        kmin = torch.full((P2,), 1 << 62, dtype=torch.long, device=dev).scatter_reduce_(0, w_row, w_key, 'amin')
+        kmax = torch.full((P2,), -1, dtype=torch.long, device=dev).scatter_reduce_(0, w_row, w_key, 'amax')
+        ext = torch.zeros(P2, dtype=torch.bool, device=dev)
         NT = T.NT
-        ext[(T.in_ix_max.cpu().numpy() // NT)] = True
-        ext[(T.in_ix_min.cpu().numpy() // NT)] = True
-        sp = T.in_sl_p.cpu().numpy()
-        ext[sp * 2] = True; ext[sp * 2 + 1] = True
+        ext[T.in_ix_max // NT] = True
+        ext[T.in_ix_min // NT] = True
+        ext[T.in_sl_p * 2] = True; ext[T.in_sl_p * 2 + 1] = True
         if len(T.pa):
-            tp = T.n_to[T.pa].cpu().numpy()
+            tp = T.n_to[T.pa]
             ext[tp * 2] = True; ext[tp * 2 + 1] = True
-        if (cnt > 1).any() or (ext & (cnt > 0)).any():
+        if bool(((kmax >= 0) & ((kmin != kmax) | ext)).any()):
             self.ok, self.why = False, 'rows written by more than one stage'
         self.pa_net = T.n_net[T.pa] if len(T.pa) else None
         # nets of a propagated clock network: a change there moves the clock arrival at every register it reaches,
