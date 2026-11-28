@@ -265,8 +265,7 @@ def update(T, e):
 def _snapshot(T):
     """What the last run left that the next one reuses: arrivals, slews, wire delays per load, the stages' recorded
     delays with each entry's key and each lane's net arc, the wire model's cache, the port wires."""
-    s = {k: T.__dict__.get(k) for k in ('amax', 'amin', 'smax', 'smin', '_wb', '_rec', '_w', '_pa_w', 'pa', 'load',
-                                        'load_min')}
+    s = {k: T.__dict__.get(k) for k in ('amax', 'amin', 'smax', 'smin', '_wb', '_rec', '_w', '_pa_w', 'pa')}
     s['keys'], s['lanes'] = _entry_keys(T)
     s['sel'] = {k: v.copy() for k, v in T._sel.items()}
     s['n_fr'], s['n_to'] = T.n_fr, T.n_to
@@ -311,7 +310,7 @@ def _carry(T, old, rows, amap, tn, n_fr, n_to, pmo):
         return
     T.amax, T.amin = rows(old['amax'], -INF), rows(old['amin'], INF)
     T.smax, T.smin = rows(old['smax'], 0.0), rows(old['smin'], 0.0)
-    T.load, T.load_min = rows(old['load'], 0.0), rows(old['load_min'], 0.0)
+    T.__dict__.pop('_load', None); T.__dict__.pop('_load_cw', None)   # (summed when read, after the next run)
     so_rows = lambda x, fill: rows(x[:len(x) // 2 * 2].view(-1, 2), fill).reshape(-1)  # noqa: E731
     T._wb = (so_rows(old['_wb'][0], -INF), so_rows(old['_wb'][1], INF))
     # net arcs: old -> new (the same driver and sink, renumbered)

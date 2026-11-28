@@ -21,10 +21,22 @@ New
   rebuild and a 2.3 s first run. Edits on a clock network, a constant net, a net an input port drives, latches, pin clock
   latencies, combinational loops or global-routing parasitics still rebuild the timer (`d._timer_edit` says why).
 - Building a timer: its stages, levels and reachability are made on the device (jpeg_x20: 5-6 s instead of 9-10 s).
+- The incremental re-timing sweeps small cones on the CPU (`attar/timing/csrc/inc.cpp`): a worklist of driver pins
+  in level order, OpenSTA's search order, with a C++ twin of the GPU kernels that gives the same bits; the timer's
+  state is mirrored on the host and the recomputed rows are copied back. Cones over 10,000 arcs (or 5% of the
+  design) go to the GPU sweep as before. jpeg_x20, one cell moved: the sweep takes 4-6 ms instead of 21-34 ms, the
+  whole `d.timing()` about 25 ms instead of 55-65 ms.
+- The CPU and the GPU timer give the same bits: the C++ delay calculation keeps the driver waveform in float64
+  between an arc and its loads, as the GPU kernels do, and the PyTorch reference, the C++ and the Triton kernels
+  agree bit for bit (tested).
 
 Fixes
 - The driver loads of a timing run (`arrivals().load`, read by `d.drv()` and `d.power()`) are summed in a fixed
-  order on the GPU; CUDA's atomic adds made their last bits differ from run to run.
+  order on the GPU; CUDA's atomic adds made their last bits differ from run to run. They are summed when read.
+- The GPU delay kernels in float64 used float32 values of OpenSTA's constants (1.4, 0.01, 1e-3, ...: Triton reads a
+  float literal as float32) and float32 differences of table axis values, and contracted multiply-adds into FMAs;
+  they now use the double constants and separate operations, as OpenSTA on x86. GPU arrivals change in the last
+  bits (under 1e-4 ps on aes).
 
 ## 1.0.9
 

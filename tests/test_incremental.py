@@ -1,6 +1,7 @@
 """Incremental re-timing (attar.timing.incremental): after cells move, re-timing only the cone of the nets whose
-parasitics changed gives a full run's result bit for bit (GPU only: the CPU path always runs in full). After a netlist
-edit the timer follows in place (attar.timing.inplace) and gives what a new timer gives, bit for bit."""
+parasitics changed gives a full run's result bit for bit, with the sweep on the CPU (CpuSweep) and on the GPU (GPU
+timers only: the CPU path always runs in full). After a netlist edit the timer follows in place (attar.timing.inplace)
+and gives what a new timer gives, bit for bit."""
 import unittest
 
 import numpy as np
@@ -42,22 +43,36 @@ class IncrementalTimingTest(unittest.TestCase):
         p[cells, 0] += float(self.d.row_site_w[0]) * torch.randint(-4, 5, (k,), generator=g).float().to('cuda')
         self.d.pos = p
 
-    def test_a_cone_equals_a_full_run(self):
+    def _cone_equals_a_full_run(self, sweep):
         T = self.T
         inc = T._inc_get()
         self.assertTrue(inc.ok, inc.why)
+        if sweep == 'gpu':
+            inc.cpu = None
+        else:
+            inc.__dict__.pop('cpu', None)
+            inc.runs = 1                                # (the CPU sweep is made on an index's second re-timing)
+            self.assertIsNotNone(inc._cpu_get())
         used = 0
         for k, seed in ((1, 1), (3, 2), (10, 3)):
             self._move(k, seed)
             T._inc_t = None                             # take the incremental path whatever the timings say
             a = self._state(self.d.timing())
-            used += inc.last.get('entries', 0) > 0 and not inc.last.get('full')
+            used += inc.last.get('entries', 0) > 0 and not inc.last.get('full') and \
+                bool(inc.last.get('cpu')) == (sweep == 'cpu')
             T._inc_full = True
             b = self._state(self.d.timing())
             for x, y in zip(a, b):
                 self.assertTrue(bool(((x == y) | (torch.isnan(x) & torch.isnan(y))).all()))
         self.assertGreater(used, 0)
         self.assertLess(inc.last['entries'], inc.n_ent)
+        inc.__dict__.pop('cpu', None)
+
+    def test_a_cone_equals_a_full_run_cpu_sweep(self):
+        self._cone_equals_a_full_run('cpu')
+
+    def test_a_cone_equals_a_full_run_gpu_sweep(self):
+        self._cone_equals_a_full_run('gpu')
 
     def test_nothing_moved_changes_nothing(self):
         T = self.T

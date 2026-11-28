@@ -1,8 +1,9 @@
-"""attar.timing.dmp on the CPU in C++ (attar/timing/csrc/dmp.cpp): OpenSTA's dmp_ceff_elmore gate and load delay, one
-element at a time in double precision, each iteration loop stopping when its element has converged or failed, OpenMP
-over the elements. The timer uses it on the CPU in place of the PyTorch reference (attar.timing.dmp), as it uses the
-Triton kernels (attar.timing.dmp_triton) on the GPU; gate / load have their signatures. Built with g++ on first use into
-~/.cache/attar and loaded with ctypes; available() is False when that fails (the timer then keeps the PyTorch path)."""
+"""attar.timing.dmp on the CPU in C++ (attar/timing/csrc/dmp.cpp over csrc/dmp_core.h): OpenSTA's dmp_ceff_elmore gate
+and load delay, one element at a time in double precision, each iteration loop stopping when its element has converged
+or failed, OpenMP over the elements; bit for bit the GPU's fused kernels (attar.timing.dmp_triton, MODE 2), the
+waveform state passed between the gate and its loads in float64 as there. The timer uses it on the CPU in place of the
+PyTorch reference (attar.timing.dmp); gate / load have their signatures. Built with g++ on first use into ~/.cache/attar
+and loaded with ctypes; available() is False when that fails (the timer then keeps the PyTorch path)."""
 import ctypes
 import hashlib
 import os
@@ -13,10 +14,31 @@ import torch
 
 from .dmp import FIND_ROOT_MAX_ITER, NEWTON_MAX_ITER
 
-_SRC = os.path.join(os.path.dirname(__file__), 'csrc', 'dmp.cpp')
+_DIR = os.path.join(os.path.dirname(__file__), 'csrc')
+_SRC = os.path.join(_DIR, 'dmp.cpp')
 _LIB = None
 _ERR = None
 NSTATE = 17
+
+
+def compile_lib(name, src):
+    """Build csrc/<src> (with the csrc headers) into ~/.cache/attar once per source version; returns the ctypes
+    library. Raises when g++ fails."""
+    h = hashlib.sha1()
+    for f in sorted(os.listdir(_DIR)):
+        if f == src or f.endswith('.h'):
+            with open(os.path.join(_DIR, f), 'rb') as fh:
+                h.update(f.encode() + fh.read())
+    cache = os.path.join(os.path.expanduser('~'), '.cache', 'attar')            # as paths.zoo_dir: no environment
+    os.makedirs(cache, exist_ok=True)
+    so = os.path.join(cache, '%s_%s.so' % (name, h.hexdigest()[:12]))
+    if not os.path.exists(so):
+        tmp = so + '.%d.tmp' % os.getpid()
+        # no FMA contraction: the rounding of the Triton kernels (launched without it) and of OpenSTA on x86
+        subprocess.run(['g++', '-O3', '-std=c++17', '-fopenmp', '-ffp-contract=off', '-shared', '-fPIC',
+                        '-I', _DIR, os.path.join(_DIR, src), '-o', tmp], check=True, capture_output=True, text=True)
+        os.replace(tmp, so)
+    return ctypes.CDLL(so)
 
 
 def _build():
@@ -24,19 +46,7 @@ def _build():
     if _LIB is not None or _ERR is not None:
         return _LIB
     try:
-        with open(_SRC, 'rb') as f:
-            src = f.read()
-        tag = hashlib.sha1(src).hexdigest()[:12]
-        cache = os.path.join(os.path.expanduser('~'), '.cache', 'attar')        # as paths.zoo_dir: no environment
-        os.makedirs(cache, exist_ok=True)
-        so = os.path.join(cache, 'dmp_%s.so' % tag)
-        if not os.path.exists(so):
-            tmp = so + '.%d.tmp' % os.getpid()
-            # no FMA contraction: the same rounding as the PyTorch and Triton paths' separate operations
-            subprocess.run(['g++', '-O3', '-std=c++17', '-fopenmp', '-ffp-contract=off', '-shared', '-fPIC', _SRC,
-                            '-o', tmp], check=True, capture_output=True, text=True)
-            os.replace(tmp, so)
-        lib = ctypes.CDLL(so)
+        lib = compile_lib('dmp', 'dmp.cpp')
         P, I64, I = ctypes.c_void_p, ctypes.c_int64, ctypes.c_int
         lib.attar_dmp_gate.argtypes = [I64, P, P, P, P, I64, P, P, P, P, P, P, P, P, P, P, I, I, I]
         lib.attar_dmp_gate.restype = I
@@ -81,9 +91,10 @@ class Tables:
 
 
 def gate(tables, lib, orf, slew, ctot, c_far, rpi, thr):
-    """Same as attar.timing.sta.arc_eval (tables: a Tables): (delay, driver slew, state (N, 17)), float32 tensors."""
+    """Same as attar.timing.sta.arc_eval (tables: a Tables): (delay, driver slew, state (N, 17)); delay and slew
+    float32, the state float64 (load reads it)."""
     N = len(lib)
-    delay = np.empty(N, np.float32); dslew = np.empty(N, np.float32); state = np.empty((N, NSTATE), np.float32)
+    delay = np.empty(N, np.float32); dslew = np.empty(N, np.float32); state = np.empty((N, NSTATE), np.float64)
     if N:
         T = tables
         args = [_np(lib, np.int64), _np(orf, np.int64), _np(slew, np.float32), _np(ctot, np.float32),
@@ -98,6 +109,6 @@ def load(state, elmore, rise, lthr):
     N = len(elmore)
     w = np.empty(N, np.float32); s = np.empty(N, np.float32)
     if N:
-        args = [_np(state, np.float32), _np(elmore, np.float32), _np(rise, np.uint8), _np(lthr, np.float32)]
+        args = [_np(state, np.float64), _np(elmore, np.float32), _np(rise, np.uint8), _np(lthr, np.float32)]
         _build().attar_dmp_load(N, *[_ptr(a) for a in args], _ptr(w), _ptr(s), FIND_ROOT_MAX_ITER, _threads())
     return torch.from_numpy(w), torch.from_numpy(s)

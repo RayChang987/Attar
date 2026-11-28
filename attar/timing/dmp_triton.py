@@ -1,6 +1,8 @@
 """attar.timing.dmp as two Triton kernels: one thread lane per arc (gate) or per load (wire), every iteration in registers, one
 launch per batch. The math is attar.timing.dmp's, which follows OpenSTA's DmpCeff.cc line by line; attar.timing.dmp stays the
-reference (CPU, tests). The delay model runs in float64 by default (OpenSTA's precision), arrivals in float32.
+reference (CPU, tests). The delay model runs in float64 by default (OpenSTA's precision), arrivals in float32. The kernels
+are compiled without FMA contraction (as OpenSTA on x86): the C++ of attar/timing/csrc/dmp_core.h, line for line the same
+math, then gives the same bits on the CPU (the CPU timer, the incremental re-timing).
 """
 import torch
 import triton
@@ -21,6 +23,13 @@ def _exp2(x):
 
 
 @triton.jit
+def _k(v: tl.constexpr, like):
+    """The constant v in like's precision: a float literal is a float32 constant in Triton, so float64 lanes would see
+    float32(v), not OpenSTA's double constant."""
+    return tl.full([], v, like.dtype)
+
+
+@triton.jit
 def _nldm(ix1, ix2, val, nn, base, x, y, mask, K):
     """attar.timing.sta.nldm for one table per lane: base = (arc * 4 + slot); bilinear, linear extrapolation."""
     n1 = tl.load(nn + base * 2, mask=mask, other=1)
@@ -34,8 +43,10 @@ def _nldm(ix1, ix2, val, nn, base, x, y, mask, K):
         j0 += ((y >= b) & (j < n2 - 1)).to(tl.int32)
     i1 = tl.minimum(i0 + 1, tl.maximum(n1 - 1, 0))
     j1 = tl.minimum(j0 + 1, tl.maximum(n2 - 1, 0))
-    a0 = tl.load(ix1 + base * K + i0, mask=mask, other=0.0); a1 = tl.load(ix1 + base * K + i1, mask=mask, other=1.0)
-    b0 = tl.load(ix2 + base * K + j0, mask=mask, other=0.0); b1 = tl.load(ix2 + base * K + j1, mask=mask, other=1.0)
+    a0 = tl.load(ix1 + base * K + i0, mask=mask, other=0.0).to(x.dtype)
+    a1 = tl.load(ix1 + base * K + i1, mask=mask, other=1.0).to(x.dtype)
+    b0 = tl.load(ix2 + base * K + j0, mask=mask, other=0.0).to(y.dtype)
+    b1 = tl.load(ix2 + base * K + j1, mask=mask, other=1.0).to(y.dtype)
     da = a1 - a0
     db = b1 - b0
     tx = tl.where((i1 > i0) & (da != 0), (x - a0) / tl.where(da != 0, da, 1.0), 0.0)
@@ -102,7 +113,7 @@ def _newton(ix1, ix2, val, nn, bd, bs, slew, ce0, rd, ctot, vth, vl, vh, der, A,
     fail = conv | ~mask
     t0, dt, ce, conv, fail = _newton_iter(ix1, ix2, val, nn, bd, bs, slew, rd, ctot, vth, vl, vh, der, A, B, D, p1, p2,
                                           mask, t0, dt, ce, conv, fail, ORDER3, K, ITERS)
-    fail = fail | ~conv | (dt <= 0) | (ce < 0) | (ce > ctot + 1e-6)
+    fail = fail | ~conv | (dt <= 0) | (ce < 0) | (ce > ctot + _k(1e-6, ce))
     return t0, dt, ce, fail
 
 
@@ -114,10 +125,10 @@ def _newton_iter(ix1, ix2, val, nn, bd, bs, slew, rd, ctot, vth, vl, vh, der, A,
     while (it < ITERS) & (tl.max((~conv & ~fail).to(tl.int32), 0) > 0):  # until every lane converged or failed
         it += 1
         if ORDER3:
-            bad = (ce < 0) | (ce > ctot + 1e-6) | (dt <= 0)
+            bad = (ce < 0) | (ce > ctot + _k(1e-6, ce)) | (dt <= 0)
         else:
             bad = conv & False
-        ce_s = tl.maximum(ce, 1e-9)
+        ce_s = tl.maximum(ce, _k(1e-9, ce))
         tv, tl_, s = _gate_delays(ix1, ix2, val, nn, bd, bs, slew, ce_s, vth, vl, vh, der, mask, K)
         bad = bad | (s == 0)
         if ORDER3:
@@ -130,7 +141,7 @@ def _newton_iter(ix1, ix2, val, nn, bd, bs, slew, rd, ctot, vth, vl, vh, der, A,
         a, b, c = _dy(tl_, t0, dt_s, ce_s, rd)
         d_, e, g = _dy(tv, t0, dt_s, ce_s, rd)
         if ORDER3:
-            ct = tl.minimum(s / (vh - vl), 1.4 * dt_s)
+            ct = tl.minimum(s / (vh - vl), _k(1.4, dt_s) * dt_s)
             e1 = _exp2(-p1 * ct); e2 = _exp2(-p2 * ct); erc = _exp2(-ct / (rd * ce_s))
             ipi = (A * ct + (B / p1) * (1.0 - e1) + (D / p2) * (1.0 - e2)) / (rd * ct * dt_s)
             ice = (rd * ce_s * ct - (rd * ce_s) * (rd * ce_s) * (1.0 - erc)) / (rd * ct * dt_s)
@@ -148,7 +159,8 @@ def _newton_iter(ix1, ix2, val, nn, bd, bs, slew, rd, ctot, vth, vl, vh, der, A,
             q0 = (C0 * f0 - (b * k - c * i_) * f1 + (b * g - c * e) * f2) / det
             q1 = (C1 * f0 + (a * k - c * h) * f1 - (a * g - c * d_) * f2) / det
             q2 = (C2 * f0 - (a * i_ - b * h) * f1 + (a * e - b * d_) * f2) / det
-            under = (tl.abs(q0) <= tl.abs(t0) * 0.01) & (tl.abs(q1) <= tl.abs(dt) * 0.01) & (tl.abs(q2) <= tl.abs(ce) * 0.01)
+            tol = _k(0.01, t0)
+            under = (tl.abs(q0) <= tl.abs(t0) * tol) & (tl.abs(q1) <= tl.abs(dt) * tol) & (tl.abs(q2) <= tl.abs(ce) * tol)
         else:
             det = a * e - b * d_
             sing = det == 0
@@ -156,9 +168,11 @@ def _newton_iter(ix1, ix2, val, nn, bd, bs, slew, rd, ctot, vth, vl, vh, der, A,
             q0 = (-y20 * e + y50 * b) / det
             q1 = (y20 * d_ - y50 * a) / det
             q2 = 0.0 * q0
-            under = (tl.abs(q0) <= tl.abs(t0) * 0.01) & (tl.abs(q1) <= tl.abs(dt) * 0.01)
+            tol = _k(0.01, t0)
+            under = (tl.abs(q0) <= tl.abs(t0) * tol) & (tl.abs(q1) <= tl.abs(dt) * tol)
         act = ~conv & ~fail
-        finite = (q0 == q0) & (q1 == q1) & (q2 == q2) & (tl.abs(q0) < 1e30) & (tl.abs(q1) < 1e30) & (tl.abs(q2) < 1e30)
+        big = _k(1e30, q0)
+        finite = (q0 == q0) & (q1 == q1) & (q2 == q2) & (tl.abs(q0) < big) & (tl.abs(q1) < big) & (tl.abs(q2) < big)
         fail = fail | (act & (bad | sing | ~finite))
         act = act & ~fail
         t0 = tl.where(act, t0 + q0, t0)
@@ -230,7 +244,7 @@ def _find_root(x1, x2, target, k0, k1, k2, k3, k4, p1, p2, t0, dt, p3, on, LOAD:
         dx_prev = tl.where(act, dx, dx_prev)
         dx = tl.where(act, nd, dx)
         root = tl.where(act, nr, root)
-        conv = conv | (act & (tl.abs(dx) <= 0.01 * tl.abs(root)))
+        conv = conv | (act & (tl.abs(dx) <= _k(0.01, root) * tl.abs(root)))
         y2, dy2 = _wave(root, k0, k1, k2, k3, k4, p1, p2, t0, dt, p3, LOAD)
         y2 = y2 - target
         act = ~conv
@@ -253,8 +267,9 @@ def _gate_core(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, de
     d1 = _nldm(ix1, ix2, val, nn, bd, slew, ctot, mask, K)
     d2 = _nldm(ix1, ix2, val, nn, bd, slew, ctot + 1.0, mask, K)
     rd = -tl.log(vth) * tl.abs(d1 - d2)
-    cap_alg = (rd < 1e-5) | (rpi < rd * 1e-3) | (c1 == 0) | (c1 < c2 * 1e-3) | (rpi == 0)
-    zc2 = ~cap_alg & (c2 < c1 * 1e-3)
+    m3 = _k(1e-3, rd)
+    cap_alg = (rd < _k(1e-5, rd)) | (rpi < rd * m3) | (c1 == 0) | (c1 < c2 * m3) | (rpi == 0)
+    zc2 = ~cap_alg & (c2 < c1 * m3)
     pia = ~cap_alg & ~zc2
     rd_ = tl.where(cap_alg, 1.0, rd)
     rpi_ = tl.where(cap_alg, 1.0, rpi)
@@ -301,8 +316,9 @@ def _gate_core(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, de
     t0 = tl.where(zc2, t0z, t0)
     dt = tl.where(zc2, dtz, dt)
     ceff = tl.where(pi_ok, cep, tl.where(zc2, c1, ctot))
-    tab_d = _nldm(ix1, ix2, val, nn, bd, slew, tl.maximum(ceff, 1e-9), mask, K)
-    tab_s = tl.maximum(_nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(ceff, 1e-9), mask, K), 0.0)
+    e9 = _k(1e-9, ceff)
+    tab_d = _nldm(ix1, ix2, val, nn, bd, slew, tl.maximum(ceff, e9), mask, K)
+    tab_s = tl.maximum(_nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(ceff, e9), mask, K), 0.0)
     dt = tl.where(dt > 0, dt, 1.0)
     ub = tl.where(pia, t0 + dt + (c1 + c2) * (rd_ + rpi_) * 2.0, t0 + dt + c1 * (rd_ + rpi_) * 2.0)
     one = ub * 0.0 + 1.0
@@ -315,8 +331,8 @@ def _gate_core(ix1, ix2, val, nn, lib, orf, slew, ctot, c1, rpi, vth, vl, vh, de
     delay = tl.where(zc_ok & ~vo_fail, vo_d, tab_d)
     dslew = tl.where(wave_ok, (thi - tlo) / der, tab_s)
     zc_bad = zc2 & (fz | vo_fail)
-    zd = _nldm(ix1, ix2, val, nn, bd, slew, tl.maximum(c1_, 1e-9), mask, K)
-    zs = tl.maximum(_nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(c1_, 1e-9), mask, K), 0.0)
+    zd = _nldm(ix1, ix2, val, nn, bd, slew, tl.maximum(c1_, e9), mask, K)
+    zs = tl.maximum(_nldm(ix1, ix2, val, nn, bs, slew, tl.maximum(c1_, e9), mask, K), 0.0)
     delay = tl.where(zc_bad, zd, delay)
     dslew = tl.where(zc_bad, zs, dslew)
     return delay, dslew, wave_ok, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, pia | zc2
@@ -412,7 +428,7 @@ def _load_dev(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl, 
 def _load_core(valid, k0, k1, k2, k3, k4, p1, p2, t0, dt, vo_d, ub, ds, vth, vl, vh, der, elm, rise,
                lvth, lvl, lvh, lder, RIT: tl.constexpr):
     """attar.timing.dmp.load + threshold_adjust for one lane per load: (wire delay, load slew, waveform failed)."""
-    small = (elm == 0) | (elm < ds * 1e-3) | ~valid
+    small = (elm == 0) | (elm < ds * _k(1e-3, ds)) | ~valid
     e = tl.where(small, 1.0, elm)
     p3 = 1.0 / e
     t_up = ub + e * 2.0
@@ -576,7 +592,7 @@ def gate(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr):
         dmp_gate_kernel[(triton.cdiv(N, BLOCK),)](
             ix1, ix2, val, tn.to(torch.int32) if tn.dtype != torch.int32 else tn, lib.to(torch.int32), orf.to(torch.int32),
             slew.contiguous(), ctot.contiguous(), c_far.contiguous(), rpi.contiguous(), thr.contiguous(),
-            delay, dslew, state, N, K=K, NIT=NEWTON_MAX_ITER, RIT=ROOT_N, BLOCK=BLOCK)
+            delay, dslew, state, N, K=K, NIT=NEWTON_MAX_ITER, RIT=ROOT_N, BLOCK=BLOCK, enable_fp_fusion=False)
     return delay, dslew, state
 
 
@@ -587,7 +603,8 @@ def load(state, elmore, rise, lthr):
     w = torch.empty(N, device=dev); s = torch.empty(N, device=dev)
     if N:
         dmp_load_kernel[(triton.cdiv(N, BLOCK),)](state.contiguous(), elmore.contiguous(), rise.to(torch.int32),
-                                                  lthr.contiguous(), w, s, N, RIT=ROOT_N, BLOCK=BLOCK)
+                                                  lthr.contiguous(), w, s, N, RIT=ROOT_N, BLOCK=BLOCK,
+                                                  enable_fp_fusion=False)
     return w, s
 
 
@@ -610,9 +627,9 @@ def stage(tables, lev, sthr, pi, elm, nto, amax, amin, smax, smin, precision='do
     stage_gate_kernel[(triton.cdiv(2 * N, BLOCK),)](ix1, ix2, val, n32, thr, lib, fi, t, orf, net, t0, tag, s0, arr, pi,
                                                     amax, amin, smax, smin, st, N, int(lmin),
                                                     NT=NT, K=ix1.shape[-1], NIT=NEWTON_MAX_ITER, RIT=ROOT_N, BLOCK=BLOCK,
-                                                    MODE=mode)
+                                                    MODE=mode, enable_fp_fusion=False)
     if M:
         stage_load_kernel[(triton.cdiv(2 * M, BLOCK),)](st, ea, en, fi, orf, t0, tag, nto, elm, sthr,
                                                         amax, amin, smax, smin, w, N, M, NT=NT, RIT=ROOT_N,
-                                                        BLOCK=BLOCK, MODE=mode)
+                                                        BLOCK=BLOCK, MODE=mode, enable_fp_fusion=False)
     return st[:N, 17].float(), w[:M], st[N:, 17].float(), w[M:]

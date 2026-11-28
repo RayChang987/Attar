@@ -50,7 +50,7 @@ version = {attr = "attar.__version__"}
 include = ["attar*"]
 
 [tool.setuptools.package-data]
-"attar.timing" = ["csrc/*.cpp"]
+"attar.timing" = ["csrc/*.cpp", "csrc/*.h"]
 "attar.naive" = ["csrc/*.cpp"]
 
 [tool.ruff]

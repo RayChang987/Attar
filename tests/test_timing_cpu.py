@@ -137,3 +137,24 @@ class HostActivityTest(unittest.TestCase):
         self.assertEqual(res['dense'][1], res['c++'][1])
         for x, y in zip(a.total, c.total):
             self.assertLess(abs(float(x) - float(y)), 1e-6 * abs(float(x)))
+
+
+class SameAsTheGpuTest(unittest.TestCase):
+    """The CPU timer (C++ delay calculation, csrc/dmp_core.h) and the GPU's fused kernels give the same bits."""
+
+    def test_arrivals_slews_and_slacks(self):
+        if not torch.cuda.is_available():
+            raise unittest.SkipTest('no GPU')
+        out = {}
+        for dev in ('cpu', 'cuda'):
+            try:
+                d = attar.load(SMALL, dev, download=False)
+            except FileNotFoundError as e:
+                raise unittest.SkipTest(str(e)) from None
+            if 'reference' in d.snapshots:
+                d.load_reference()
+            T = Timer(d)
+            r = T.run()
+            out[dev] = [t.cpu() for t in (T.amax, T.amin, T.smax, T.smin, T._wb[0], T._wb[1], r.setup, r.hold)]
+        for a, b in zip(out['cpu'], out['cuda']):
+            self.assertTrue(bool(((a == b) | (torch.isnan(a) & torch.isnan(b))).all()))

@@ -158,7 +158,9 @@ def arc_eval(ix1, ix2, val, tn, lib, orf, slew, ctot, c_far, rpi, thr, steps=Non
     c_far = torch.minimum(c_far, ctot)
     delay, dslew, _, stt = dmp.gate(tab, slew, ctot, (ctot - c_far).clamp(min=0), rpi, c_far,
                                     thr[:, 0], thr[:, 1], thr[:, 2], thr[:, 3], steps or dmp.EAGER)
-    return delay.to(dt_out), dslew.to(dt_out), torch.stack([stt[k].to(dt_out) for k in STATE], 1)
+    # the state in float64, as the fused kernels keep it between an arc and its loads (the driver slew as returned)
+    stt['drvr_slew'] = dslew.to(dt_out).to(F)
+    return delay.to(dt_out), dslew.to(dt_out), torch.stack([stt[k].to(F) for k in STATE], 1)
 
 
 def load_eval(state, elmore, rise, lthr, steps=None):
@@ -2104,6 +2106,7 @@ class Timer:
             self._pos_buf.copy_(pos)
             self._graph.replay()
             self._timed = True                          # (the incremental re-timing starts from here)
+            self._state_ver = self.__dict__.get('_state_ver', 0) + 1    # (attar.timing.incremental.CpuSweep)
             self._loads(self._cw)                       # eager (a fixed-order sum, not capturable)
             r = self._result(self._g_out[0].clone(), self._g_out[1].clone(), crpr=crpr)
             if replay:
@@ -2163,10 +2166,15 @@ class Timer:
         return res
 
     def _loads(self, cw):
-        """Loads per driver pin (net wire cap + sink pin caps), max and min pin capacitances, into self.load and
-        self.load_min (attar.timing.drv, power; the delay calculation reads the pi models); returns the per-net max
-        loads."""
+        """The run's loads per driver pin (net wire cap + sink pin caps, max and min pin capacitances: self.load and
+        self.load_min, read by TimingResult.arrivals; the delay calculation reads the pi models), summed when read:
+        this keeps the run's wire capacitance (a sum over every net is a large part of a small incremental run)."""
+        self.__dict__['_load_cw'] = (cw.clone() if cw is not None else None, )
+        self.__dict__.pop('_load', None)
+
+    def _loads_now(self):
         dev, P = self.dev, self.P
+        cw, = self.__dict__.get('_load_cw', (None, ))
         seg = getattr(self, '_load_seg', None)
         if seg is None:
             from .drv import SegSum
@@ -2177,8 +2185,19 @@ class Timer:
             net_load += cw[:, None]; net_min += cw[:, None]
         load = torch.zeros(P, 2, device=dev); load[self.drv_pins] = net_load[self.drv_nets]
         load_min = torch.zeros(P, 2, device=dev); load_min[self.drv_pins] = net_min[self.drv_nets]
-        self.load, self.load_min = load, load_min
-        return net_load
+        self.__dict__['_load'] = (load, load_min)
+
+    @property
+    def load(self):
+        if self.__dict__.get('_load') is None:
+            self._loads_now()
+        return self.__dict__['_load'][0]
+
+    @property
+    def load_min(self):
+        if self.__dict__.get('_load') is None:
+            self._loads_now()
+        return self.__dict__['_load'][1]
 
     def _run_core(self, pos):
         dev, P, NT = self.dev, self.P, self.NT
