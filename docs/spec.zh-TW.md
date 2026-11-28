@@ -1,13 +1,13 @@
 # Attar 規格書
 
-Nov 28, 2026 · @JR · 對應版本 1.0.8（main 上準備 1.0.9）
+Nov 28, 2026 · @JR · 對應版本 1.0.9
 
 > 細節表格不在這裡重複：引擎與評估器見 [features.md](features.md)，事實與能力見 [concepts.md](concepts.md)，zoo 見
 > [benchmarks.md](benchmarks.md)，比對結果見 [validation/](validation/)。
 
 ## 0. 現況摘要
 
-- **套件**：PyPI `attar`，最新版 1.0.8；MIT；Python 3.8+、PyTorch 2.0+，CPU 與 CUDA。
+- **套件**：PyPI `attar`，最新版 1.0.9；MIT；Python 3.8+、PyTorch 2.0+，CPU 與 CUDA。
 - **資料**：Hugging Face `RayChang987/attar-zoo`，262 個設計、24 個 suite，第一次使用時下載。
 - **引擎**：die sizing、packing、macro／IO placement、global placement、legalization（含 PDN 與 pin access）、detailed
   placement、global routing（含增量）、CTS、gate sizing、buffering、debuffering。
@@ -67,8 +67,6 @@ routing、timing）。引擎與評估器的完整清單與精度見 [features.md
 
 接下來：
 
-- **1.0.9（main，待發版）**：`TimingResult.stages()`（逐層排程與 timer 自己算的 delay，重建的 arrival 與 `arrivals()` 完全
-  相同），LATTE notebook 只用公開 API；Triton 提示修正；文件精簡。
 - 增量 routing 的 negotiation：重繞的 net 很多時不比全部重繞快；改策略會影響品質，需另行決定。
 - 匯出 Verilog、SDC 與精簡 Liberty，方便和外部 baseline（Rsyn、DREAMPlace 4.0）比較。
 - zoo 的設計註記（是否有 reference placement、contest SDC 下是否違規）。

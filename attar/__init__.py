@@ -1,7 +1,7 @@
 """Attar: a fast loop for physical design. Designs from any source become GPU tensors (Design), metrics evaluate
 them (Evaluator), and a basic set of tensorized engines (attar.naive) makes them move. What a design can do follows
 from the facts it has. See README.md."""
-__version__ = '1.0.8'
+__version__ = '1.0.9'
 
 from .design import Design, load, zoo
 from .io.distill import distill

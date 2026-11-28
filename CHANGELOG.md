@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.0.9
+
+**Upgrading.** Nothing to do: results are the same as 1.0.8's and the zoo is unchanged.
 
 New
 - `TimingResult.stages()`: the level schedule of the last timing run, with the delays the timer computed. Stages
