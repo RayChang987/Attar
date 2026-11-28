@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.0.10
+
+**Upgrading.** Nothing to do: the zoo is unchanged. GPU timing results can differ from 1.0.9's in the last bits
+(under 1e-4 ps on aes), because the float64 GPU kernels now use OpenSTA's double constants (see Fixes); the CPU
+and the GPU timer now give the same bits.
 
 New
 - Incremental re-timing on the GPU (`attar.timing.incremental`): after cells move, `d.timing()` re-times only the

@@ -1,13 +1,13 @@
 # Attar 規格書
 
-Nov 28, 2026 · @JR · 對應版本 1.0.9
+Nov 28, 2026 · @JR · 對應版本 1.0.10
 
 > 細節表格不在這裡重複：引擎與評估器見 [features.md](features.md)，事實與能力見 [concepts.md](concepts.md)，zoo 見
 > [benchmarks.md](benchmarks.md)，比對結果見 [validation/](validation/)。
 
 ## 0. 現況摘要
 
-- **套件**：PyPI `attar`，最新版 1.0.9；MIT；Python 3.8+、PyTorch 2.0+，CPU 與 CUDA。
+- **套件**：PyPI `attar`，最新版 1.0.10；MIT；Python 3.8+、PyTorch 2.0+，CPU 與 CUDA。
 - **資料**：Hugging Face `RayChang987/attar-zoo`，262 個設計、24 個 suite，第一次使用時下載。
 - **引擎**：die sizing、packing、macro／IO placement、global placement、legalization（含 PDN 與 pin access）、detailed
   placement、global routing（含增量）、CTS、gate sizing、buffering、debuffering。
